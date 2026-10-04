@@ -158,7 +158,7 @@ _sr_codex() {
 }
 
 setup_repo() {
-  [ ! -f "$COMM_HOME/release.json" ] || die "installed HOMI release: use homi setup; setup-repo is only for a source checkout"
+  [ ! -f "$COMM_HOME/release.json" ] || die "installed COM8 release: use com8 setup; setup-repo is only for a source checkout"
   local claude=0 codex=0 dry=0 uninstall=0
   while [ $# -gt 0 ]; do
     case "$1" in

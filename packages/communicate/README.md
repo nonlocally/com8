@@ -1,7 +1,7 @@
-# HOMI — agents that can work together
+# COM8 — agents that can work together
 
 Create Claude or Codex agents, ask them to work on a task, and send messages
-between sessions or devices. HOMI gives your agents the tools to find one
+between sessions or devices. COM8 gives your agents the tools to find one
 another, exchange questions and replies, and keep messages under persistent
 identities.
 
@@ -10,19 +10,19 @@ identities.
 With Homebrew installed:
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
-homi doctor
+brew install nonlocally/tap/com8
+com8 setup
+com8 doctor
 ```
 
 For an archive installation, download the archive and checksum from the
-[HOMI 0.4.0 release](https://github.com/nonlocally/HOMI/releases/tag/v0.4.0), then:
+[COM8 0.6.0 release](https://github.com/nonlocally/com8/releases/tag/v0.6.0), then:
 
 ```sh
-shasum -a 256 -c homi-0.4.0.tar.gz.sha256
-tar -xzf homi-0.4.0.tar.gz
-./homi-0.4.0/bin/homi setup                   # guided in an interactive terminal
-./homi-0.4.0/bin/homi doctor
+shasum -a 256 -c com8-0.6.0.tar.gz.sha256
+tar -xzf com8-0.6.0.tar.gz
+./com8-0.6.0/bin/com8 setup                   # guided in an interactive terminal
+./com8-0.6.0/bin/com8 doctor
 export PATH="$HOME/.local/share/communicate/bin:$PATH"
 ```
 
@@ -37,39 +37,39 @@ optional terminal profile or changing your interactive shell.
 For an explicit selection, preview the plan:
 
 ```sh
-homi setup --install-missing --claude --codex --terminal --mesh --dry-run
+com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
 ```
 
 Replace `--dry-run` with `--yes` to apply it.
 Use `--no-clients` for CLI-only operation. Existing `setup --claude` and
 `profile install` commands remain configuration-only. Third-party packages are
-not removed by HOMI's rollback or uninstall.
+not removed by COM8's rollback or uninstall.
 
 `setup` stages an immutable copy of the release at
-`~/.local/share/communicate/0.4.0-<manifest-hash>/`, points `current` at it, and
+`~/.local/share/communicate/0.6.0-<manifest-hash>/`, points `current` at it, and
 registers the plugin with the clients you named. Start a fresh client session
 afterwards. Keep a copy of the archive for recovery and purge if an installed
 payload becomes damaged. The full flag reference, service, update, rollback, uninstall,
-and troubleshooting are in [docs/INSTALL.md](https://github.com/nonlocally/HOMI/blob/v0.4.0/docs/INSTALL.md).
+and troubleshooting are in [docs/INSTALL.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/INSTALL.md).
 
 After setup and provider login, open a fresh Claude Code CLI or Codex CLI session
 and ask for the work: *"Create a Claude agent called researcher, investigate the
 flaky test in this project, and bring me its answer."* Use the provider you
 configured. The agent handles readiness, identity creation, messaging and replies
-through its installed HOMI tools; normal use does not require typing those CLI
+through its installed COM8 tools; normal use does not require typing those CLI
 commands. The optional terminal shortcuts work from zsh or Bash without changing
 the interactive shell.
 
 ```sh
-homi setup --guided                             # choose clients and optional dependencies
-homi setup --claude                             # register an existing client only
-homi setup --service                             # per-user launchd or systemd --user service
-homi setup --dry-run                             # show every change without making it
-/path/to/new-release/bin/homi update             # activate a newer release
-homi rollback                                    # retained previous release
-homi profile uninstall                          # remove selected profiles separately, if installed
-homi uninstall --claude                         # restore this client's previous registration
-homi uninstall --purge                          # remove owned integrations/payloads; state preserved
+com8 setup --guided                             # choose clients and optional dependencies
+com8 setup --claude                             # register an existing client only
+com8 setup --service                             # per-user launchd or systemd --user service
+com8 setup --dry-run                             # show every change without making it
+/path/to/new-release/bin/com8 update             # activate a newer release
+com8 rollback                                    # retained previous release
+com8 profile uninstall                          # remove selected profiles separately, if installed
+com8 uninstall --claude                         # restore this client's previous registration
+com8 uninstall --purge                          # remove owned integrations/payloads; state preserved
 ```
 
 ## CLI reference
@@ -78,39 +78,39 @@ These are the operations the agent can perform for you, also available directly
 for scripts and debugging:
 
 ```sh
-homi start | status | agents                     # daemon and durable roster
-homi claim NAME                                  # create a persistent identity
-homi send NAME 'message' --from NAME             # send and save a message
-homi ask NAME 'question' --timeout SEC           # blocks for a correlated reply
-homi reply TOKEN 'answer' --from NAME            # answer a received question
-homi wait NAME --timeout SEC --json              # wait for messages arriving after this call starts
-homi inbox NAME                                  # stored JSONL; reading does not acknowledge it
-homi spawn NAME --cli claude|codex --cwd DIR     # run a model as an identity in a seat
-homi seat ls | read | send | state | interrupt | kill
-homi bus register | agents | send | reply | receipt | dashboard | connect | use
-homi native agents | route | ask | whereis       # native session routes, local and SSH
-homi profile preview | install | status | uninstall
+com8 start | status | agents                     # daemon and durable roster
+com8 claim NAME                                  # create a persistent identity
+com8 send NAME 'message' --from NAME             # send and save a message
+com8 ask NAME 'question' --timeout SEC           # blocks for a correlated reply
+com8 reply TOKEN 'answer' --from NAME            # answer a received question
+com8 wait NAME --timeout SEC --json              # wait for messages arriving after this call starts
+com8 inbox NAME                                  # stored JSONL; reading does not acknowledge it
+com8 spawn NAME --cli claude|codex --cwd DIR     # run a model as an identity in a seat
+com8 seat ls | read | send | state | interrupt | kill
+com8 bus register | agents | send | reply | receipt | dashboard | connect | use
+com8 native agents | route | ask | whereis       # native session routes, local and SSH
+com8 profile preview | install | status | uninstall
 ```
 
-Default verbs address durable identities. `homi bus` addresses registered
+Default verbs address durable identities. `com8 bus` addresses registered
 sessions on the configured broker with membership checks and receipts.
-`homi native` addresses local sockets, existing-session queues, and SSH routes.
+`com8 native` addresses local sockets, existing-session queues, and SSH routes.
 The three address spaces are explicit, so a failed lookup never targets another
 agent. A saved message, a bus receipt, a native submission, and a
 correlated reply keep their distinct meanings; none says a model finished the
-task. See [docs/CLI.md](https://github.com/nonlocally/HOMI/blob/v0.4.0/docs/CLI.md).
+task. See [docs/CLI.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/CLI.md).
 
 ## Plugin and MCP
 
-This package includes the `homi` command, the compatible `communicate` command,
+This package includes the `com8` command, the compatible `communicate` command,
 the MCP server, the Claude Code/Codex plugin, and the daemon. Production Node
 dependencies are included in the release archive. The npm name
 `@aadarwal/communicate`, the plugin identity `communicate@communicate`, and the
 state directory remain compatible with earlier Communicate installations.
-Version 0.4.0 is distributed through Homebrew and release archives, not npm.
+Version 0.6.0 is distributed through Homebrew and release archives, not npm.
 
 The plugin carries skills, slash commands, and MCP tools. Native and bus tools
-keep their existing names and order; durable tools use `homi_` names. `homi serve`
+keep their existing names and order; durable tools use `com8_` names. `com8 serve`
 runs the MCP server on stdio. Setup writes the client's projection of the plugin
 under the data directory's `integrations/` folder, leaving the release itself
 unchanged; its MCP descriptor names the installed entry point and carries the
@@ -125,16 +125,16 @@ invitation is needed. A configured broker is used as configured. To join a
 shared bus, its owner issues a scoped invitation:
 
 ```sh
-homi bus connect INVITE_CODE --device peer-device
-homi bus register --bus project
-homi bus dashboard --open
+com8 bus connect INVITE_CODE --device peer-device
+com8 bus register --bus project
+com8 bus dashboard --open
 ```
 
-`homi bus use local` selects the local broker; `homi bus use https://HOST`
+`com8 bus use local` selects the local broker; `com8 bus use https://HOST`
 selects an enrolled remote one. Installing this package grants no access to any
 hosted service; its administrator controls browser access, device enrollment,
 and membership. Owner-side networking and invitations are in
-[docs/BUSES.md](https://github.com/nonlocally/HOMI/blob/v0.4.0/docs/BUSES.md).
+[docs/BUSES.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/BUSES.md).
 
 ## Development
 
@@ -151,6 +151,6 @@ exercise the MCP server, durable ask/reply, copied plugin caches, immutable
 updates, rollback, ownership, service boundaries (with fixtures, never the
 host's service manager), install recovery, and client restoration. Real
 per-user service qualification and real provider exchanges are separate,
-opt-in checks described in [docs/RELEASING.md](https://github.com/nonlocally/HOMI/blob/v0.4.0/docs/RELEASING.md).
+opt-in checks described in [docs/RELEASING.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/RELEASING.md).
 
 MIT license; bundled third-party notices are retained.

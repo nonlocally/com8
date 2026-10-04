@@ -23,7 +23,7 @@ import urllib.request
 import uuid
 
 sys.dont_write_bytecode = True
-OWNER = "homi-model-connection-v1"
+OWNER = "com8-model-connection-v1"
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]{0,47}\Z")
 MAX_KEY = 8192
 CLAUDE_ALTERNATE_AUTH = ("CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
@@ -46,8 +46,8 @@ def absolute(value):
 
 
 def config_root():
-    return absolute(os.environ.get("HOMI_MODEL_CONFIG") or
-                    str(absolute(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "homi/models"))
+    return absolute(os.environ.get("COM8_MODEL_CONFIG") or
+                    str(absolute(os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")) / "com8/models"))
 
 
 def no_links(path):
@@ -150,7 +150,7 @@ def credential(raw):
 
 def validate_metadata(meta, name):
     require(isinstance(meta, dict) and meta.get("managed_by") == OWNER and meta.get("name") == valid_name(name),
-            "connection is not owned by HOMI")
+            "connection is not owned by COM8")
     require(set(meta) <= {"managed_by", "name", "model", "base_url", "anthropic_base_url", "context_window", "allow_loopback_http"},
             "connection metadata contains unrecognized fields")
     model = meta.get("model")
@@ -177,7 +177,7 @@ def load(name, root=None):
     key_raw = private_read(directory / "credential", MAX_KEY)
     owner = json.loads(private_read(directory / "ownership.json"))
     require(owner == {"managed_by": OWNER, "connection_sha256": digest(meta_raw), "credential_sha256": digest(key_raw)},
-            "connection files changed outside HOMI; refusing to use or remove them")
+            "connection files changed outside COM8; refusing to use or remove them")
     return validate_metadata(json.loads(meta_raw), name), credential(key_raw)
 
 
@@ -277,7 +277,7 @@ def client_home(cli, env=None):
     key = "CODEX_HOME" if cli == "codex" else "CLAUDE_CONFIG_DIR"
     path = absolute(env.get(key) or str(Path(env.get("HOME") or str(Path.home())) / (".codex" if cli == "codex" else ".claude")))
     no_links(path)
-    require(path.is_dir() and path.stat().st_uid == os.getuid(), "client configuration home must already exist and be owned; run HOMI setup for this client first")
+    require(path.is_dir() and path.stat().st_uid == os.getuid(), "client configuration home must already exist and be owned; run COM8 setup for this client first")
     return path
 
 
@@ -295,8 +295,8 @@ def spawn_command(name, cli):
     home = client_home(cli)
     root = config_root()
     key = "CODEX_HOME" if cli == "codex" else "CLAUDE_CONFIG_DIR"
-    python = os.environ.get("HOMI_PYTHON") or sys.executable
-    return shlex.join(["env", "HOMI_MODEL_CONFIG=" + str(root), key + "=" + str(home),
+    python = os.environ.get("COM8_PYTHON") or sys.executable
+    return shlex.join(["env", "COM8_MODEL_CONFIG=" + str(root), key + "=" + str(home),
                        python, str(Path(__file__).resolve()), "run", name, "--cli", cli] +
                       (["--accept-inbound"] if cli == "claude" else []))
 
@@ -307,12 +307,12 @@ def launch_env(cli, home, key):
         if name.startswith(("ANTHROPIC_", "OPENAI_", "CLAUDE_CODE_USE_")) or name in CLAUDE_ALTERNATE_AUTH or name in {
                 "CLAUDE_CODE_SUBAGENT_MODEL",
                 "CLAUDE_CODE_SIMPLE",
-                "CODEX_THREAD_ID", "CODEX_API_KEY", "ANU_ACCOUNT", "ANU_PROVIDER", "ANU_LAUNCH_NONCE", "HOMI_ACCOUNT"}:
+                "CODEX_THREAD_ID", "CODEX_API_KEY", "ANU_ACCOUNT", "ANU_PROVIDER", "ANU_LAUNCH_NONCE", "COM8_ACCOUNT"}:
             env.pop(name, None)
     env["CODEX_HOME" if cli == "codex" else "CLAUDE_CONFIG_DIR"] = str(home)
-    env.pop("HOMI_MODEL_API_KEY", None)
+    env.pop("COM8_MODEL_API_KEY", None)
     if cli == "codex":
-        env["HOMI_MODEL_API_KEY"] = key
+        env["COM8_MODEL_API_KEY"] = key
     return env
 
 
@@ -337,17 +337,17 @@ def codex_profile(meta):
     # JSON string literals are valid TOML basic strings for these values.
     q = json.dumps
     text = ["model = " + q(meta["model"]), "review_model = " + q(meta["model"]),
-            'model_provider = "homi_connection"', 'web_search = "disabled"']
+            'model_provider = "com8_connection"', 'web_search = "disabled"']
     if meta.get("context_window"):
         text += ["model_context_window = " + str(meta["context_window"]),
                  "model_auto_compact_token_limit = " + str(meta["context_window"] * 4 // 5)]
-    text += ['[model_providers.homi_connection]', 'name = "HOMI model connection"',
+    text += ['[model_providers.com8_connection]', 'name = "COM8 model connection"',
              "base_url = " + q(meta["base_url"]), 'wire_api = "responses"',
-             'env_key = "HOMI_MODEL_API_KEY"', "requires_openai_auth = false", "supports_websockets = false",
+             'env_key = "COM8_MODEL_API_KEY"', "requires_openai_auth = false", "supports_websockets = false",
              # Preserve both current keyed filters and legacy exclude/include
              # arrays inherited from the user's config. They cannot coexist.
              '[shell_environment_policy]', 'ignore_default_excludes = false',
-             '[shell_environment_policy.set]', 'HOMI_MODEL_API_KEY = ""']
+             '[shell_environment_policy.set]', 'COM8_MODEL_API_KEY = ""']
     return ("\n".join(text) + "\n").encode()
 
 
@@ -355,12 +355,12 @@ def check_pane():
     pane = os.environ.get("TMUX_PANE")
     if not pane:
         return
-    require(re.fullmatch(r"%[0-9]+", pane), "cannot verify this pane; launch in a fresh HOMI seat")
+    require(re.fullmatch(r"%[0-9]+", pane), "cannot verify this pane; launch in a fresh COM8 seat")
     tmux = shutil.which("tmux")
-    require(tmux, "cannot inspect account ownership; launch in a fresh HOMI seat")
+    require(tmux, "cannot inspect account ownership; launch in a fresh COM8 seat")
     result = subprocess.run([tmux, "show-options", "-pqv", "-t", pane, "@anu_account"], capture_output=True, timeout=5)
-    require(result.returncode == 0, "cannot inspect account ownership; launch in a fresh HOMI seat")
-    require(not result.stdout.strip(), "this pane belongs to subscription account rotation; launch the model connection in a fresh HOMI seat")
+    require(result.returncode == 0, "cannot inspect account ownership; launch in a fresh COM8 seat")
+    require(not result.stdout.strip(), "this pane belongs to subscription account rotation; launch the model connection in a fresh COM8 seat")
 
 
 def run(name, cli, args, accept_inbound=False):
@@ -371,7 +371,7 @@ def run(name, cli, args, accept_inbound=False):
     validate_client_args(cli, args)
     check_pane()
     executable = shutil.which(cli)
-    require(executable, "selected coding client is not installed; run HOMI setup first")
+    require(executable, "selected coding client is not installed; run COM8 setup first")
     env = launch_env(cli, home, key)
     if cli == "codex":
         # Avoid sending a per-launch credential into an existing shared server.
@@ -379,7 +379,7 @@ def run(name, cli, args, accept_inbound=False):
         version = re.search(rb"codex-cli (\d+)\.(\d+)\.(\d+)", check.stdout)
         require(check.returncode == 0 and version and tuple(map(int, version.groups())) >= (0, 156, 0),
                 "model connections require Codex 0.156.0 or newer")
-        profile = "homi-connection-" + uuid.uuid4().hex
+        profile = "com8-connection-" + uuid.uuid4().hex
         path, contents = home / (profile + ".config.toml"), codex_profile(meta)
         command = [executable, "--no-daemon", "--profile", profile, "--model", meta["model"], *args]
     else:
@@ -389,7 +389,7 @@ def run(name, cli, args, accept_inbound=False):
         env["ANTHROPIC_SMALL_FAST_MODEL"] = meta["model"]
         env["CLAUDE_CODE_SUBAGENT_MODEL"] = meta["model"]
         env["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
-        path = home / (".homi-connection-" + uuid.uuid4().hex + ".json")
+        path = home / (".com8-connection-" + uuid.uuid4().hex + ".json")
         settings_env = {k: v for k, v in env.items() if k.startswith("ANTHROPIC_") or
                         k in ("CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS")}
         # User/project settings can restore env values after process-env cleanup.
@@ -427,15 +427,15 @@ def run(name, cli, args, accept_inbound=False):
                 if (info.st_dev, info.st_ino) == (written.st_dev, written.st_ino) and private_read(path) == contents:
                     path.unlink()
                 else:
-                    print("homi model: launch profile changed; retained for inspection", file=sys.stderr)
+                    print("com8 model: launch profile changed; retained for inspection", file=sys.stderr)
             except (OSError, ConnectionError):
-                print("homi model: launch profile could not be verified; retained for inspection", file=sys.stderr)
+                print("com8 model: launch profile could not be verified; retained for inspection", file=sys.stderr)
 
 
 class Parser(argparse.ArgumentParser):
     def error(self, _message):
         # argparse otherwise reflects unknown arguments, which may contain a key.
-        raise ConnectionError("invalid model command arguments; use homi model --help")
+        raise ConnectionError("invalid model command arguments; use com8 model --help")
 
 
 def parser():
@@ -485,7 +485,7 @@ def main(argv=None):
         if want_json:
             print(json.dumps({"ok": False, "error": message}))
         else:
-            print("homi model: " + message, file=sys.stderr)
+            print("com8 model: " + message, file=sys.stderr)
         return 1
 
 

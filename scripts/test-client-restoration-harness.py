@@ -35,7 +35,7 @@ while not pathlib.Path(sys.argv[2]).exists(): time.sleep(0.01)
 if sys.argv[3] == 'timeout': time.sleep(30)
 """
         for mode in ("success", "timeout"):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="homi-qualifier-owned-") as root:
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory(prefix="com8-qualifier-owned-") as root:
                 heartbeat = Path(root) / "heartbeat"
                 args = [sys.executable, "-c", parent, child, str(heartbeat), mode]
                 if mode == "timeout":

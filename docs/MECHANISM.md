@@ -148,7 +148,7 @@ The identical object written as `3999901.json` is listed immediately. So the
 filename is part of the contract: it must look like `<pid>.json` (numeric),
 while the sweep's is-the-pid-alive test reads the *field*. The two are not
 cross-checked — a numeric filename far above the real pid range with a live
-pid in the field is both listed and sweep-proof. `homi` therefore plants
+pid in the field is both listed and sweep-proof. `com8` therefore plants
 deterministic numeric filenames (`3000000 + crc32(name) % 900000`,
 linear-probed on collision; macOS `pid_max` is 99998). Verified live on
 Claude Code 2.1.x.

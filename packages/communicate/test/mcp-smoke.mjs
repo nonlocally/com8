@@ -76,8 +76,8 @@ const jsonCall = async (...args) => JSON.parse(await call(...args));
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const EXPECT = ["agents_list", "whereis", "route", "send", "codex_queue", "codex_ask", "status", "ask", "card_set",
   "bus_register", "bus_list", "bus_agents", "bus_leave", "bus_send", "bus_receipt", "bus_status", "bus_dashboard", "bus_create", "bus_device", "bus_reply",
-  "homi_status", "homi_start", "homi_agents", "homi_claim", "homi_release", "homi_send", "homi_ask", "homi_reply", "homi_inbox", "homi_wait",
-  "homi_spawn", "homi_restart", "homi_seats", "homi_seat_spawn", "homi_seat_send", "homi_seat_read", "homi_seat_state", "homi_seat_bind", "homi_seat_interrupt", "homi_seat_kill", "homi_model_list", "homi_model_doctor"];
+  "com8_status", "com8_start", "com8_agents", "com8_claim", "com8_release", "com8_send", "com8_ask", "com8_reply", "com8_inbox", "com8_wait",
+  "com8_spawn", "com8_restart", "com8_seats", "com8_seat_spawn", "com8_seat_send", "com8_seat_read", "com8_seat_state", "com8_seat_bind", "com8_seat_interrupt", "com8_seat_kill", "com8_model_list", "com8_model_doctor"];
 let failed = false;
 try {
   const init = await rpc("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "smoke", version: "0" } });

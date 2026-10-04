@@ -5,7 +5,7 @@
       "command": "bash",
       "args": [
         "-c",
-        "for root in \"$CLAUDE_PLUGIN_ROOT\" \"$PLUGIN_ROOT\"; do\n  if [ -n \"$root\" ] && [ -f \"$root/bin/communicate-mcp\" ]; then\n    exec bash \"$root/bin/communicate-mcp\"\n  fi\ndone\ndata=$COMMUNICATE_DATA\n[ -n \"$data\" ] || data=\"$HOME/.local/share/communicate\"\nif [ -f \"$data/repo-path\" ]; then\n  IFS= read -r repo < \"$data/repo-path\"\n  exec bash \"$repo/plugins/communicate/bin/communicate-mcp\"\nfi\nif [ -f \"$data/current/src/cli.mjs\" ]; then\n  exec node \"$data/current/src/cli.mjs\" serve\nfi\nprintf 'HOMI: no installed payload found. Install a reviewed HOMI release and run homi setup.\\n' >&2\nexit 127"
+        "for root in \"$CLAUDE_PLUGIN_ROOT\" \"$PLUGIN_ROOT\"; do\n  if [ -n \"$root\" ] && [ -f \"$root/bin/communicate-mcp\" ]; then\n    exec bash \"$root/bin/communicate-mcp\"\n  fi\ndone\ndata=$COMMUNICATE_DATA\n[ -n \"$data\" ] || data=\"$HOME/.local/share/communicate\"\nif [ -f \"$data/repo-path\" ]; then\n  IFS= read -r repo < \"$data/repo-path\"\n  exec bash \"$repo/plugins/communicate/bin/communicate-mcp\"\nfi\nif [ -f \"$data/current/src/cli.mjs\" ]; then\n  exec node \"$data/current/src/cli.mjs\" serve\nfi\nprintf 'COM8: no installed payload found. Install a reviewed COM8 release and run com8 setup.\\n' >&2\nexit 127"
       ]
     }
   }

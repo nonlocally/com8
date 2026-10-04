@@ -7,7 +7,7 @@
 # (router socket for Claude/peers; codex queue for a LOCAL Codex session found
 # by native thread name), and blocks until the first reply lands. Per-ask
 # sockets make correlation structural: whatever arrives on this socket IS the
-# answer (homi's natural-reply forgiveness, without tokens).
+# answer (com8's natural-reply forgiveness, without tokens).
 
 _ask_codex_thread() { # <name> -> thread id of newest local codex session with that name
   python3 - "$1" "${COMM_CODEX_INDEX:-$HOME/.codex/session_index.jsonl}" <<'PY'

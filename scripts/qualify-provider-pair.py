@@ -29,7 +29,7 @@ require, wait_for = gate.require, gate.wait_for
 def challenge():
     payload = "nonce=" + uuid.uuid4().hex + "\n" + "\n".join(
         f"{i:03d}|{uuid.uuid4().hex}|literal $HOME `id` --from \\\" '" for i in range(80))
-    return payload, "Reply once with the complete enclosed payload, preserving every byte.\nHOMI_PAYLOAD_BEGIN\n" + payload + "\nHOMI_PAYLOAD_END"
+    return payload, "Reply once with the complete enclosed payload, preserving every byte.\nCOM8_PAYLOAD_BEGIN\n" + payload + "\nCOM8_PAYLOAD_END"
 
 
 def main():
@@ -51,15 +51,15 @@ def main():
     require(all(providers.values()), "both authenticated provider CLIs are required")
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     evidence = args.evidence.resolve()
-    temp = Path(tempfile.mkdtemp(prefix="homi-pair-", dir="/tmp")); temp.chmod(0o700)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("HOMI_", "ANU_", "COMM_", "CODEX_", "XDG_"))
+    temp = Path(tempfile.mkdtemp(prefix="com8-pair-", dir="/tmp")); temp.chmod(0o700)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("COM8_", "ANU_", "COMM_", "CODEX_", "XDG_"))
            and k not in ("TMUX", "TMUX_PANE", "CLAUDECODE", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_PLUGIN_ROOT", "PLUGIN_ROOT")}
     env.update(HOME=str(home), CLAUDE_CONFIG_DIR=str(home/".claude"), CODEX_HOME=str(home/".codex"),
                COMM_STATE=str(temp/"state"), COMMUNICATE_DATA=str(temp/"data"), COMM_BUS_PORT="0",
-               XDG_RUNTIME_DIR=str(temp/"run"), HOMI_SOCK_DIR=str(temp/"sockets"))
+               XDG_RUNTIME_DIR=str(temp/"run"), COM8_SOCK_DIR=str(temp/"sockets"))
     (temp/"run").mkdir(mode=0o700)
     codex_env = dict(env); codex_env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-    cli = runtime/"bin/homi"
+    cli = runtime/"bin/com8"
     active, setup_attempted = [], False
     report = {"status": "fail", "source": manifest["source"], "version": manifest["version"],
               "scope": "two actual models; Claude Code streaming and Codex app-server installed plugins; one device",
@@ -122,7 +122,7 @@ def main():
                                      "endpoint_receipt":sent_status["status"],"reply_endpoint_receipt":reply_status["status"],
                                      "model_consumption":"byte-exact correlated reply"})
 
-    reply_rules = ("Only reply to incoming bus challenges containing HOMI_PAYLOAD_BEGIN and HOMI_PAYLOAD_END. "
+    reply_rules = ("Only reply to incoming bus challenges containing COM8_PAYLOAD_BEGIN and COM8_PAYLOAD_END. "
                    "For each challenge, call bus_reply ONCE with its received message ID and copy every byte between those marker lines "
                    "into message, excluding marker lines and adjacent newlines. Pass the recipient's registration ID as from. "
                    "A raw payload reply has no marker lines: do not reply to it or start a reply loop. "
@@ -138,7 +138,7 @@ def main():
                                "--setting-sources","user","--tools","","--allowedTools",allowed,
                                "--settings",'{"crossSessionInbound":"accept","disableAllHooks":true}'],env,temp,evidence,"claude")
         active.append(claude)
-        claude.prompt("You are one model in an isolated HOMI qualification pair. Use only the installed HOMI MCP tools. "+reply_rules+
+        claude.prompt("You are one model in an isolated COM8 qualification pair. Use only the installed COM8 MCP tools. "+reply_rules+
                       "Call bus_status, then bus_register on general with name="+names["claude"]+" for this exact current session. Then answer READY.",streaming=True)
         claude_reg = registration("claude",claude)
         wait_for(lambda:any(event.get("type")=="result" for event in claude.events),args.timeout,"Claude registration turn complete")
@@ -148,7 +148,7 @@ def main():
         seed.wait_turn();seed.close()
         codex = gate.CodexAppServer(providers["codex"],codex_env,temp,evidence,"codex-register",names["codex"],args.timeout,args.codex_profile)
         active.append(codex);codex.thread(sessions["codex"])
-        codex.prompt("You are one model in an isolated HOMI qualification pair. "+reply_rules+
+        codex.prompt("You are one model in an isolated COM8 qualification pair. "+reply_rules+
                      "Call bus_status, then bus_register with kind=codex, session="+sessions["codex"]+", name="+names["codex"]+
                      ", bus=general, target=self. That session is verified from thread/start. Then answer READY.")
         codex_reg = registration("codex",codex);codex.wait_turn();codex.close()
@@ -164,7 +164,7 @@ def main():
         codex=gate.CodexAppServer(providers["codex"],codex_env,temp,evidence,"codex-reply",names["codex"],args.timeout,args.codex_profile,allow_send=True)
         active.append(codex);codex.thread(sessions["codex"])
         codex.reply={"id":sent["id"],"payload":payload,"recipient":codex_reg["id"],"hub":owner["url"]}
-        codex.prompt("Consume the queued HOMI challenge from the Claude peer. Reply exactly as previously instructed through bus_reply; set from="+codex_reg["id"]+".")
+        codex.prompt("Consume the queued COM8 challenge from the Claude peer. Reply exactly as previously instructed through bus_reply; set from="+codex_reg["id"]+".")
         answer=model_message(codex_reg["id"],claude_reg["id"],payload)
         verify_exchange("claude_to_codex",claude_reg,codex_reg,sent,answer,payload,claude,codex)
         codex.wait_turn();codex.reply=None

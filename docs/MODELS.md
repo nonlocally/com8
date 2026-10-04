@@ -1,7 +1,7 @@
 # Choose the model behind your agent
 
-A HOMI model connection lets GLM power a Claude Code or Codex CLI session.
-The client still supplies its coding tools, project access and HOMI plugin;
+A COM8 model connection lets GLM power a Claude Code or Codex CLI session.
+The client still supplies its coding tools, project access and COM8 plugin;
 the selected model generates its answers and tool calls through the model API.
 You can ask that session to investigate code, work with collaborators and
 return findings as usual.
@@ -9,7 +9,7 @@ return findings as usual.
 Model connections are optional. Choose one when launching a session or
 spawning a collaborator. Saving a connection does not change your usual
 client launch, account subscription or default model. A model API credential
-is separate from a HOMI bus invitation and from your Claude or OpenAI login.
+is separate from a COM8 bus invitation and from your Claude or OpenAI login.
 
 ## Get access to a model API
 
@@ -43,7 +43,7 @@ requests reach `/v1/messages`. Sign in and open
 [API & clients](https://mit.nonlocally.org/workspaces/developer) to create a
 named, expiring model API key permitted to use `glm`. Use the model key beginning
 with `nlm_`; the website account API key beginning with `sk-` does not grant model
-access. Installing HOMI does not grant model access. The older
+access. Installing COM8 does not grant model access. The older
 `llm.nonlocally.org` route is not the connection to use for this release.
 
 For another deployment, obtain its endpoint and access from its operator.
@@ -51,8 +51,8 @@ Availability and supported client/model combinations depend on that deployment.
 
 ## Save a connection privately
 
-Install your selected coding clients and HOMI integrations through
-[`homi setup`](INSTALL.md). Setup can offer a model connection as an optional
+Install your selected coding clients and COM8 integrations through
+[`com8 setup`](INSTALL.md). Setup can offer a model connection as an optional
 choice; keeping your existing model setup is valid too.
 
 Your agent can run the configuration commands once you provide the endpoint
@@ -62,7 +62,7 @@ absolute path to a regular file owned by your account, without symlinks and
 with no access for other users, normally mode `0600`.
 
 ```sh
-homi model add research-glm \
+com8 model add research-glm \
   --base-url https://mit.nonlocally.org/v1 \
   --anthropic-base-url https://mit.nonlocally.org \
   --model glm \
@@ -79,7 +79,7 @@ A model's advertised maximum may exceed the context available on this endpoint.
 For a secret supplied on stdin:
 
 ```sh
-homi model add research-glm \
+com8 model add research-glm \
   --base-url https://mit.nonlocally.org/v1 \
   --anthropic-base-url https://mit.nonlocally.org \
   --model glm \
@@ -91,17 +91,17 @@ command. `--dry-run` previews the connection without reading or storing the
 key; add `--json` for a structured result. Connection names use lowercase
 letters, digits, hyphens or underscores.
 
-HOMI copies the credential into its private model configuration directory,
-normally `~/.config/homi/models`. It respects `XDG_CONFIG_HOME`; an explicit
-`HOMI_MODEL_CONFIG` selects another absolute configuration directory. Newly
+COM8 copies the credential into its private model configuration directory,
+normally `~/.config/com8/models`. It respects `XDG_CONFIG_HOME`; an explicit
+`COM8_MODEL_CONFIG` selects another absolute configuration directory. Newly
 created directories are private and configuration files are readable only by
 their owner. The original input file remains yours to manage.
 
 ## Check access, then choose a client
 
 ```sh
-homi model list --json
-homi model doctor research-glm --json
+com8 model list --json
+com8 model doctor research-glm --json
 ```
 
 The model doctor makes an authenticated catalog request and checks that `glm`
@@ -112,8 +112,8 @@ tool use, model readiness or coding quality.
 Launch the selected connection explicitly:
 
 ```sh
-homi model run research-glm --cli codex
-homi model run research-glm --cli claude
+com8 model run research-glm --cli codex
+com8 model run research-glm --cli claude
 ```
 
 Normal client arguments go after `--`. Arguments that would replace the
@@ -121,18 +121,18 @@ selected model, provider profile or settings are refused. The client's normal
 permission choices still apply; selecting GLM does not grant additional tool
 or terminal permissions.
 
-HOMI uses a launch-specific client configuration and credential environment.
-It preserves the installed HOMI integration and leaves the usual client
+COM8 uses a launch-specific client configuration and credential environment.
+It preserves the installed COM8 integration and leaves the usual client
 configuration in place. The selected API receives the conversation and tool
 results the client sends, so choose an endpoint you trust with that project.
 
-Model launches require **Codex CLI 0.156 or later**. HOMI launches it with
+Model launches require **Codex CLI 0.156 or later**. COM8 launches it with
 `--no-daemon` so its selected credential reaches that execution without changing
 an existing shared server. To resume a GLM session, use its exact session ID
 through the same connection:
 
 ```sh
-homi model run research-glm --cli codex -- resume SESSION_ID
+com8 model run research-glm --cli codex -- resume SESSION_ID
 ```
 
 The temporary launch profile is removed when the client exits. An ordinary
@@ -140,7 +140,7 @@ shared-server resume or queued turn is not a qualified substitute for this
 launcher. Background, remote and cloud launch modes that bypass the selected
 local connection are refused. Claude's bare mode is also incompatible with
 this plugin-preserving bearer-authentication path. Existing subscription-account
-panes must use a fresh HOMI seat so account rotation cannot replace the selected
+panes must use a fresh COM8 seat so account rotation cannot replace the selected
 model.
 
 For a collaborator, ask your agent:
@@ -151,7 +151,7 @@ For a collaborator, ask your agent:
 The corresponding operation is:
 
 ```sh
-homi spawn investigator --cli codex --model-connection research-glm --cwd "$PWD"
+com8 spawn investigator --cli codex --model-connection research-glm --cwd "$PWD"
 ```
 
 The identity name and model connection name are separate: `investigator` is
@@ -162,16 +162,16 @@ Messages route is supported.
 ## Replace or remove access
 
 ```sh
-homi model remove research-glm --json
+com8 model remove research-glm --json
 ```
 
-Removal deletes the unchanged files HOMI owns for that saved connection. It
+Removal deletes the unchanged files COM8 owns for that saved connection. It
 does not revoke the server credential or stop already-running clients. Revoke
 the key through the issuing service when you intend to end its access, and
 close the sessions using it. To change an endpoint or rotate a key, remove the
 old saved connection, then add it again with the new private credential.
 
-If connection files were changed outside HOMI, the command refuses to use or
+If connection files were changed outside COM8, the command refuses to use or
 remove them. Inspect that change before replacing them; do not bypass the
 ownership check by copying keys into ordinary client configuration.
 
@@ -182,7 +182,7 @@ desktop apps. Claude Code with a non-Claude model requires deployment-specific
 compatibility qualification; it is not vendor certification.
 
 Administrator-managed client policy may take precedence over a launch profile.
-HOMI preserves that policy; confirm the actual selected endpoint and model in
+COM8 preserves that policy; confirm the actual selected endpoint and model in
 such environments before treating a run as qualified.
 
 For a new endpoint, verify an actual read/edit/test task with each intended

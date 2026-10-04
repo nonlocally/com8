@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Qualify HOMI's formula in a temporary keg without replacing installed commands.
+"""Qualify COM8's formula in a temporary keg without replacing installed commands.
 
 Run on a qualification host, passing an extracted artifact's archive and the
 rendered canonical formula. Only the candidate formula name, local archive URL,
 and keg-only status differ. Uses existing dependencies; never upgrades them.
---disposable-ci instead requires a GitHub-hosted runner and absent HOMI commands,
+--disposable-ci instead requires a GitHub-hosted runner and absent COM8 commands,
 then tests the canonical linked formula with ordinary dependency resolution,
 brew test and brew reinstall. Never use that mode on a shared workstation.
 """
@@ -71,8 +71,8 @@ class OwnedDaemon:
     def __init__(self, root, entry, env, *, command=subprocess.run, probe=process_state,
                  clock=time.monotonic, sleep=time.sleep, timeout=10):
         self.root, self.entry, self.env = root, entry, env
-        self.socket = root / "state/homi/homi.sock"
-        self.pidfile = root / "state/homi/daemon.pid"
+        self.socket = root / "state/com8/com8.sock"
+        self.pidfile = root / "state/com8/daemon.pid"
         self.command, self.probe = command, probe
         self.clock, self.sleep, self.timeout = clock, sleep, timeout
         self.records = []
@@ -191,11 +191,11 @@ def main():
                 "HOMEBREW_NO_INSTALL_UPGRADE": "1", "HOMEBREW_NO_AUTOREMOVE": "1",
                 "HOMEBREW_NO_ENV_HINTS": "1", "HOMEBREW_NO_ASK": "1"}
     prefix = Path(run([brew, "--prefix"], env=brew_env, quiet=True).strip())
-    protected = [prefix / "bin/homi", prefix / "bin/communicate"]
+    protected = [prefix / "bin/com8", prefix / "bin/communicate"]
     before = {str(p): fingerprint(p) for p in protected}
     report["protected_before"] = before
     if args.disposable_ci and any(value["kind"] != "absent" for value in before.values()):
-        raise RuntimeError("disposable qualification requires absent homi/communicate commands; refusing replacement")
+        raise RuntimeError("disposable qualification requires absent com8/communicate commands; refusing replacement")
     # Refuse to install/upgrade dependencies: this is qualification on an
     # existing workstation. The formula still exercises their real opt paths.
     dependencies = {}
@@ -206,21 +206,21 @@ def main():
             raise RuntimeError(f"preinstall {dependency} before qualifying this host")
         dependencies[dependency] = versions
     report["dependencies_before"] = dependencies
-    formula_name = "homi" if args.disposable_ci else "homi-qualification-" + report["sha256"][:10]
+    formula_name = "com8" if args.disposable_ci else "com8-qualification-" + report["sha256"][:10]
     classname = "".join(part.capitalize() for part in formula_name.split("-"))
     formula = args.formula.read_text()
-    if "class Homi < Formula" not in formula or '  license "MIT"' not in formula:
-        raise RuntimeError("expected the rendered canonical HOMI formula")
-    formula = formula.replace("class Homi < Formula", f"class {classname} < Formula", 1)
+    if "class Com8 < Formula" not in formula or '  license "MIT"' not in formula:
+        raise RuntimeError("expected the rendered canonical COM8 formula")
+    formula = formula.replace("class Com8 < Formula", f"class {classname} < Formula", 1)
     formula = re.sub(r'^  url ".*"$', '  url "' + archive.as_uri() + '"', formula, count=1, flags=re.M)
     formula = re.sub(r'^  sha256 ".*"$', '  sha256 "' + report["sha256"] + '"', formula, count=1, flags=re.M)
     if not args.disposable_ci:
-        formula = formula.replace('  license "MIT"', '  license "MIT"\n  keg_only "temporary isolated HOMI qualification"', 1)
+        formula = formula.replace('  license "MIT"', '  license "MIT"\n  keg_only "temporary isolated COM8 qualification"', 1)
     formula_path = args.work / f"{formula_name}.rb"
     formula_path.write_text(formula)
     if (prefix / "opt" / formula_name).exists() or (prefix / "Cellar" / formula_name).exists():
         raise RuntimeError("candidate keg already exists; inspect it before rerunning qualification")
-    tap = "homi-qualification/candidate-" + report["sha256"][:10]
+    tap = "com8-qualification/candidate-" + report["sha256"][:10]
     tapped = run([brew, "tap"], env=brew_env, quiet=True).splitlines()
     if tap in tapped:
         raise RuntimeError("candidate tap already exists; inspect it before rerunning qualification")
@@ -228,14 +228,14 @@ def main():
     report["tap"] = tap
     installed = False
     tap_created = False
-    temporary = Path(tempfile.mkdtemp(prefix="homi-brew-"))
+    temporary = Path(tempfile.mkdtemp(prefix="com8-brew-"))
     env = {**os.environ, "HOME": str(temporary), "COMMUNICATE_DATA": str(temporary / "data"),
-           "COMM_STATE": str(temporary / "state"), "HOMI_SOCK_DIR": str(temporary / "socks"),
-           "HOMI_SESSIONS_DIR": str(temporary / "sessions"), "HOMI_SELF": "brew-fixture",
+           "COMM_STATE": str(temporary / "state"), "COM8_SOCK_DIR": str(temporary / "socks"),
+           "COM8_SESSIONS_DIR": str(temporary / "sessions"), "COM8_SELF": "brew-fixture",
            "CODEX_HOME": str(temporary / "codex"), "CLAUDE_CONFIG_DIR": str(temporary / "claude")}
-    for key in ("HOMI_SOCK", "HOMI_DAEMON_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COMMUNICATE_HOME"):
+    for key in ("COM8_SOCK", "COM8_DAEMON_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COMMUNICATE_HOME"):
         env.pop(key, None)
-    stable = temporary / "data/bin/homi"
+    stable = temporary / "data/bin/com8"
     daemon = OwnedDaemon(temporary, stable, env)
     report["daemon_lifecycles"] = daemon.records
     try:
@@ -250,10 +250,10 @@ def main():
         run(install_args, env=brew_env, timeout=1800 if args.disposable_ci else 180)
         installed = True
         keg = prefix / "opt" / formula_name
-        entry = keg / "bin/homi"
+        entry = keg / "bin/com8"
         if args.disposable_ci:
-            entry = prefix / "bin/homi"
-            assert entry.is_symlink() and entry.resolve() == (keg / "bin/homi").resolve(), "canonical homi command was not linked"
+            entry = prefix / "bin/com8"
+            assert entry.is_symlink() and entry.resolve() == (keg / "bin/com8").resolve(), "canonical com8 command was not linked"
             assert (prefix / "bin/communicate").is_symlink(), "compatibility command was not linked"
         report["installed_manifest"] = verify_runtime(keg / "libexec")
         tested = subprocess.run([brew, "test", qualified_name], env=brew_env, text=True, capture_output=True, timeout=180)
@@ -269,7 +269,7 @@ def main():
             report["formula_test"] = "pass"
         minimal = {**env, "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
         version = run([entry, "version"], env=minimal)
-        assert "HOMI " + report["installed_manifest"]["version"] in version
+        assert "COM8 " + report["installed_manifest"]["version"] in version
         assert "bus" in run([entry, "--help"], env=minimal)
         run([entry, "setup", "--no-clients", "--dry-run"], env=minimal)
         assert not (temporary / "data").exists(), "formula install/test unexpectedly ran setup"

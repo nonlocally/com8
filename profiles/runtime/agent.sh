@@ -16,20 +16,20 @@ case "$kind" in
   cdxxs) provider=codex; set -- --sandbox workspace-write --ask-for-approval never "$@" ;;
   c|opencode) exec opencode "$@" ;;
   pi) exec pi "$@" ;;
-  *) printf 'homi-agent: unknown alias: %s\n' "$kind" >&2; exit 2 ;;
+  *) printf 'com8-agent: unknown alias: %s\n' "$kind" >&2; exit 2 ;;
 esac
-if [ -n "${HOMI_ACCOUNT_LAUNCHER:-}" ]; then
-  [ -x "$HOMI_ACCOUNT_LAUNCHER" ] || { echo 'homi-agent: configured account launcher is not executable' >&2; exit 1; }
+if [ -n "${COM8_ACCOUNT_LAUNCHER:-}" ]; then
+  [ -x "$COM8_ACCOUNT_LAUNCHER" ] || { echo 'com8-agent: configured account launcher is not executable' >&2; exit 1; }
   if [ "$boxed" = 1 ]; then
-    exec "$HOMI_ACCOUNT_LAUNCHER" launch --provider "$provider" --box -- "$@"
+    exec "$COM8_ACCOUNT_LAUNCHER" launch --provider "$provider" --box -- "$@"
   fi
-  exec "$HOMI_ACCOUNT_LAUNCHER" launch --provider "$provider" -- "$@"
+  exec "$COM8_ACCOUNT_LAUNCHER" launch --provider "$provider" -- "$@"
 fi
 if [ "$boxed" = 1 ]; then
-  [ -n "${HOMI_BOX_LAUNCHER:-}" ] && [ -x "$HOMI_BOX_LAUNCHER" ] || {
-    echo 'homi-agent: cxc needs HOMI_BOX_LAUNCHER or a configured account launcher; no uncontained fallback' >&2
+  [ -n "${COM8_BOX_LAUNCHER:-}" ] && [ -x "$COM8_BOX_LAUNCHER" ] || {
+    echo 'com8-agent: cxc needs COM8_BOX_LAUNCHER or a configured account launcher; no uncontained fallback' >&2
     exit 1
   }
-  exec "$HOMI_BOX_LAUNCHER" claude "$@"
+  exec "$COM8_BOX_LAUNCHER" claude "$@"
 fi
 exec "$provider" "$@"

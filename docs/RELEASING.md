@@ -1,7 +1,7 @@
 # Release qualification
 
 Test the actual artifact, installation and advertised behavior together. Existing
-native communication, buses, durable HOMI and selected terminal helpers are the
+native communication, buses, durable COM8 and selected terminal helpers are the
 baseline implementation.
 
 ## Build
@@ -10,7 +10,7 @@ Commit source and keep root/package/plugin release versions consistent:
 
 ```sh
 python3 scripts/build-release.py
-python3 scripts/render-homebrew-formula.py VERSION SHA256 /path/to/tap/Formula/homi.rb
+python3 scripts/render-homebrew-formula.py VERSION SHA256 /path/to/tap/Formula/com8.rb
 ```
 
 The builder captures the current commit and uses an owned detached temporary Git
@@ -97,3 +97,13 @@ Include MIT and third-party notices. Publish the tested commit/tag, archive,
 checksums, release notes and support matrix, then update the tap. Verify anonymous
 download/install. npm publication is optional; never advertise an unpublished scope.
 Public distribution does not grant access to private hosted buses.
+
+0.6.0 is the first release whose tag assets (`com8-<version>.tar.gz` and its
+`.sha256`), tap formula (`Formula/com8.rb`, class `Com8`) and release notes
+carry the COM8 name. Its release notes must include the upgrade paragraph from
+[docs/INSTALL.md](INSTALL.md) and the list of renamed MCP tools (`com8_*`). The
+hosted bus protocol is unchanged, so hosted devices need not re-enroll.
+
+This repository's kernel reports a semantic version (`COM8_VERSION` `"0.6.0"`),
+while the private development repository's kernel uses a date-based value; the
+private branch must adopt the public scheme before any cross-build `pair`.

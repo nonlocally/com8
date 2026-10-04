@@ -9,8 +9,8 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 
-const pkg = path.resolve(fileURLToPath(new URL("..", import.meta.url))), cli = path.join(pkg, "src/homi.mjs");
-const real = process.argv.includes("--real-client"), temp = fs.mkdtempSync(path.join(os.tmpdir(), "homi-claude-restoration-"));
+const pkg = path.resolve(fileURLToPath(new URL("..", import.meta.url))), cli = path.join(pkg, "src/com8.mjs");
+const real = process.argv.includes("--real-client"), temp = fs.mkdtempSync(path.join(os.tmpdir(), "com8-claude-restoration-"));
 const originalEnv = { ...process.env }, ID = "communicate@communicate";
 const fake = `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),a=process.argv.slice(2),h=process.env.HOME,id='communicate@communicate';
@@ -58,9 +58,9 @@ function state() {
 }
 function fixture(name) {
   const home = path.join(temp, name); fs.mkdirSync(home, { mode: 0o700 });
-  process.env = Object.fromEntries(Object.entries(originalEnv).filter(([key]) => !/^(CODEX_|COMM|HOMI|ANU|CLAUDE|XDG|OPENAI)/.test(key) && !["TMUX", "TMUX_PANE"].includes(key)));
+  process.env = Object.fromEntries(Object.entries(originalEnv).filter(([key]) => !/^(CODEX_|COMM|COM8|ANU|CLAUDE|XDG|OPENAI)/.test(key) && !["TMUX", "TMUX_PANE"].includes(key)));
   Object.assign(process.env, { HOME: home, CLAUDE_CONFIG_DIR: path.join(home, ".claude"), CODEX_HOME: path.join(home, ".codex"),
-    COMMUNICATE_DATA: path.join(home, "data"), COMM_STATE: path.join(home, "state"), HOMI_SOCK_DIR: path.join(home, "sockets") });
+    COMMUNICATE_DATA: path.join(home, "data"), COMM_STATE: path.join(home, "state"), COM8_SOCK_DIR: path.join(home, "sockets") });
   fs.mkdirSync(process.env.CLAUDE_CONFIG_DIR);
   fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, "settings.json"), JSON.stringify({ permissions: { allow: ["Read(/fixture)"] }, enabledPlugins: { "other@fixture": true } }));
   if (!real) { fs.mkdirSync(path.join(home, "bin")); fs.writeFileSync(path.join(home, "bin/claude"), fake, { mode: 0o755 }); process.env.PATH = path.join(home, "bin") + path.delimiter + originalEnv.PATH; }
@@ -78,7 +78,7 @@ function nextArtifact() {
   const file = path.join(next, "vendor/release.json"), manifest = JSON.parse(fs.readFileSync(file)); manifest.version = metadata.version;
   for (const [prefix, rows] of [["vendor", manifest.files], ["", manifest.packageFiles]])
     for (const name of Object.keys(rows)) rows[name] = createHash("sha256").update(fs.readFileSync(path.join(next, prefix, name))).digest("hex");
-  fs.writeFileSync(file, JSON.stringify(manifest)); return path.join(next, "src/homi.mjs");
+  fs.writeFileSync(file, JSON.stringify(manifest)); return path.join(next, "src/com8.mjs");
 }
 try {
   const next = nextArtifact();

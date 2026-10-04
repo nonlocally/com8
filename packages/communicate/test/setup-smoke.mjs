@@ -34,10 +34,10 @@ writeFileSync(sp, JSON.stringify({ sentinel: "keep-me", enabledPlugins: { "exist
 
 const env = { ...process.env, HOME: fakeHome, CLAUDE_CONFIG_DIR: path.join(fakeHome, ".claude"),
   CLAUDE_TEST_VERSION: pluginVersion, COMMUNICATE_DATA: data, COMM_STATE: path.join(fakeHome, "state"),
-  CODEX_HOME: path.join(fakeHome, ".codex"), HOMI_SOCK_DIR: path.join(fakeHome, "sockets"),
-  HOMI_SESSIONS_DIR: path.join(fakeHome, "sessions"), XDG_RUNTIME_DIR: path.join(fakeHome, "runtime"), COMM_BUS_PORT: "0",
+  CODEX_HOME: path.join(fakeHome, ".codex"), COM8_SOCK_DIR: path.join(fakeHome, "sockets"),
+  COM8_SESSIONS_DIR: path.join(fakeHome, "sessions"), XDG_RUNTIME_DIR: path.join(fakeHome, "runtime"), COMM_BUS_PORT: "0",
   PATH: path.join(fakeHome, "bin") + path.delimiter + process.env.PATH };
-for (const key of ["CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "HOMI_SOCK", "COMMUNICATE_HOME"]) delete env[key];
+for (const key of ["CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COM8_SOCK", "COMMUNICATE_HOME"]) delete env[key];
 const runCli = (...args) => spawnSync("node", [cli, ...args], { encoding: "utf8", env });
 const die = (m) => { console.error("FAIL: " + m); rmSync(fakeHome, { recursive: true, force: true }); process.exit(1); };
 

@@ -1,7 +1,7 @@
 # Study: the communicate repo (evidence base for the agent-fabric design)
 
 Date: 2026-08-15 · Method: subagent deep-read of the full repo + PR/issue history
-Companion studies: anu-homi, apple-container, collaboration. Consumed by
+Companion studies: anu-com8, apple-container, collaboration. Consumed by
 `docs/superpowers/specs/2026-08-15-agent-fabric-design.md`.
 
 ## 1. Wire protocol

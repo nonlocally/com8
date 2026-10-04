@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { applyBusChoice, busOrigin, busSummary, inspectBus, invitationOrigin, readPrivateInvitation } from "../src/bus-setup.mjs";
 
-const temp = mkdtempSync(path.join(os.tmpdir(), "homi-bus-setup-"));
+const temp = mkdtempSync(path.join(os.tmpdir(), "com8-bus-setup-"));
 const state = path.join(temp, "state"), config = path.join(state, "bus/client.json");
 const env = { HOME: temp, COMM_STATE: state };
 const secret = "fixture-secret-never-rendered";

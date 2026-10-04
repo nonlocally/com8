@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# HOMI optional account pane observer, adapted from Anu 80d3c86.
+# COM8 optional account pane observer, adapted from Anu 80d3c86.
 # Internal state/send and watcher/notification compatibility; no application UI or team orchestration.
-# Usage: homi-account-pane {state|send|read|wait|ls|id|status|focus|notify|call|needs|watchd|reply}
+# Usage: com8-account-pane {state|send|read|wait|ls|id|status|focus|notify|call|needs|watchd|reply}
 
 
 # anu:bash-guard — needs bash 4+; re-exec under Homebrew's when PATH hands us macOS /bin/bash 3.2
@@ -63,10 +63,10 @@ esac
 # Runtime state — the reply channel that turns `gather` from screen-scrape into
 # confirmed results. A reply is a plain file under here, so a worker can record one
 # even without tmux, as long as this dir is reachable.
-ANU_PANE_DIR="${ANU_PANE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/pane}"
+ANU_PANE_DIR="${ANU_PANE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/pane}"
 
 # Notification state (cooldown stamps + the watchd per-pane state machine files).
-ANU_NOTIFY_DIR="${ANU_NOTIFY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/notify}"
+ANU_NOTIFY_DIR="${ANU_NOTIFY_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/notify}"
 # Every creation of it goes through here, so no call site can forget the mode:
 # the rotation logs under this dir hold captured pane SCREEN TEXT, which is
 # whatever the agent and the human were looking at. Owner-only.
@@ -1088,7 +1088,7 @@ _rot_bin() {
     [ -x "$ANU_ACCOUNT_BIN" ] && { _r_bin="$ANU_ACCOUNT_BIN"; return 0; }
     _r_bin_warn="ANU_ACCOUNT_BIN=$ANU_ACCOUNT_BIN is not executable — falling through"
   fi
-  p="$(command -v homi-account 2>/dev/null || true)"
+  p="$(command -v com8-account 2>/dev/null || true)"
   [ -n "$p" ] && [ -x "$p" ] && { _r_bin="$p"; return 0; }
   p="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/account"
   [ -x "$p" ] && { _r_bin="$p"; return 0; }
@@ -1350,7 +1350,7 @@ EOF
 # when this device has a Codex account with an auth.json (existence only —
 # never opened), plain `codex` otherwise, so a fresh install sees no change.
 _codex_launch_prefix() {
-  local dir="${ANU_ACCOUNT_CODEX_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/accounts/codex}" f
+  local dir="${ANU_ACCOUNT_CODEX_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/accounts/codex}" f
   for f in "$dir"/*/auth.json; do
     [ -f "$f" ] || continue
     printf '%q launch --provider codex --' "${ANU_ACCOUNT_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/account}"
@@ -1428,7 +1428,7 @@ EOF
   # account rotate`/`switch`, never come through this arm and are unaffected.
   if [ "$provider" = codex ] && [ "$codex_gate" != 1 ]; then
     if [ "$_r_nogate" != 1 ]; then
-      printf '%s codex wall recorded, not rotating: @anu_codex_autorotate is not 1 (automatic Codex rotation is opt-in until a live wall handoff passes). Move it by hand with `homi-account rotate %s`.\n' \
+      printf '%s codex wall recorded, not rotating: @anu_codex_autorotate is not 1 (automatic Codex rotation is opt-in until a live wall handoff passes). Move it by hand with `com8-account rotate %s`.\n' \
         "$(date '+%H:%M:%S')" "$pid" >> "$log"
       _r_nogate=1
     fi
@@ -1523,7 +1523,7 @@ EOF
     [ -n "$_r_bin_warn" ] && {
       printf '[%s] %s\n' "$now" "$_r_bin_warn" >> "$log" 2>/dev/null; warned=1; }
     if [ "$bin_rc" -ne 0 ] || [ -z "$_r_bin" ]; then
-      printf '[%s] no homi-account helper available (set ANU_ACCOUNT_BIN) — not rotating %s\n' \
+      printf '[%s] no com8-account helper available (set ANU_ACCOUNT_BIN) — not rotating %s\n' \
         "$now" "$pid" >> "$log" 2>/dev/null; warned=1
     fi
     [ "$warned" = 1 ] && _r_nobin=1
@@ -1733,7 +1733,7 @@ _reb_arm() {
     _rot_bin || bin_rc=$?
     if [ "$bin_rc" -ne 0 ] || [ -z "$_r_bin" ]; then
       if [ "$_b_nobin" != 1 ]; then
-        printf '[%s] no homi-account helper available (set ANU_ACCOUNT_BIN) — not rebalancing\n' "$now" >> "$(_rot_log "$sh" "$pid")" 2>/dev/null
+        printf '[%s] no com8-account helper available (set ANU_ACCOUNT_BIN) — not rebalancing\n' "$now" >> "$(_rot_log "$sh" "$pid")" 2>/dev/null
         _b_nobin=1
       fi
       break

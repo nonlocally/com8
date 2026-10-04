@@ -121,7 +121,7 @@ assert_eq "limited" "$(PANE_CLI=2.1.272 "$PANE" state %1)" "a composer with type
 
 # a `box claude` pane's pane_current_command is the container runtime, not
 # claude — the wall gate reads it as claude only when @anu_box=1 (stamped by
-# `homi-account launch --box`), so an unrelated container pane can't
+# `com8-account launch --box`), so an unrelated container pane can't
 # false-positive on stray wall text.
 write_screen "" "You've hit your limit · resets 3pm" "new messages wait for your usage limit to reset" "› "
 assert_eq "limited" "$(PANE_CLI=container PANE_BOX=1 "$PANE" state %1)" "a boxed claude pane (container) reads the wall as limited when @anu_box=1"
@@ -409,7 +409,7 @@ PATH="$op"; unset TMUX PANE_CLI SCREEN_FILE ANU_NOTIFY_DIR ANU_ACTIVE_PANE_OVERR
 
 # ------------------------------------------------- watchd: the limited arm ----
 # The unattended rotation arm: a pane sitting at a provider usage wall is
-# rotated in place by a detached `homi-account rotate <pane>` worker. Everything
+# rotated in place by a detached `com8-account rotate <pane>` worker. Everything
 # here runs the REAL pane executable against a tmux stub plus a fake
 # anu-account (ANU_ACCOUNT_BIN) that records its argv + environment and exits
 # with $ANU_ROTATE_RC — so the whole state machine (gate, confirmation,
@@ -667,7 +667,7 @@ assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1")" "backoff_until=4520" "…
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1.log")" "abandoned" "…and the log says why"
 
 # --- the boxed cap: a boxed rotation gets a bigger budget than a host one ----
-# `homi-account rotate` gives a boxed relaunch 60s hook + 90s running + 180s
+# `com8-account rotate` gives a boxed relaunch 60s hook + 90s running + 180s
 # idle + ~15s to leave = 345s of its own, so the host's 300s cap would shoot a
 # boxed rotation that was still on track and report it as a failure.
 rdir bcap; rwall
@@ -740,7 +740,7 @@ for t in 6000 6002 6004; do
 done
 assert_eq "" "$(cat "$RACCT")" "an unresolvable anu-account dispatches nothing"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1.log")" "is not executable" "a non-executable ANU_ACCOUNT_BIN is named in the log…"
-assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1.log")" "no homi-account helper available" "…and so is the fall-through finding nothing"
+assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1.log")" "no com8-account helper available" "…and so is the fall-through finding nothing"
 assert_eq "1" "$(grep -c "is not executable" "$ANU_NOTIFY_DIR/r_default_1.log")" "…logged once per wall, not every tick"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1")" "nobin=1" "…tracked by its own flag"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1")" "notified=0" "…so the wall's outcome notification is still unspent"
@@ -1150,7 +1150,7 @@ exit 0'
 stub "$asd" terminal-notifier 'printf "%s\n" "$*" >> "'"$atn"'"; exit 0'
 op="$PATH"; PATH="$asd:$PATH"; export TMUX=fake ANU_ACTIVE_PANE_OVERRIDE=%9 ANU_NOTIFY_DIR="$atmp/n"
 mkdir -p "$ANU_NOTIFY_DIR"
-parked="anu account: rotation failed — no codex account with room is logged in on this device (account_delta did not stay up; account_gamma, the account that walled, is the only codex login left on this device); resume with: homi-account launch --provider codex --as account_gamma -- resume sid-1"
+parked="anu account: rotation failed — no codex account with room is logged in on this device (account_delta did not stay up; account_gamma, the account that walled, is the only codex login left on this device); resume with: com8-account launch --provider codex --as account_gamma -- resume sid-1"
 /bin/sleep 0 & gone=$!; wait "$gone"
 printf 'confirm=0\nattempts=1\nworker=%s\nstarted=990\nrc=\nbackoff_until=0\nnotified=0\nnobin=0\nnohook=0\nnogate=0\nerr=\n' "$gone" > "$ANU_NOTIFY_DIR/r_default_1"
 printf 'Error: … unauthorized (401)\n%s\n' "$parked" > "$ANU_NOTIFY_DIR/r_default_1.log"
@@ -1158,7 +1158,7 @@ printf 'rc=1\n' > "$ANU_NOTIFY_DIR/r_default_1.rc"
 : > "$ANU_NOTIFY_DIR/r_default_2"      # a shell pane with no rotation at all
 ANU_NOW_OVERRIDE=1000 "$PANE" watchd --tick >/dev/null 2>&1
 assert_contains "$(cat "$atn")" "rotation failed — no codex account with room" "a pane parked at a shell after a failed relaunch is reaped on the next tick"
-assert_contains "$(cat "$atn")" "resume with: homi-account launch" "…and its notice IS the worker's one line"
+assert_contains "$(cat "$atn")" "resume with: com8-account launch" "…and its notice IS the worker's one line"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1")" "worker=0" "…the in-flight guard released"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1")" "rc=1" "…the exit code recorded"
 assert_contains "$(cat "$ANU_NOTIFY_DIR/r_default_1.log")" "rotate ended rc=1" "…and logged"
@@ -1175,7 +1175,7 @@ assert_eq "0" "$([ -e "$ANU_NOTIFY_DIR/r_default_77" ] && echo 1 || echo 0)" "�
 PATH="$op"; unset TMUX ANU_ACTIVE_PANE_OVERRIDE ANU_NOTIFY_DIR ANU_ACCOUNT_BIN AP_CLI
 
 # ---------------------------------------------------- watchd: the rebalance arm ---
-# An IDLE pane is handed to `homi-account rebalance <pane> --tick` — which holds
+# An IDLE pane is handed to `com8-account rebalance <pane> --tick` — which holds
 # the rule — only when the cheap facts say it could move. Run against the REAL
 # pane executable, a tmux stub that serves the enumerator, the per-pane stamps
 # (one list-panes), the cached ranking and the clients, and a fake anu-account
@@ -1394,7 +1394,7 @@ SAVED_PANE="$PANE"; cp "$PANE" "$btmp/observer-only"; PANE="$btmp/observer-only"
 : > "$btmp/not-exec"; chmod -x "$btmp/not-exec"
 for t in 100 102 140 180; do ANU_ACCOUNT_BIN="$btmp/not-exec" HOME="$btmp/nohome" btick "$t"; done
 assert_eq "" "$(bpane)" "an unresolvable anu-account dispatches nothing"
-assert_eq "1" "$(grep -c "no homi-account helper available" "$ANU_NOTIFY_DIR/r_default_1.log")" "…and says so once"
+assert_eq "1" "$(grep -c "no com8-account helper available" "$ANU_NOTIFY_DIR/r_default_1.log")" "…and says so once"
 
 PANE="$SAVED_PANE"
 PATH="$bop"; unset TMUX SCREEN_FILE ANU_NOTIFY_DIR ANU_ACTIVE_PANE_OVERRIDE ANU_ACCOUNT_BIN

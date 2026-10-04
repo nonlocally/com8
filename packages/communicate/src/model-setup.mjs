@@ -1,7 +1,7 @@
 // Optional setup for a model that powers the coding client itself. Credentials
 // travel only over the child process's stdin, never argv or the setup report.
 import { spawnSync } from "node:child_process";
-import { homiCli } from "./paths.mjs";
+import { com8Cli } from "./paths.mjs";
 
 export function modelOrigin(value) {
   let url;
@@ -15,13 +15,13 @@ export function modelOrigin(value) {
 export function addModelConnection(args, key, { run = spawnSync, env = process.env } = {}) {
   if (typeof key !== "string" || !/^[\x21-\x7e]+$/.test(key) || Buffer.byteLength(key) > 8191)
     throw new Error("The model key must be a nonempty ASCII token without whitespace, at most 8191 bytes.");
-  const result = run(homiCli, ["model", "add", ...args, "--key-stdin", "--json"], {
+  const result = run(com8Cli, ["model", "add", ...args, "--key-stdin", "--json"], {
     env, input: key + "\n", encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     timeout: 30000, maxBuffer: 1024 * 1024,
   });
   // Never include child output/exception text in an error: a third-party
   // wrapper or damaged installation could echo its input.
-  if (result.error || result.status !== 0) throw new Error("Model connection was not saved. Check its name and private configuration with homi model list; existing connections are never overwritten.");
+  if (result.error || result.status !== 0) throw new Error("Model connection was not saved. Check its name and private configuration with com8 model list; existing connections are never overwritten.");
   let report;
   try { report = JSON.parse(result.stdout); } catch { throw new Error("Model setup returned an invalid report; no success is claimed."); }
   if (report.ok !== true) throw new Error("Model connection was not saved; no success is claimed.");

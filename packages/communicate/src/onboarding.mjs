@@ -1,4 +1,4 @@
-// Setup-only dependency planning. Package managers own packages; HOMI owns only
+// Setup-only dependency planning. Package managers own packages; COM8 owns only
 // the integrations/configuration recorded by its existing setup/profile ledgers.
 import { spawnSync } from "node:child_process";
 import { accessSync, constants, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -16,7 +16,7 @@ export const INSTALLERS = Object.freeze({
   codex: "https://chatgpt.com/codex/install.sh",
 });
 const NEW_FLAGS = ["--guided", "--install-missing", "--terminal", "--mesh", "--ghostty", "--login-claude", "--login-codex", "--model"];
-const SERVICE_ENV = ["PATH", "HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOMI_TMUX_SOCKET"];
+const SERVICE_ENV = ["PATH", "COM8_SOCK_DIR", "COM8_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COM8_TMUX_SOCKET"];
 export function shouldGuide(argv, { stdinTTY = process.stdin.isTTY, stdoutTTY = process.stdout.isTTY } = {}) {
   return (argv.length === 0 && !!stdinTTY && !!stdoutTTY) || argv.some((a) => NEW_FLAGS.includes(a) || a.startsWith("--bus=") || a.startsWith("--bus-invite-file="));
 }
@@ -87,13 +87,13 @@ export function planOnboarding(options, snapshot) {
   if (!["darwin", "linux"].includes(snapshot.platform)) blocked.push("Guided dependency installation supports macOS and Linux only.");
   for (const r of missing) {
     if (["claude", "codex"].includes(r.id) && tools[r.id]?.path) {
-      blocked.push(`${r.label} exists at ${tools[r.id].path} but its version could not be verified or is unsupported. Update/repair it with its own installer, then rerun; HOMI does not silently replace existing clients.`);
+      blocked.push(`${r.label} exists at ${tools[r.id].path} but its version could not be verified or is unsupported. Update/repair it with its own installer, then rerun; COM8 does not silently replace existing clients.`);
       continue;
     }
     if (!o.installMissing) { blocked.push(`${r.label} is missing or unsupported; install it or select --install-missing.`); continue; }
     if (r.id === "node") { blocked.push("Run this release with Node.js 20+ first; the Node-based setup cannot bootstrap its own runtime."); continue; }
     if (snapshot.platform === "darwin") {
-      if (snapshot.uid === 0) { blocked.push("Run Homebrew and HOMI setup as your normal account, not root."); continue; }
+      if (snapshot.uid === 0) { blocked.push("Run Homebrew and COM8 setup as your normal account, not root."); continue; }
       if (!tools.brew?.path) {
         if (!tools.curl?.path) { blocked.push("curl is required to download the official Homebrew installer."); continue; }
         script("brew", "/bin/bash", [], ["brew"], "Install Homebrew using its official installer; it may request administrator permission.");
@@ -111,11 +111,11 @@ export function planOnboarding(options, snapshot) {
         command(id, prefix[0] || apt, [...(prefix.length ? [apt] : []), "install", "-y", "--", pkg], requires, `Install missing ${pkg} using the existing apt package index; administrator permission may be requested.`);
       };
       if (r.id === "claude" || r.id === "codex") {
-        if (snapshot.uid === 0) { blocked.push(`Install ${r.id} as your normal user; HOMI will not install provider credentials or clients into root's account.`); continue; }
+        if (snapshot.uid === 0) { blocked.push(`Install ${r.id} as your normal user; COM8 will not install provider credentials or clients into root's account.`); continue; }
         if (!tools.curl?.path) installApt("curl", "curl", ["curl"]);
         script(r.id, r.id === "claude" ? "bash" : "sh", r.id === "claude" ? ["stable"] : [], [r.id], `Install ${r.id} for this user using its official native installer.`);
       } else if (r.id === "ghostty" || r.id === "font") {
-        blocked.push(`Install ${r.label} with a supported distribution-specific method first. HOMI does not add third-party Linux repositories or guess a Ghostty/font package.`);
+        blocked.push(`Install ${r.label} with a supported distribution-specific method first. COM8 does not add third-party Linux repositories or guess a Ghostty/font package.`);
       } else {
         const packages = { python3: "python3", bash: "bash", tmux: "tmux", fzf: "fzf", jq: "jq", ssh: "openssh-client" };
         if (packages[r.id]) installApt(r.id, packages[r.id], [r.id]);
@@ -180,7 +180,7 @@ export function runOnboardingCommand(command, args, { env = environment(), captu
 }
 async function installScript(step, options, runner = runOnboardingCommand) {
   if (INSTALLERS[step.id] !== step.url || !step.url.startsWith("https://")) throw new Error("Unrecognized installer URL");
-  const temp = mkdtempSync(path.join(os.tmpdir(), "homi-install-"));
+  const temp = mkdtempSync(path.join(os.tmpdir(), "com8-install-"));
   const file = path.join(temp, "installer");
   try {
     await runner("curl", ["-q", "--fail", "--show-error", "--location", "--proto", "=https", "--proto-redir", "=https",
@@ -226,18 +226,18 @@ function promptSession() {
 
 export async function executeOnboarding(plan, io) {
   const { log = console.log, stdinTTY = false } = io;
-  log("HOMI setup plan:");
+  log("COM8 setup plan:");
   for (const r of plan.requirements) log(`  ${requirementMet(r, plan.snapshot) ? "reuse" : "need"}: ${r.label}`);
   for (const step of plan.steps) log(`  ${step.command} ${step.args.map((a) => JSON.stringify(a)).join(" ")}${step.url ? ` (download ${step.url} to a private temporary file first)` : ""}`);
-  log(`  homi setup ${plan.setupArgs.join(" ")}`);
-  if (plan.profileArgs.length) log(`  homi profile preview/install ${plan.profileArgs.join(" ")} (managed shell/tmux/Ghostty configuration; no live reload)`);
+  log(`  com8 setup ${plan.setupArgs.join(" ")}`);
+  if (plan.profileArgs.length) log(`  com8 profile preview/install ${plan.profileArgs.join(" ")} (managed shell/tmux/Ghostty configuration; no live reload)`);
   if (plan.options.loginClaude) log("  Claude login after setup, only if not already signed in (credentials handled by Claude)");
   if (plan.options.loginCodex) log("  Codex login after setup, only if not already signed in (credentials handled by Codex)");
   if (plan.options.model) log("  Add a private model connection for explicitly selected Claude Code/Codex launches; existing defaults and logins stay available.");
   if (plan.options.bus) log(plan.options.bus === "local" ? "  Select local bus use; registration starts its broker later." : `  Select the existing enrollment at ${plan.options.bus}.`);
   else if (plan.options.busInviteFile || plan.options.busInvitePrompt) log("  Join the hub in your private invitation (invitation contents are never printed).");
   else log("  Keep the current bus selection; no device enrollment or agent registration.");
-  log("Packages installed by your package manager or provider installer remain yours; HOMI uninstall does not remove them.");
+  log("Packages installed by your package manager or provider installer remain yours; COM8 uninstall does not remove them.");
   for (const reason of plan.blocked) log(`  unavailable: ${reason}`);
   if (plan.options.dryRun) {
     log("Dry run: no downloads, package installs, configuration writes, services or login.");
@@ -248,7 +248,7 @@ export async function executeOnboarding(plan, io) {
     throw new Error("Choose --claude, --codex or --no-clients explicitly for guided/automated setup.");
   if (!stdinTTY && !plan.options.yes) throw new Error("Noninteractive guided setup requires --yes after reviewing --dry-run.");
   if ((plan.options.loginClaude || plan.options.loginCodex) && !stdinTTY) throw new Error("Provider login requires an interactive terminal; run the provider's own login separately.");
-  if (plan.options.model && !stdinTTY) throw new Error("Model setup needs a terminal for its hidden key prompt. For automation use homi model add with --key-file or --key-stdin.");
+  if (plan.options.model && !stdinTTY) throw new Error("Model setup needs a terminal for its hidden key prompt. For automation use com8 model add with --key-file or --key-stdin.");
   let modelChoice;
   if (plan.options.model) {
     modelChoice = await io.prepareModel();
@@ -267,7 +267,7 @@ export async function executeOnboarding(plan, io) {
     const result = await io.profile(["preview", ...plan.profileArgs]);
     const conflicts = result?.actions?.filter((action) => action.action === "conflict") || [];
     if (result?.ok === false || conflicts.length)
-      throw new Error(`Profile preview found conflicts; no HOMI setup was activated. ${conflicts.map((c) => `${c.path}: ${c.reason}`).join("; ")}`);
+      throw new Error(`Profile preview found conflicts; no COM8 setup was activated. ${conflicts.map((c) => `${c.path}: ${c.reason}`).join("; ")}`);
   };
   let profilePreviewed = false;
   if (plan.profileArgs.length && requirementMet(python, plan.snapshot)) {
@@ -282,15 +282,15 @@ export async function executeOnboarding(plan, io) {
   }
   const verified = await io.probe();
   const missing = plan.requirements.filter((r) => !requirementMet(r, verified));
-  if (missing.length) throw new Error(`Installed dependencies could not be verified: ${missing.map((r) => r.label).join(", ")}. No HOMI setup was activated; fix PATH/install prerequisites and rerun.`);
+  if (missing.length) throw new Error(`Installed dependencies could not be verified: ${missing.map((r) => r.label).join(", ")}. No COM8 setup was activated; fix PATH/install prerequisites and rerun.`);
   if (plan.profileArgs.length && !profilePreviewed) {
     await preview();
-    if (!plan.options.yes && !await io.confirm("Apply the displayed profile changes and HOMI setup?")) return { status: "cancelled", plan };
+    if (!plan.options.yes && !await io.confirm("Apply the displayed profile changes and COM8 setup?")) return { status: "cancelled", plan };
   }
   await io.setup(plan.setupArgs);
   if (plan.profileArgs.length) {
     try { await io.profile(["install", ...plan.profileArgs]); }
-    catch (error) { throw new Error(`HOMI core setup completed, but profile installation failed: ${error.message}. Core installation and packages are retained; reconcile the profile conflict and rerun.`); }
+    catch (error) { throw new Error(`COM8 core setup completed, but profile installation failed: ${error.message}. Core installation and packages are retained; reconcile the profile conflict and rerun.`); }
   }
   if (busChoice) {
     try {
@@ -298,7 +298,7 @@ export async function executeOnboarding(plan, io) {
       log(plan.options.bus === "local" ? "Local bus selected. Ask your agent to register when needed; no bus service was started." : "Bus selection completed. Open your agent session and ask it to register on the intended bus.");
     } catch {
       await io.doctor();
-      throw new Error("HOMI core setup completed, but optional bus setup did not complete. The installation is retained. Inspect homi bus status --no-start --json, then retry setup with the intended existing hub or a fresh private invitation. No agent registration is claimed.");
+      throw new Error("COM8 core setup completed, but optional bus setup did not complete. The installation is retained. Inspect com8 bus status --no-start --json, then retry setup with the intended existing hub or a fresh private invitation. No agent registration is claimed.");
     }
   }
   if (modelChoice) {
@@ -306,7 +306,7 @@ export async function executeOnboarding(plan, io) {
       await modelChoice.apply();
       log("Model connection saved. Ask your agent to select it when launching a worker. Catalog access and real inference can be checked separately.");
     } catch {
-      throw new Error("HOMI core setup completed, but optional model setup did not complete. The installation is retained. Inspect homi model list and retry homi model add; no model connection success is claimed.");
+      throw new Error("COM8 core setup completed, but optional model setup did not complete. The installation is retained. Inspect com8 model list and retry com8 model add; no model connection success is claimed.");
     }
   }
   await io.doctor();
@@ -315,9 +315,9 @@ export async function executeOnboarding(plan, io) {
     if (!plan.options[key]) continue;
     if (await io.inspectLogin(provider)) { log(`${provider}: already signed in.`); continue; }
     await io.login(provider);
-    if (!await io.inspectLogin(provider)) throw new Error(`${provider}: login did not complete. HOMI remains installed; rerun the provider's login yourself.`);
+    if (!await io.inspectLogin(provider)) throw new Error(`${provider}: login did not complete. COM8 remains installed; rerun the provider's login yourself.`);
   }
-  log("Setup complete. Open fresh client sessions to load HOMI. Provider login and package removal remain managed by their own tools.");
+  log("Setup complete. Open fresh client sessions to load COM8. Provider login and package removal remain managed by their own tools.");
   return { status: "complete", plan };
 }
 
@@ -371,7 +371,7 @@ export async function runOnboarding(argv, injected = {}) {
       if (!options.ghostty && (await probe()).platform === "darwin")
         options.ghostty = await confirm("Install Ghostty and its configured Nerd Font with the terminal profile?");
       if (options.ghostty) options.terminal = true;
-      if (!options.service && !options.noService) options.service = await confirm("Enable the per-user HOMI daemon service?");
+      if (!options.service && !options.noService) options.service = await confirm("Enable the per-user COM8 daemon service?");
       if (!options.model && (options.claude || options.codex)) options.model = await confirm("Configure a model API connection, such as GLM, to power your coding agents?");
       if (prompt?.closed) return { status: "cancelled" };
       // Login is a separate choice, never implied by installing a provider CLI.

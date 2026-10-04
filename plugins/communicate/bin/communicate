@@ -15,5 +15,5 @@ for c in \
   "$data/current/vendor/bin/communicate"; do
   [ -n "$c" ] && [ -x "$c" ] && [ "$c" != "${src}" ] && exec "$c" "$@"
 done
-echo "communicate: no installed payload found (install a reviewed HOMI release and run homi setup)" >&2
+echo "communicate: no installed payload found (install a reviewed COM8 release and run com8 setup)" >&2
 exit 127

@@ -1,22 +1,22 @@
 # Qualifying restoration of existing client plugins
 
 This opt-in check runs actual Claude Code and Codex registry commands against an
-extracted HOMI release. It needs **Python 3.11+** for standard-library TOML parsing,
+extracted COM8 release. It needs **Python 3.11+** for standard-library TOML parsing,
 Node, and the selected client CLIs. This testing requirement is separate from
-HOMI's Python 3.9+ runtime requirement.
+COM8's Python 3.9+ runtime requirement.
 
 ```sh
-python3 scripts/qualify-client-restoration.py /path/to/homi-0.3.0 \
+python3 scripts/qualify-client-restoration.py /path/to/com8-VERSION \
   --run-clients --evidence /path/to/new-private-evidence-directory
 ```
 
 The script is self-contained and can be copied beside an extracted release;
 it does not import repository helpers. It verifies the artifact manifest before
-invoking the artifact's public `bin/homi`. `--provider claude` or `--provider codex`
+invoking the artifact's public `bin/com8`. `--provider claude` or `--provider codex`
 limits the clients; repeat `--scenario` to select `enabled`, `disabled`, `policy`,
 `marketplace-only`, or `none`. The `policy` case applies only to Codex.
 
-Every case creates its own temporary HOME, Claude configuration, Codex home, HOMI
+Every case creates its own temporary HOME, Claude configuration, Codex home, COM8
 installation and state. No existing authentication, client configuration, agent
 socket or session environment is supplied. The original plugin is an inert local
 version 0.0.7 fixture with no hooks, MCP servers or skills. Commands inspect and
@@ -31,11 +31,11 @@ temporary directory explicitly.
 Each case registers the original plugin through the actual client CLI, captures
 its original registry/configuration state, and exercises:
 
-1. HOMI setup and repeat update, followed by selective client uninstall.
-2. HOMI reinstall, followed by full uninstall.
+1. COM8 setup and repeat update, followed by selective client uninstall.
+2. COM8 reinstall, followed by full uninstall.
 3. Exact restoration of the original plugin version, installed/enabled state,
    marketplace source and user settings, including an unrelated setting.
-4. Preservation of the other client's configuration and literal HOMI state.
+4. Preservation of the other client's configuration and literal COM8 state.
 
 Claude disabled state is set through its CLI. Codex has no disable command, so
 the test writes a small fixture-only user configuration using supported `enabled`

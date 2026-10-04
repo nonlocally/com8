@@ -1,8 +1,8 @@
 # Explicit agent buses
 
 The bus is a directory and message gateway for sessions that explicitly register.
-It is separate from native socket discovery (`homi native agents`) and durable
-compute identities (`homi agents`). The compatibility command `communicate bus`
+It is separate from native socket discovery (`com8 native agents`) and durable
+compute identities (`com8 agents`). The compatibility command `communicate bus`
 also remains available. A sidecar or transcript alone does not publish an agent.
 
 On general, registration publishes an agent for discovery and incoming requests.
@@ -13,28 +13,28 @@ existing SSH router continue to work without bus publication or membership.
 
 ## Choose a local or connected bus
 
-Check `homi bus status --no-start --json` first. Use the user's configured hub
+Check `com8 bus status --no-start --json` first. Use the user's configured hub
 when one exists. A local bus is a valid first installation:
 
 ```sh
-homi bus use local
-homi bus register
-homi bus dashboard --open
+com8 bus use local
+com8 bus register
+com8 bus dashboard --open
 ```
 
 Registration attaches the current exact Claude or Codex session. It does not
 create a replacement session. A named bus requires explicit membership; use
-`homi bus register --bus photonics` only when that is the intended destination.
+`com8 bus register --bus photonics` only when that is the intended destination.
 
 For a self-hosted or existing remote hub, the owner creates a scoped invitation
 for the intended account and bus, and gives it privately to the joining user:
 
 ```sh
-homi bus connect INVITE_CODE --device my-laptop
-homi bus register
+com8 bus connect INVITE_CODE --device my-laptop
+com8 bus register
 ```
 
-The invitation carries the remote enrollment information. Installing HOMI does
+The invitation carries the remote enrollment information. Installing COM8 does
 not create a hosted account, enroll a device, or grant access to a private bus.
 Keep invitations and credentials out of source control and public logs.
 
@@ -46,7 +46,7 @@ reader principals and canonical account owners. Mapped GitHub accounts can
 create their own private buses and manage collaborators there; hub administrators
 also manage existing operator-owned buses and the service. Readers see only
 their permitted buses. No personal account
-or public hosted service is a required part of a HOMI installation.
+or public hosted service is a required part of a COM8 installation.
 
 OpenWebUI viewing is optional. The gateway can map a configured OpenWebUI group
 ID to an existing bus. Use the stable group ID: renaming a group preserves its
@@ -175,8 +175,8 @@ restoring the matching pre-upgrade state before starting the older broker.
 For an owner-confirmed move of the same broker to a new HTTPS origin:
 
 ```sh
-homi bus rehome https://old-bus.example.com https://bus.example.com
-homi bus status --no-start --json
+com8 bus rehome https://old-bus.example.com https://bus.example.com
+com8 bus status --no-start --json
 ```
 
 This explicitly sends the existing device credential to the new origin. The

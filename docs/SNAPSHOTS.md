@@ -1,22 +1,22 @@
 # Optional workspace snapshots and archive
 
-`homi-snapshot` takes a snapshot of the whole tmux workspace with the profile's
+`com8-snapshot` takes a snapshot of the whole tmux workspace with the profile's
 `tss`, mirrors it to an archive volume, prunes the local window, and logs one
 line per run. It is an optional module of the workstation profile: nothing in
-core setup or in `homi profile install` takes snapshots or installs a schedule.
+core setup or in `com8 profile install` takes snapshots or installs a schedule.
 
 ```sh
-homi-snapshot run              # snapshot now (snap-YYYY-MM-DD-HHMM) + archive + prune
-homi-snapshot list             # local snapshots, newest first (* = archived)
-homi-snapshot restore 2026-09-24-0300   # a verified copy back from the archive
-homi-snapshot status           # schedule, archive state, counts, recent log
-homi-snapshot schedule preview # the owned 03/09/15/21 schedule, before installing it
+com8-snapshot run              # snapshot now (snap-YYYY-MM-DD-HHMM) + archive + prune
+com8-snapshot list             # local snapshots, newest first (* = archived)
+com8-snapshot restore 2026-09-24-0300   # a verified copy back from the archive
+com8-snapshot status           # schedule, archive state, counts, recent log
+com8-snapshot schedule preview # the owned 03/09/15/21 schedule, before installing it
 ```
 
-The module lives at `profiles/runtime/modules/snapshots/` (`homi-snapshot` and
-`schedule.py`), so an installed profile payload carries it. `homi profile
-install --snapshots` installs the stable wrapper `~/.local/bin/homi-snapshot`
-and nothing else: no job, no schedule. `homi-snapshot schedule install` writes
+The module lives at `profiles/runtime/modules/snapshots/` (`com8-snapshot` and
+`schedule.py`), so an installed profile payload carries it. `com8 profile
+install --snapshots` installs the stable wrapper `~/.local/bin/com8-snapshot`
+and nothing else: no job, no schedule. `com8-snapshot schedule install` writes
 that same wrapper when the profile did not, and treats a profile-installed one
 as shared.
 
@@ -27,7 +27,7 @@ the sessions directory, named `snap-YYYY-MM-DD-HHMM`. Snapshots from the earlier
 nightly cadence are named `nightly-YYYY-MM-DD`; every command finds, orders,
 archives, prunes, verifies, lists and restores both schemes. Ordering uses the
 embedded timestamp, never the bare name. The local window keeps the newest 56
-snapshots (14 days at four a day). Restore with `tsr NAME` (`homi-workstation
+snapshots (14 days at four a day). Restore with `tsr NAME` (`com8-workstation
 shell tsr NAME` outside a profile shell).
 
 ## Archive safety
@@ -81,48 +81,48 @@ separate step.
 
 ## Configuration
 
-Private settings belong in `~/.config/homi/profiles/local.sh` (trusted shell,
+Private settings belong in `~/.config/com8/profiles/local.sh` (trusted shell,
 loaded by every profile tool and by the scheduled run):
 
 ```sh
 # where tss saves; snapshots are <state>/sessions, the log <state>/snapshots.log
-export HOMI_PROFILE_STATE="$HOME/.local/state/homi/workstation"
+export COM8_PROFILE_STATE="$HOME/.local/state/com8/workstation"
 # the permanent archive: a mounted volume and a directory on it
-export HOMI_SNAPSHOT_VOL="/Volumes/YOUR-ARCHIVE"
-export HOMI_SNAPSHOT_ARCHIVE="$HOMI_SNAPSHOT_VOL/homi-snapshots"
+export COM8_SNAPSHOT_VOL="/Volumes/YOUR-ARCHIVE"
+export COM8_SNAPSHOT_ARCHIVE="$COM8_SNAPSHOT_VOL/com8-snapshots"
 # optional overrides
-# export HOMI_SNAPSHOT_DIR="$HOMI_PROFILE_STATE/sessions"
-# export HOMI_SNAPSHOT_LOG="$HOMI_PROFILE_STATE/snapshots.log"
-# export HOMI_SNAPSHOT_KEEP=56
+# export COM8_SNAPSHOT_DIR="$COM8_PROFILE_STATE/sessions"
+# export COM8_SNAPSHOT_LOG="$COM8_PROFILE_STATE/snapshots.log"
+# export COM8_SNAPSHOT_KEEP=56
 ```
 
 An existing Anu installation keeps its data in place by pointing
-`HOMI_PROFILE_STATE` at the directory that already holds `sessions/` and
-`snapshots.log`, and `HOMI_SNAPSHOT_ARCHIVE` at the existing archive
+`COM8_PROFILE_STATE` at the directory that already holds `sessions/` and
+`snapshots.log`, and `COM8_SNAPSHOT_ARCHIVE` at the existing archive
 directory. Public defaults name no volume, host, or account.
 
 ## The schedule: explicit, owned, reversible
 
 ```sh
-homi-snapshot schedule preview     # JSON: files, actions, the load command; writes nothing
-homi-snapshot schedule install     # write + load; takes no snapshot itself
-homi-snapshot schedule status      # loaded? which files are owned, edited, or missing
-homi-snapshot schedule uninstall   # unload, then remove only unedited owned files
+com8-snapshot schedule preview     # JSON: files, actions, the load command; writes nothing
+com8-snapshot schedule install     # write + load; takes no snapshot itself
+com8-snapshot schedule status      # loaded? which files are owned, edited, or missing
+com8-snapshot schedule uninstall   # unload, then remove only unedited owned files
 ```
 
-On macOS this is a one-shot LaunchAgent `com.communicate.homi.snapshots`
+On macOS this is a one-shot LaunchAgent `com.communicate.com8.snapshots`
 (`StartCalendarInterval` at 03:00, 09:00, 15:00 and 21:00, no `KeepAlive`, a
 missed firing runs once on the next wake; logs in `~/Library/Logs`). On Linux it
-is the user timer `communicate-homi-snapshots.timer` (`OnCalendar=*-*-*
+is the user timer `communicate-com8-snapshots.timer` (`OnCalendar=*-*-*
 03,09,15,21:00:00`, `Persistent=true`). Both run the owned wrapper
-`~/.local/bin/homi-snapshot`.
+`~/.local/bin/com8-snapshot`.
 
 Ownership boundaries:
 
 - That compatible label is used only for the actual account home (from the
   password database, not `$HOME`) with standard config and state roots. Any
   other home, or an `XDG_CONFIG_HOME`/`XDG_STATE_HOME` override, gets a
-  stable scoped label (`com.communicate.homi.snapshots.<tag>`), so an isolated
+  stable scoped label (`com.communicate.com8.snapshots.<tag>`), so an isolated
   or qualification installation can never reach the account's real job.
 - Before anything is loaded or unloaded, the service manager is asked which
   file it loaded the label from. A job of our label loaded from another file
@@ -145,7 +145,7 @@ Ownership boundaries:
   supplied `XDG_CONFIG_HOME` and `XDG_STATE_HOME` (the same roots that scope
   the label, validated as absolute paths, so the run snapshots the selected
   state), a fixed `PATH`, `TMUX_TMPDIR`, and the UTF-8 locale. Nothing else
-  from the ambient environment is baked in. The `homi-snapshot schedule`
+  from the ambient environment is baked in. The `com8-snapshot schedule`
   dispatch passes the invocation `HOME` explicitly, so an isolated wrapper
   stays scoped.
 - `--platform` renders either platform for `preview`, but `install` and
@@ -157,13 +157,13 @@ Ownership boundaries:
   retagged or removed here. Only a wrapper this schedule created is removed.
 
 The files are owned through the profile ledger
-(`~/.local/state/homi/profiles/ownership.json`) using the installer's own
+(`~/.local/state/com8/profiles/ownership.json`) using the installer's own
 conflict rules: an existing unowned file is never replaced, an owned file that
-was edited is never removed, and `homi profile status` lists them.
+was edited is never removed, and `com8 profile status` lists them.
 
-`homi profile uninstall` handles an installed schedule itself. When the ledger
+`com8 profile uninstall` handles an installed schedule itself. When the ledger
 holds schedule-owned entries it first checks its own plan for conflicts, then
-delegates to `homi-snapshot schedule uninstall` outside its lock; that step
+delegates to `com8-snapshot schedule uninstall` outside its lock; that step
 verifies the job is loaded from the schedule's own file, unloads only that
 job, and removes only unedited schedule-owned files. The profile uninstall
 continues only when the schedule confirms the job unloaded and no

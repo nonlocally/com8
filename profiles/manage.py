@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optional HOMI workstation profiles. Preview by default; install starts no services.
+"""Optional COM8 workstation profiles. Preview by default; install starts no services.
 
 Only explicit install/uninstall mutate files. Managed blocks preserve adjacent
 user text; exact hashes protect generated files. Original backups survive repeat
@@ -23,8 +23,8 @@ import types
 
 VERSION = "0.3.0"
 HERE = Path(__file__).resolve().parent
-BEGIN = "# >>> HOMI profile"
-END = "# <<< HOMI profile"
+BEGIN = "# >>> COM8 profile"
+END = "# <<< COM8 profile"
 
 
 class Conflict(Exception):
@@ -37,7 +37,7 @@ def digest(data):
 
 def atomic(path, data, mode=0o600):
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, name = tempfile.mkstemp(prefix=".homi-", dir=path.parent)
+    fd, name = tempfile.mkstemp(prefix=".com8-", dir=path.parent)
     try:
         with os.fdopen(fd, "wb") as f:
             f.write(data)
@@ -78,13 +78,13 @@ def managed(text, body, prior=None, remove=False):
         sep = "" if not text or text.endswith("\n") else "\n"
         return text + sep + body
     if len(starts) != 1 or len(ends) != 1 or ends[0] < starts[0]:
-        raise Conflict("duplicate or incomplete HOMI block")
+        raise Conflict("duplicate or incomplete COM8 block")
     start, end = starts[0], ends[0] + len(END)
     if end < len(text) and text[end] == "\n":
         end += 1
     existing = text[start:end]
     if prior is None or existing != prior:
-        raise Conflict("HOMI block has no matching ownership record or was edited")
+        raise Conflict("COM8 block has no matching ownership record or was edited")
     return text[:start] + ("" if remove else body) + text[end:]
 
 
@@ -93,9 +93,9 @@ class Profile:
         self.home = Path(home).expanduser().absolute()
         if any(c in str(self.home) for c in "\n\r\0"):
             raise Conflict("home path contains a control character")
-        self.config = self.home / ".config/homi/profiles"
-        self.state = self.home / ".local/state/homi/profiles"
-        self.payloads = self.home / ".local/share/homi/profiles"
+        self.config = self.home / ".config/com8/profiles"
+        self.state = self.home / ".local/state/com8/profiles"
+        self.payloads = self.home / ".local/share/com8/profiles"
         self.ledger = self.state / "ownership.json"
         self.record = json.loads(self.ledger.read_text()) if self.ledger.exists() else {"entries": {}}
         if self.record.get("schema", 1) != 1:
@@ -119,7 +119,7 @@ class Profile:
         # Execute installed source directly: importing an immutable artifact
         # must not add __pycache__ files to its verified inventory.
         path = HERE / "runtime/modules/snapshots/schedule.py"
-        module = types.ModuleType("homi_snapshot_schedule")
+        module = types.ModuleType("com8_snapshot_schedule")
         module.__file__ = str(path)
         exec(compile(path.read_bytes(), str(path), "exec"), module.__dict__)
         manage = types.SimpleNamespace(**globals())
@@ -129,11 +129,11 @@ class Profile:
         runtime = self.payloads / self.payload_id() / "runtime"
         active = self.config / "active.sh"
         # This script can be loaded by a login shell and tools independently.
-        active_text = (f"# HOMI profile {VERSION}; generated, put overrides in local.sh\n"
-                       f"export HOMI_PROFILE_RUNTIME={quote(runtime)}\n"
-                       f"export HOMI_PROFILE_CONFIG={quote(self.config)}\n"
-                       f"export HOMI_PROFILE_MODULES={quote(' '.join(modules))}\n"
-                       '. "$HOMI_PROFILE_RUNTIME/init.sh"\n')
+        active_text = (f"# COM8 profile {VERSION}; generated, put overrides in local.sh\n"
+                       f"export COM8_PROFILE_RUNTIME={quote(runtime)}\n"
+                       f"export COM8_PROFILE_CONFIG={quote(self.config)}\n"
+                       f"export COM8_PROFILE_MODULES={quote(' '.join(modules))}\n"
+                       '. "$COM8_PROFILE_RUNTIME/init.sh"\n')
         out = [(active, active_text, "file", 0o600)]
         # env bash works with the normal user PATH; a guarded re-exec handles macOS.
         bash_guard = ('#!/usr/bin/env bash\n'
@@ -141,36 +141,36 @@ class Profile:
                    '  for b in /opt/homebrew/bin/bash /usr/local/bin/bash; do\n'
                    '    [ ! -x "$b" ] || exec "$b" "$0" "$@"\n'
                    '  done\n'
-                   '  echo "HOMI workstation needs Bash 4+" >&2; exit 1\n'
+                   '  echo "COM8 workstation needs Bash 4+" >&2; exit 1\n'
                    'fi\n'
                    'case ":$PATH:" in *":${BASH%/*}:"*) ;; *) export PATH="$PATH:${BASH%/*}" ;; esac\n')
         wrapper = bash_guard + f'. {quote(active)}\n'
-        for name, command in [("homi-workstation", '"$HOMI_PROFILE_RUNTIME/command.sh" "$@"'),
-                              ("homi-agent", '"$HOMI_PROFILE_RUNTIME/agent.sh" "$@"'),
-                              ("homi-mesh", '"$HOMI_PROFILE_RUNTIME/command.sh" shell mesh "$@"'),
-                              ("mesh", '"$HOMI_PROFILE_RUNTIME/command.sh" shell mesh "$@"'),
-                              ("homi-account", '"$HOMI_PROFILE_RUNTIME/accounts/account" "$@"'),
-                              ("homi-account-pane", '"$HOMI_PROFILE_RUNTIME/accounts/pane" "$@"'),
-                              ("homi-account-secrets", '"$HOMI_PROFILE_RUNTIME/accounts/secrets-client" "$@"'),
-                              ("homi-box", 'python3 "$HOMI_PROFILE_RUNTIME/box/box.py" "$@"')]:
-            if name == "homi-agent" and "terminal" not in modules:
+        for name, command in [("com8-workstation", '"$COM8_PROFILE_RUNTIME/command.sh" "$@"'),
+                              ("com8-agent", '"$COM8_PROFILE_RUNTIME/agent.sh" "$@"'),
+                              ("com8-mesh", '"$COM8_PROFILE_RUNTIME/command.sh" shell mesh "$@"'),
+                              ("mesh", '"$COM8_PROFILE_RUNTIME/command.sh" shell mesh "$@"'),
+                              ("com8-account", '"$COM8_PROFILE_RUNTIME/accounts/account" "$@"'),
+                              ("com8-account-pane", '"$COM8_PROFILE_RUNTIME/accounts/pane" "$@"'),
+                              ("com8-account-secrets", '"$COM8_PROFILE_RUNTIME/accounts/secrets-client" "$@"'),
+                              ("com8-box", 'python3 "$COM8_PROFILE_RUNTIME/box/box.py" "$@"')]:
+            if name == "com8-agent" and "terminal" not in modules:
                 continue
-            if name in ["homi-mesh", "mesh"] and "mesh" not in modules:
+            if name in ["com8-mesh", "mesh"] and "mesh" not in modules:
                 continue
-            if name == "homi-box" and "box" not in modules:
+            if name == "com8-box" and "box" not in modules:
                 continue
-            if name.startswith("homi-account") and "accounts" not in modules:
+            if name.startswith("com8-account") and "accounts" not in modules:
                 continue
-            out.append((self.home / ".local/bin" / name, wrapper + ('exec ' if name == 'homi-box' else '. ') + command + '\n', "file", 0o755))
+            out.append((self.home / ".local/bin" / name, wrapper + ('exec ' if name == 'com8-box' else '. ') + command + '\n', "file", 0o755))
         if "terminal" in modules:
             for alias in ["cx", "cxx", "cxc", "cdx", "cdxx", "cdxxs"]:
                 out.append((self.home / ".local/bin" / alias,
-                            wrapper + '. "$HOMI_PROFILE_RUNTIME/agent.sh" ' + alias + ' "$@"\n', "file", 0o755))
+                            wrapper + '. "$COM8_PROFILE_RUNTIME/agent.sh" ' + alias + ' "$@"\n', "file", 0o755))
             for helper in ["t", "tn", "tk", "tl", "tp", "tj", "tw", "twp", "to", "tws", "twg", "al", "alw"]:
                 out.append((self.home / ".local/bin" / helper,
-                            wrapper + '. "$HOMI_PROFILE_RUNTIME/command.sh" shell ' + helper + ' "$@"\n', "file", 0o755))
+                            wrapper + '. "$COM8_PROFILE_RUNTIME/command.sh" shell ' + helper + ' "$@"\n', "file", 0o755))
         if "snapshots" in modules:
-            out.append((self.home / ".local/bin/homi-snapshot",
+            out.append((self.home / ".local/bin/com8-snapshot",
                         self.snapshot_schedule(runtime).wrapper_text(), "file", 0o755))
         shell_block = f'{BEGIN}\n[[ $- != *i* ]] || . {quote(active)}\n{END}\n'
         out.extend((self.home / p, shell_block, "block", 0o600) for p in [".bashrc", ".bash_profile"])
@@ -182,11 +182,11 @@ class Profile:
             # The option expands at command execution, after tmux parses its
             # configuration. Shell quoting therefore survives spaces in HOME.
             rendered = (HERE / "runtime/tmux/tmux.conf").read_text().replace(
-                "@HOMI_COMMAND@", "#{@homi_profile_command}").replace(
-                "@HOMI_TMUX_CONFIG@", json.dumps(str(self.config / "tmux.conf")))
-            rendered = 'set -g @homi_profile_command ' + json.dumps(quote(self.home / '.local/bin/homi-workstation')) + '\n' + rendered
+                "@COM8_COMMAND@", "#{@com8_profile_command}").replace(
+                "@COM8_TMUX_CONFIG@", json.dumps(str(self.config / "tmux.conf")))
+            rendered = 'set -g @com8_profile_command ' + json.dumps(quote(self.home / '.local/bin/com8-workstation')) + '\n' + rendered
             if "mesh" in modules:
-                rendered += '\nbind m display-popup -E -w 80% -h 60% "#{@homi_profile_command} shell mesh"\n'
+                rendered += '\nbind m display-popup -E -w 80% -h 60% "#{@com8_profile_command} shell mesh"\n'
             rendered += '\nsource-file -q ' + json.dumps(str(self.config / 'local.tmux.conf')) + '\n'
             out.append((self.config / "tmux.conf", rendered, "file", 0o600))
             tmux_target = self.home / ".tmux.conf"
@@ -384,8 +384,8 @@ class Profile:
             return {"ok": True, "removed": len(actions), "preserved": "private configuration, runtime state, original backups, and immutable payloads"}
 
     def migration(self):
-        paths = [".local/share/anu", ".local/bin/anu", ".local/bin/pane", ".local/bin/communicate", ".local/bin/homi",
-                 ".local/share/homi/current", ".local/share/communicate/current", ".local/share/communicate/repo-path",
+        paths = [".local/share/anu", ".local/bin/anu", ".local/bin/pane", ".local/bin/communicate", ".local/bin/com8",
+                 ".local/share/com8/current", ".local/share/communicate/current", ".local/share/communicate/repo-path",
                  ".config/ghostty/config", ".config/tmux/tmux.conf", ".tmux.conf", ".bashrc", ".bash_profile",
                  ".config/nvim", ".claude/settings.json", ".codex/config.toml", ".codex/AGENTS.md",
                  "Library/LaunchAgents/com.anu.snapshot.plist"]

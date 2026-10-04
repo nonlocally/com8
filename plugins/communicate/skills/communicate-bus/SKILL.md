@@ -76,7 +76,7 @@ it is unclear. Explicit local registration starts a broker for this OS account
 without requiring any hosted invitation. A request for a specific shared hub
 requires enrollment there; never silently create a local substitute.
 
-HOMI's hosted hub is `https://bus.nonlocally.org`. It is one available choice,
+COM8's hosted hub is `https://bus.nonlocally.org`. It is one available choice,
 not automatic membership or a replacement for an existing configured hub.
 When the user explicitly selects it, inspect that origin without changing
 the default:
@@ -275,7 +275,7 @@ communicate bus register --bus photonics
 communicate bus status --no-start --json
 ```
 
-Guided `homi setup` also offers hidden invitation entry and shows the decoded
+Guided `com8 setup` also offers hidden invitation entry and shows the decoded
 HTTPS origin before confirmation. Automated setup accepts
 `--bus-invite-file=/absolute/private/invitation` and checks the file's ownership,
 type and permissions. Invitation setup enrolls the installation; registration

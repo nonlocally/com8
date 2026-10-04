@@ -1,11 +1,11 @@
-# HOMI documentation
+# COM8 documentation
 
-Use HOMI to create Claude or Codex agents, give them work, and exchange messages
+Use COM8 to create Claude or Codex agents, give them work, and exchange messages
 between sessions and devices. Start with Homebrew and guided setup:
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
+brew install nonlocally/tap/com8
+com8 setup
 ```
 
 After signing into your selected provider, open a fresh agent session and ask

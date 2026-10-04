@@ -10,8 +10,8 @@ const pkgDir = fileURLToPath(new URL("..", import.meta.url));
 const repo = path.resolve(pkgDir, "..", "..");
 const vendor = path.join(pkgDir, "vendor");
 const pkg = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
-const kernel = JSON.parse(execFileSync(process.env.HOMI_PYTHON || "python3", ["-B", "-c",
-  "import json,sys;sys.path.insert(0,sys.argv[1]);from homi_payload import KERNEL_FILES;print(json.dumps(KERNEL_FILES))",
+const kernel = JSON.parse(execFileSync(process.env.COM8_PYTHON || "python3", ["-B", "-c",
+  "import json,sys;sys.path.insert(0,sys.argv[1]);from com8_payload import KERNEL_FILES;print(json.dumps(KERNEL_FILES))",
   path.join(repo, "lib")], { encoding: "utf8" }));
 const copy = (name, dest = name) => {
   const source = path.join(repo, name), target = path.join(vendor, dest);
@@ -23,7 +23,7 @@ const copy = (name, dest = name) => {
 
 rmSync(vendor, { recursive: true, force: true });
 mkdirSync(vendor, { recursive: true });
-for (const file of ["bin/communicate", "bin/homi", "bin/homi-boxed-init", "LICENSE"]) copy(file);
+for (const file of ["bin/communicate", "bin/com8", "bin/com8-boxed-init", "LICENSE"]) copy(file);
 for (const file of readdirSync(path.join(repo, "lib")))
   if (file.endsWith(".sh")) copy("lib/" + file);
 for (const file of new Set([...kernel, "bus.py", "bus_broker.py", "bus_ui.html"])) copy("lib/" + file);
@@ -62,7 +62,7 @@ done
 data=\${COMMUNICATE_DATA:-$HOME/.local/share/communicate}
 exec bash "$data/current/vendor/plugins/communicate/bin/communicate-mcp"`] };
 writeFileSync(mcpPath, JSON.stringify(mcp, null, 2) + "\n");
-for (const file of ["bin/communicate", "bin/homi", "bin/homi-boxed-init",
+for (const file of ["bin/communicate", "bin/com8", "bin/com8-boxed-init",
   "plugins/communicate/bin/communicate", "plugins/communicate/bin/communicate-mcp"])
   chmodSync(path.join(vendor, file), 0o755);
 
@@ -86,12 +86,12 @@ for (const kind of [".claude-plugin", ".codex-plugin"]) {
 }
 for (const file of walk(vendor).sort()) files[path.relative(vendor, file)] =
   createHash("sha256").update(readFileSync(file)).digest("hex");
-const daemonVersion = readFileSync(path.join(vendor, "lib/homi.py"), "utf8").match(/^HOMI_VERSION = "([^"]+)"/m)?.[1];
+const daemonVersion = readFileSync(path.join(vendor, "lib/com8.py"), "utf8").match(/^COM8_VERSION = "([^"]+)"/m)?.[1];
 const packageFiles = {};
 for (const file of [...walk(path.join(pkgDir, "src")), path.join(pkgDir, "package.json"), path.join(pkgDir, "LICENSE")].sort())
   packageFiles[path.relative(pkgDir, file)] = createHash("sha256").update(readFileSync(file)).digest("hex");
-writeFileSync(path.join(vendor, "release.json"), JSON.stringify({ schema: 1, product: "HOMI", version: pkg.version,
-  source: { repository: "https://github.com/nonlocally/HOMI", commit, dirty },
+writeFileSync(path.join(vendor, "release.json"), JSON.stringify({ schema: 1, product: "COM8", version: pkg.version,
+  source: { repository: "https://github.com/nonlocally/com8", commit, dirty },
   components: { package: pkg.name, plugin: "communicate@communicate", pluginVersion, daemon: daemonVersion }, files, packageFiles }, null, 2) + "\n");
 writeFileSync(path.join(vendor, "VERSION"), `${pkg.version}+${commit.slice(0, 12)}${dirty ? ".dirty" : ""}\n`);
-console.log(`vendored HOMI ${pkg.version} (${Object.keys(files).length} files, ${commit.slice(0, 12)})`);
+console.log(`vendored COM8 ${pkg.version} (${Object.keys(files).length} files, ${commit.slice(0, 12)})`);

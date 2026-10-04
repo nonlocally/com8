@@ -2,8 +2,8 @@
 # communicate :: cards — self-described capability, the layer above titles.
 # A card says what an agent IS and what to ASK IT FOR; other agents read cards
 # to choose whom to message. Stored in communicate's own state dir, keyed by
-# sessionId so a card survives resumes and hex-name churn. Standalone (no homi
-# daemon); the eventual unification meets homi's card axis halfway.
+# sessionId so a card survives resumes and hex-name churn. Standalone (no com8
+# daemon); the eventual unification meets com8's card axis halfway.
 
 _cards_dir() { printf '%s/cards\n' "$COMM_STATE"; }
 

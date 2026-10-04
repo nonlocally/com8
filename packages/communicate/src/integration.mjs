@@ -13,13 +13,13 @@ function runtimeEnvironment() {
   const env = { HOME: absolute(home()), COMMUNICATE_DATA: absolute(dataRoot()), COMM_STATE: absolute(stateRoot()),
     CLAUDE_CONFIG_DIR: absolute(process.env.CLAUDE_CONFIG_DIR || path.join(home(), '.claude')),
     CODEX_HOME: absolute(process.env.CODEX_HOME || path.join(home(), '.codex')) };
-  for (const key of ['HOMI_SOCK_DIR', 'HOMI_SESSIONS_DIR', 'XDG_RUNTIME_DIR']) if (process.env[key]) env[key] = absolute(process.env[key]);
+  for (const key of ['COM8_SOCK_DIR', 'COM8_SESSIONS_DIR', 'XDG_RUNTIME_DIR']) if (process.env[key]) env[key] = absolute(process.env[key]);
   if (process.env.COMM_BUS_PORT !== undefined) {
     if (!/^\d+$/.test(process.env.COMM_BUS_PORT) || Number(process.env.COMM_BUS_PORT) > 65535)
       throw new Error('COMM_BUS_PORT must be an integer from 0 through 65535');
     env.COMM_BUS_PORT = String(Number(process.env.COMM_BUS_PORT));
   }
-  for (const key of ['HOMI_TMUX_SOCKET', 'HOMI_SELF']) if (process.env[key]) env[key] = process.env[key];
+  for (const key of ['COM8_TMUX_SOCKET', 'COM8_SELF']) if (process.env[key]) env[key] = process.env[key];
   return env;
 }
 function verify(root, record) {
@@ -70,7 +70,7 @@ export function buildIntegration(sourceRoot, { dry = false } = {}) {
     return record;
   }
   fs.mkdirSync(path.dirname(root), { recursive: true, mode: 0o700 });
-  const temp = fs.mkdtempSync(path.join(path.dirname(root), '.homi-integration-'));
+  const temp = fs.mkdtempSync(path.join(path.dirname(root), '.com8-integration-'));
   try {
     for (const folder of ['plugins', '.agents']) fs.cpSync(path.join(source, folder), path.join(temp, folder), { recursive: true });
     const plugin = path.join(temp, 'plugins/communicate');

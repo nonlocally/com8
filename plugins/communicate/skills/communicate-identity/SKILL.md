@@ -8,7 +8,7 @@ description: Names, renaming, and registration on the agent bus. Use for "regist
 ## Register this session on a bus
 
 First inspect `communicate bus status --no-start --json`. Use the configured hub;
-without one, local operation, a user-controlled hub and HOMI's hosted
+without one, local operation, a user-controlled hub and COM8's hosted
 `https://bus.nonlocally.org` are valid choices. Follow the user's stated scope
 or clarify it. An explicit hosted-hub request requires inspection with
 `communicate bus --hub https://bus.nonlocally.org status --no-start --json`
@@ -66,7 +66,7 @@ So renaming someone else means driving their composer:
 - **Dormant transcript**: append a `custom-title` record to the transcript
   JSONL (`{"type":"custom-title","customTitle":"<name>","sessionId":"<uuid>"}`)
   — the name is carried when it resumes. The bundled durable CLI automates this as
-  `homi retitle`. Live `homi adopt NAME --pane %ID` uses the selected tmux
+  `com8 retitle`. Live `com8 adopt NAME --pane %ID` uses the selected tmux
   server and verifies that exact Claude session; `--socket PATH` disambiguates
   another server.
 

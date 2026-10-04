@@ -1,8 +1,9 @@
 # Workstation source provenance
 
-Selected shell, Ghostty, tmux, and mesh helpers are adapted from Anu/HOMI,
+Selected shell, Ghostty, tmux, and mesh helpers are adapted from the Anu monorepo
+(the predecessor project; repository name rewritten by the 2026-10-04 rename),
 commit `80d3c86`, authored by Aadarsh Agarwal and contributors. Imported at the
-owner's direction for the MIT-licensed HOMI consolidation on 2026-09-24.
+owner's direction for the MIT-licensed COM8 consolidation on 2026-09-24.
 
 Donor paths: `config/bash/fns/{tmux,dynlayout,agentlaunch,mesh}`,
 `config/tmux/{tmux.conf,tile.sh,session-bar.sh,pane-yank.sh}`, and

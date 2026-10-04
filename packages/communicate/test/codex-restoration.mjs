@@ -11,8 +11,8 @@ import { createHash } from "node:crypto";
 import { readCodexSettings, writeCodexSettings } from "../src/codex-settings.mjs";
 
 const pkg = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const cli = path.join(pkg, "src/homi.mjs"), real = process.argv.includes("--real-client");
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), "homi-codex-restoration-"));
+const cli = path.join(pkg, "src/com8.mjs"), real = process.argv.includes("--real-client");
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "com8-codex-restoration-"));
 const originalEnv = { ...process.env };
 const ID = "communicate@communicate";
 const custom = { enabled: false, mcp_servers: { communicate: { tools: { bus_send: { approval_mode: "prompt" } } } } };
@@ -79,9 +79,9 @@ async function state() {
 }
 function fixture(name, { createCodexHome = true } = {}) {
   const home = path.join(temp, name); fs.mkdirSync(home, { mode: 0o700 });
-  process.env = Object.fromEntries(Object.entries(originalEnv).filter(([key]) => !/^(CODEX_|COMM|HOMI|ANU|CLAUDE|XDG|OPENAI)/.test(key) && !["TMUX", "TMUX_PANE"].includes(key)));
+  process.env = Object.fromEntries(Object.entries(originalEnv).filter(([key]) => !/^(CODEX_|COMM|COM8|ANU|CLAUDE|XDG|OPENAI)/.test(key) && !["TMUX", "TMUX_PANE"].includes(key)));
   Object.assign(process.env, { HOME: home, CODEX_HOME: path.join(home, ".codex"), CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
-    COMMUNICATE_DATA: path.join(home, "data"), COMM_STATE: path.join(home, "state"), HOMI_SOCK_DIR: path.join(home, "sockets"), COMM_BUS_PORT: "0" });
+    COMMUNICATE_DATA: path.join(home, "data"), COMM_STATE: path.join(home, "state"), COM8_SOCK_DIR: path.join(home, "sockets"), COMM_BUS_PORT: "0" });
   if (createCodexHome) fs.mkdirSync(process.env.CODEX_HOME, { mode: 0o700 });
   if (!real) {
     fs.mkdirSync(path.join(home, "bin"));
@@ -109,7 +109,7 @@ function nextArtifact() {
   for (const [prefix, rows] of [["vendor", manifest.files], ["", manifest.packageFiles]])
     for (const name of Object.keys(rows)) rows[name] = createHash("sha256").update(fs.readFileSync(path.join(next, prefix, name))).digest("hex");
   fs.writeFileSync(file, JSON.stringify(manifest));
-  return path.join(next, "src/homi.mjs");
+  return path.join(next, "src/com8.mjs");
 }
 
 try {

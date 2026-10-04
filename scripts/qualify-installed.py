@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Qualify an extracted HOMI runtime without a checkout or provider credentials.
+"""Qualify an extracted COM8 runtime without a checkout or provider credentials.
 
-Usage: python3 qualify-installed.py /path/to/homi-0.3.0 [--previous-runtime PATH]
+Usage: python3 qualify-installed.py /path/to/com8-VERSION [--previous-runtime PATH]
 Only disposable copies/homes are changed. No service manager, provider, network,
 package manager, Git checkout, or existing tmux server is used. JSON is stdout.
 """
@@ -50,9 +50,9 @@ def artifact(root):
     require(root.is_dir(), f"runtime directory missing: {root}")
     require(not (root / ".git").exists(), "supply an extracted release, not a Git checkout")
     required = ["package.json", "package-lock.json", "LICENSE", "release.json",
-                "src/homi.mjs", "src/cli.mjs", "src/paths.mjs", "node_modules",
-                "vendor/release.json", "vendor/bin/homi", "vendor/lib/homi.py",
-                "vendor/profiles/manage.py", "bin/homi", "bin/communicate"]
+                "src/com8.mjs", "src/cli.mjs", "src/paths.mjs", "node_modules",
+                "vendor/release.json", "vendor/bin/com8", "vendor/lib/com8.py",
+                "vendor/profiles/manage.py", "bin/com8", "bin/communicate"]
     for name in required:
         require((root / name).exists(), f"release component missing: {name}")
     for path in root.rglob("*"):
@@ -63,7 +63,7 @@ def artifact(root):
     vendor = json.loads((root / "vendor/release.json").read_text())
     version = json.loads((root / "package.json").read_text())["version"]
     require(manifest.get("version") == vendor.get("version") == version, "release versions disagree")
-    require(manifest.get("product") == vendor.get("product") == "HOMI", "unexpected release product")
+    require(manifest.get("product") == vendor.get("product") == "COM8", "unexpected release product")
     require(manifest.get("source") == vendor.get("source", {}).get("commit"), "outer/vendor source revision mismatch")
     require(manifest.get("files"), "outer release has no file hashes")
     for base, mapping in [(root, manifest["files"]), (root / "vendor", vendor["files"]),
@@ -118,10 +118,10 @@ class MCP:
 
     def initialize(self):
         result = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
-                                         "clientInfo": {"name": "homi-artifact-qualification", "version": "1"}})
+                                         "clientInfo": {"name": "com8-artifact-qualification", "version": "1"}})
         self.process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
         self.process.stdin.flush()
-        require("HOMI" in result.get("instructions", ""), "MCP startup guidance missing")
+        require("COM8" in result.get("instructions", ""), "MCP startup guidance missing")
         return result
 
     def call(self, name, arguments=None):
@@ -161,20 +161,20 @@ class Qualification:
             (tools / name).symlink_to(path)
             resolved[name] = str(path)
         self.blocked = base / "blocked.jsonl"
-        blocker = '#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["HOMI_QUALIFY_BLOCKED"],"a") as f: f.write(json.dumps(sys.argv)+"\\n")\nsys.exit(97)\n'
+        blocker = '#!/usr/bin/env python3\nimport json,os,sys\nwith open(os.environ["COM8_QUALIFY_BLOCKED"],"a") as f: f.write(json.dumps(sys.argv)+"\\n")\nsys.exit(97)\n'
         for name in ["claude", "codex", "opencode", "pi", "tmux", "ssh", "tailscale", "launchctl", "systemctl", "npm", "npx", "git", "curl", "wget"]:
             (tools / name).write_text(blocker)
             (tools / name).chmod(0o755)
         (base / "tmp").mkdir()
         self.env = {"HOME": str(self.home), "PATH": str(tools) + ":/usr/bin:/bin:/usr/sbin:/sbin",
-                    "TMPDIR": str(base / "tmp"), "LANG": "en_US.UTF-8", "USER": "homi-qualification", "LOGNAME": "homi-qualification",
+                    "TMPDIR": str(base / "tmp"), "LANG": "en_US.UTF-8", "USER": "com8-qualification", "LOGNAME": "com8-qualification",
                     "COMMUNICATE_DATA": str(self.data), "COMM_STATE": str(self.state),
-                    "HOMI_SELF": "artifact-fixture", "HOMI_SOCK_DIR": str(base / "socks"),
-                    "HOMI_SESSIONS_DIR": str(base / "sessions"), "HOMI_TMUX_SOCKET": str(base / "tmux.sock"),
+                    "COM8_SELF": "artifact-fixture", "COM8_SOCK_DIR": str(base / "socks"),
+                    "COM8_SESSIONS_DIR": str(base / "sessions"), "COM8_TMUX_SOCKET": str(base / "tmux.sock"),
                     "CLAUDE_CONFIG_DIR": str(self.home / ".claude"), "CODEX_HOME": str(self.home / ".codex"),
                     "XDG_RUNTIME_DIR": str(base / "run"), "XDG_CONFIG_HOME": str(self.home / ".config"),
                     "XDG_STATE_HOME": str(self.home / ".local/state"), "XDG_CACHE_HOME": str(self.home / ".cache"),
-                    "HOMI_QUALIFY_BLOCKED": str(self.blocked)}
+                    "COM8_QUALIFY_BLOCKED": str(self.blocked)}
         self.report["paths"] = {"temporary_home": str(self.home), "state": str(self.state), "installation": str(self.data), "executables": resolved}
 
     @contextlib.contextmanager
@@ -194,35 +194,35 @@ class Qualification:
         return result
 
     def cli(self, root, *args, ok=True):
-        return self.run(root / "bin/homi", *args, ok=ok)
+        return self.run(root / "bin/com8", *args, ok=ok)
 
     def paths(self, root):
-        script = 'import {pathToFileURL} from "node:url"; const p=await import(pathToFileURL(process.argv[1]+"/src/paths.mjs")); console.log(JSON.stringify({pkgDir:p.pkgDir,homiCli:p.homiCli,communicateCli:p.communicateCli}));'
+        script = 'import {pathToFileURL} from "node:url"; const p=await import(pathToFileURL(process.argv[1]+"/src/paths.mjs")); console.log(JSON.stringify({pkgDir:p.pkgDir,com8Cli:p.com8Cli,communicateCli:p.communicateCli}));'
         paths = json.loads(self.run("node", "--input-type=module", "-e", script, root).stdout)
-        for key in ["pkgDir", "homiCli", "communicateCli"]:
+        for key in ["pkgDir", "com8Cli", "communicateCli"]:
             require(within(paths[key], root), f"checkout/external fallback in {key}: {paths[key]}")
-        require(Path(paths["homiCli"]).resolve() == (root / "vendor/bin/homi").resolve(), "public CLI bypasses installed vendor")
+        require(Path(paths["com8Cli"]).resolve() == (root / "vendor/bin/com8").resolve(), "public CLI bypasses installed vendor")
         return paths
 
     def installed(self):
         root = (self.data / "current").resolve(strict=True)
         require(within(root, self.data), f"current escapes installation: {root}")
-        require((self.data / "bin/homi").resolve() == root / "src/homi.mjs", "installed executable points outside current release")
+        require((self.data / "bin/com8").resolve() == root / "src/com8.mjs", "installed executable points outside current release")
         self.paths(root)
         return root
 
     def start(self, root):
         require(self.daemon is None, "qualification daemon is already running")
         self.log = (self.base / "daemon.log").open("w")
-        self.daemon = subprocess.Popen([str(root / "vendor/bin/homi"), "daemon", "__daemon"],
+        self.daemon = subprocess.Popen([str(root / "vendor/bin/com8"), "daemon", "__daemon"],
                                        cwd=self.home, env=self.env, stdout=self.log, stderr=self.log, start_new_session=True)
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             require(self.daemon.poll() is None, "isolated daemon exited: " + (self.base / "daemon.log").read_text()[-2000:])
-            response = self.run(self.data / "bin/homi", "status", "--json", ok=False)
+            response = self.run(self.data / "bin/com8", "status", "--json", ok=False)
             if response.returncode == 0:
                 status = json.loads(response.stdout)
-                require(Path(status["self"]["source_file"]).resolve() == (root / "vendor/lib/homi.py").resolve(), "daemon source is not the installed release")
+                require(Path(status["self"]["source_file"]).resolve() == (root / "vendor/lib/com8.py").resolve(), "daemon source is not the installed release")
                 require(status["self"]["pid"] == self.daemon.pid, "status answered by another process")
                 return status["self"]
             time.sleep(0.05)
@@ -248,27 +248,27 @@ class Qualification:
         try:
             info = client.initialize()
             names = {tool["name"] for tool in client.rpc("tools/list", {})["tools"]}
-            require({"homi_claim", "homi_send", "homi_inbox", "homi_status", "bus_status", "route"} <= names, "combined MCP tools missing")
+            require({"com8_claim", "com8_send", "com8_inbox", "com8_status", "bus_status", "route"} <= names, "combined MCP tools missing")
             if (root / "vendor/lib/model_connections.py").exists():
-                require({"homi_model_list", "homi_model_doctor"} <= names, "model MCP tools missing")
-                connections = json.loads(client.call("homi_model_list", {}))
+                require({"com8_model_list", "com8_model_doctor"} <= names, "model MCP tools missing")
+                connections = json.loads(client.call("com8_model_list", {}))
                 require(connections.get("ok") is True, "model MCP discovery failed")
-                if (self.home / ".config/homi/models/qualification-model").exists():
+                if (self.home / ".config/com8/models/qualification-model").exists():
                     require([item["name"] for item in connections["connections"]] == ["qualification-model"], "model MCP roster differs from installed configuration")
                     require("NOT_A_REAL_KEY" not in json.dumps(connections), "model MCP exposed fixture key")
             if mail:
                 for name in ["qualification-sender", "qualification-receiver"]:
-                    client.call("homi_claim", {"name": name})
+                    client.call("com8_claim", {"name": name})
                 text = "literal --from '$value'\nartifact-only mailbox proof"
-                client.call("homi_send", {"from": "qualification-sender", "target": "qualification-receiver", "message": text})
-                inbox = [json.loads(line) for line in client.call("homi_inbox", {"name": "qualification-receiver"}).splitlines() if line]
+                client.call("com8_send", {"from": "qualification-sender", "target": "qualification-receiver", "message": text})
+                inbox = [json.loads(line) for line in client.call("com8_inbox", {"name": "qualification-receiver"}).splitlines() if line]
                 require(any(item.get("text") == text for item in inbox), "MCP message bytes were not retained")
             return {"tools": len(names), "server": info.get("serverInfo"), "launcher": str(root / "vendor/plugins/communicate/bin/communicate-mcp")}
         finally:
             client.close()
 
     def profile(self):
-        cli = self.data / "bin/homi"
+        cli = self.data / "bin/com8"
         selected = ["--terminal", "--mesh", "--accounts", "--box", "--snapshots"]
         rc = self.home / ".bashrc"
         original = b"# original shell config without newline"
@@ -280,33 +280,33 @@ class Qualification:
             require(files(self.home) == before, "profile preview changed HOME")
         with self.check("profile install/repeat/uninstall/reinstall") as row:
             self.run(cli, "profile", "install", *selected)
-            ledger = self.home / ".local/state/homi/profiles/ownership.json"
+            ledger = self.home / ".local/state/com8/profiles/ownership.json"
             record = json.loads(ledger.read_text())
             backup = record["entries"][str(rc)]["original"]["backup"]
-            private = self.home / ".config/homi/profiles/local.sh"
+            private = self.home / ".config/com8/profiles/local.sh"
             private.write_text("# private overlay retained\n")
             rc.write_bytes(rc.read_bytes() + b"# later user edit\n")
             self.run(cli, "profile", "install", *selected)
             require(json.loads(ledger.read_text())["entries"][str(rc)]["original"]["backup"] == backup, "repeat install discarded first backup")
-            require(rc.read_text().count("# >>> HOMI profile") == 1, "duplicate managed profile block")
-            require("HOMI mesh" in self.run(self.home / ".local/bin/homi-mesh", "help").stdout, "installed mesh helper fails")
+            require(rc.read_text().count("# >>> COM8 profile") == 1, "duplicate managed profile block")
+            require("COM8 mesh" in self.run(self.home / ".local/bin/com8-mesh", "help").stdout, "installed mesh helper fails")
             self.run(cli, "profile", "uninstall")
             require(rc.read_bytes() == original + b"\n# later user edit\n", "profile uninstall lost unrelated content")
             require(private.read_text() == "# private overlay retained\n", "profile uninstall changed private overlay")
             self.run(cli, "profile", "install", *selected)
-            require(rc.read_text().count("# >>> HOMI profile") == 1, "profile reinstall duplicated block")
+            require(rc.read_text().count("# >>> COM8 profile") == 1, "profile reinstall duplicated block")
             row["payload"] = json.loads(ledger.read_text())["payload"]
         with self.check("installed optional modules are self-contained and inert") as row:
             row.update(self.profile_helpers())
         with self.check("fresh interactive Bash startup") as row:
-            command = 'for fn in t cx cxx cxc cdx cdxx cdxxs mesh; do declare -F "$fn" >/dev/null || exit 9; done; printf "READY\\n%s\\n%s\\n" "$HOME" "$HOMI_PROFILE_RUNTIME"; command -v homi-workstation'
+            command = 'for fn in t cx cxx cxc cdx cdxx cdxxs mesh; do declare -F "$fn" >/dev/null || exit 9; done; printf "READY\\n%s\\n%s\\n" "$HOME" "$COM8_PROFILE_RUNTIME"; command -v com8-workstation'
             observations = {}
             for label, args in [("nonlogin", ["--noprofile", "-ic"]), ("login", ["-lic"])]:
                 result = self.run("bash", *args, command)
                 lines = result.stdout.splitlines()
                 require(lines[0] == "READY" and Path(lines[1]) == self.home, f"{label} Bash did not use its temporary profile")
-                require(within(lines[2], self.home / ".local/share/homi/profiles"), f"{label} Bash loaded a legacy profile")
-                require(Path(lines[3]) == self.home / ".local/bin/homi-workstation", f"{label} Bash launcher is shadowed")
+                require(within(lines[2], self.home / ".local/share/com8/profiles"), f"{label} Bash loaded a legacy profile")
+                require(Path(lines[3]) == self.home / ".local/bin/com8-workstation", f"{label} Bash launcher is shadowed")
                 observations[label] = {"runtime": lines[2], "launcher": lines[3]}
             row["shells"] = observations
         if Path("/bin/zsh").exists():
@@ -319,24 +319,24 @@ class Qualification:
                                               for name in ("t", "cx", "cxx", "cdx", "cdxx", "mesh")]
                 require(result.stdout.splitlines() == expected, "zsh did not discover the installed executable shortcuts")
                 rc = (self.home / ".zshrc").read_text()
-                require("# >>> HOMI profile" in rc and "HOMI_PROFILE_RUNTIME" not in rc,
+                require("# >>> COM8 profile" in rc and "COM8_PROFILE_RUNTIME" not in rc,
                         "zsh startup does not contain the intended PATH-only include")
                 require(not (self.home / ".zprofile").exists(), "profile unexpectedly replaced zsh login configuration")
                 row["support"] = "zsh keeps its interpreter and uses executable shortcuts; Bash functions stay inside their wrappers."
 
     def profile_helpers(self):
-        record = json.loads((self.home / ".local/state/homi/profiles/ownership.json").read_text())
+        record = json.loads((self.home / ".local/state/com8/profiles/ownership.json").read_text())
         payload = Path(record["payload"])
         before = files(payload)
         commands = self.home / ".local/bin"
-        require("homi-account" in self.run(commands / "homi-account", "help").stdout, "installed account help fails")
-        require("homi-box" in self.run(commands / "homi-box", "help").stdout, "installed box help fails")
-        preview = json.loads(self.run(commands / "homi-snapshot", "schedule", "preview").stdout)
+        require("com8-account" in self.run(commands / "com8-account", "help").stdout, "installed account help fails")
+        require("com8-box" in self.run(commands / "com8-box", "help").stdout, "installed box help fails")
+        preview = json.loads(self.run(commands / "com8-snapshot", "schedule", "preview").stdout)
         require(preview["read_only"] and preview["scope"] == "scoped", "snapshot preview did not use isolated ownership")
         require(not any(e.get("owner") == "snapshots-schedule" for e in record["entries"].values()), "profile selection activated a schedule")
         message = "artifact reply 'literal' $HOME; preserved bytes"
-        self.run(commands / "homi-account-pane", "reply", "artifact-correlation", message)
-        reply = self.home / ".local/state/homi/pane/replies/artifact-correlation"
+        self.run(commands / "com8-account-pane", "reply", "artifact-correlation", message)
+        reply = self.home / ".local/state/com8/pane/replies/artifact-correlation"
         require(reply.read_text().rstrip("\n") == message, "installed file reply changed message bytes")
         require(reply.stat().st_mode & 0o077 == 0, "installed file reply is not private")
         require(files(payload) == before, "optional helpers changed immutable profile payload")
@@ -372,7 +372,7 @@ class Qualification:
                 key_file = self.home / "qualification-model-key"
                 key_file.write_text("nlm_NOT_A_REAL_KEY_artifact_fixture\n")
                 key_file.chmod(0o600)
-                cli = self.data / "bin/homi"
+                cli = self.data / "bin/com8"
                 args = ["model", "add", "qualification-model", "--base-url", "https://model-qualification.invalid/v1",
                         "--anthropic-base-url", "https://model-qualification.invalid", "--model", "glm", "--key-file", str(key_file), "--json"]
                 before = files(self.home)
@@ -383,7 +383,7 @@ class Qualification:
                 listing = self.run(cli, "model", "list", "--json").stdout
                 require("NOT_A_REAL_KEY" not in listing + result.stdout + result.stderr, "model output exposed fixture key")
                 require([x["name"] for x in json.loads(listing)["connections"]] == ["qualification-model"], "model connection absent from roster")
-                model_root = self.home / ".config/homi/models"
+                model_root = self.home / ".config/com8/models"
                 model_state = files(model_root)
                 for path in [model_root, model_root / "qualification-model", *(model_root / "qualification-model").iterdir()]:
                     require(path.stat().st_mode & 0o077 == 0, "model configuration is not private")
@@ -398,28 +398,28 @@ class Qualification:
             row["mcp"] = self.mcp(installed, mail=True)
             self.stop()
             require(files(installed) == payload_before, "daemon or MCP modified the installed payload")
-        mail = self.state / "homi/mail/qualification-receiver/inbox.jsonl"
+        mail = self.state / "com8/mail/qualification-receiver/inbox.jsonl"
         mail_before = mail.read_bytes()
         self.profile()
         with self.check("installed runtime survives artifact relocation") as row:
             hidden = self.base / "relocated artifact"
             copy.rename(hidden)
-            self.run(self.data / "bin/homi", "version")
+            self.run(self.data / "bin/com8", "version")
             row["mcp"] = self.mcp(installed)
-            self.run(self.home / ".local/bin/homi-mesh", "help")
+            self.run(self.home / ".local/bin/com8-mesh", "help")
             copy = hidden
         with self.check("core uninstall/reinstall preserves mailbox and profiles"):
-            self.run(self.data / "bin/homi", "uninstall", "--no-clients", "--no-service")
+            self.run(self.data / "bin/com8", "uninstall", "--no-clients", "--no-service")
             if model_state:
                 require(files(model_root) == model_state, "uninstall changed model configuration, modes or inventory")
-            require(not (self.data / "bin/homi").exists(), "uninstall retained owned executable")
+            require(not (self.data / "bin/com8").exists(), "uninstall retained owned executable")
             require(mail.read_bytes() == mail_before, "uninstall changed durable mailbox")
-            self.run(self.home / ".local/bin/homi-mesh", "help")
+            self.run(self.home / ".local/bin/com8-mesh", "help")
             self.profile_helpers()
             self.cli(copy, "setup", "--no-clients", "--no-service")
             installed = self.installed()
             require(mail.read_bytes() == mail_before, "reinstall changed durable mailbox")
-            require("artifact-only mailbox proof" in self.run(self.data / "bin/homi", "inbox", "qualification-receiver").stdout, "reinstalled CLI cannot read prior mail")
+            require("artifact-only mailbox proof" in self.run(self.data / "bin/com8", "inbox", "qualification-receiver").stdout, "reinstalled CLI cannot read prior mail")
             if model_state:
                 require(files(model_root) == model_state, "uninstall/reinstall changed model connection")
         if previous:
@@ -433,8 +433,8 @@ class Qualification:
                 # Create state through the old installed CLI, not just through
                 # the candidate before switching payloads.
                 self.start(old)
-                self.run(self.data / "bin/homi", "claim", "qualification-upgrade")
-                self.run(self.data / "bin/homi", "send", "qualification-upgrade", "--",
+                self.run(self.data / "bin/com8", "claim", "qualification-upgrade")
+                self.run(self.data / "bin/com8", "send", "qualification-upgrade", "--",
                          "saved by the previous release: '$HOME' and literal --from")
                 self.stop()
                 bus = self.state / "bus"
@@ -457,10 +457,10 @@ class Qualification:
                     target = bus / name
                     target.write_text(json.dumps(value, indent=2) + "\n")
                     target.chmod(0o600)
-                preserved = [mail, self.state / "homi/mail/qualification-upgrade/inbox.jsonl",
+                preserved = [mail, self.state / "com8/mail/qualification-upgrade/inbox.jsonl",
                              bus / "client.json", bus / "registrations.json"]
                 before = {path: path.read_bytes() for path in preserved}
-                identities = self.state / "homi/identities.json"
+                identities = self.state / "com8/identities.json"
                 identities_before = json.loads(identities.read_text())
                 def preserved_state(stage):
                     for path, content in before.items():
@@ -477,7 +477,7 @@ class Qualification:
                 row["upgraded_daemon"] = self.start(installed)
                 self.stop()
                 preserved_state("upgraded daemon restart")
-                self.run(self.data / "bin/homi", "rollback")
+                self.run(self.data / "bin/com8", "rollback")
                 require(self.installed() == old, "rollback did not select previous release")
                 preserved_state("rollback")
                 self.cli(copy, "update", "--no-clients", "--no-service")
@@ -488,7 +488,7 @@ class Qualification:
             self.report["checks"].append({"name": "different-release upgrade and rollback", "status": "unqualified",
                                           "reason": "Pass --previous-runtime with a distinct real release; same-artifact update is tested separately."})
         with self.check("profile configuration and ownership are private") as row:
-            paths = [self.home / ".config/homi/profiles", self.home / ".local/state/homi/profiles"]
+            paths = [self.home / ".config/com8/profiles", self.home / ".local/state/com8/profiles"]
             row["directories"] = [{"path": str(path), "mode": oct(path.stat().st_mode & 0o777)} for path in paths]
             require(all(path.stat().st_mode & 0o077 == 0 for path in paths), "profile configuration/backups permit access by other users")
         with self.check("no external tools, credentials, services, or source fallback"):
@@ -510,7 +510,7 @@ def main():
         "Service-manager activation, restart after reboot, and existing-installation cutover",
         "Ghostty rendering, tmux interactive behavior, VNC and remote/Tailscale access",
         "Package publication, Homebrew download/formula execution and npm registry installation"]}
-    base = Path(tempfile.mkdtemp(prefix="homi-q-", dir="/tmp")).resolve()
+    base = Path(tempfile.mkdtemp(prefix="com8-q-", dir="/tmp")).resolve()
     runner = None
     try:
         runner = Qualification(base, report)

@@ -42,7 +42,7 @@ export function assertManagedPath(target, boundary = home()) {
 export function writeJson(p, value) {
   assertManagedPath(p);
   fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-  const staging = fs.mkdtempSync(path.join(path.dirname(p), ".homi-write-"));
+  const staging = fs.mkdtempSync(path.join(path.dirname(p), ".com8-write-"));
   try {
     const tmp = path.join(staging, "value");
     fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600, flag: "wx" });
@@ -117,14 +117,14 @@ export function executable(name) {
   return null;
 }
 export function python() {
-  const candidate = executable(process.env.HOMI_PYTHON || "python3");
+  const candidate = executable(process.env.COM8_PYTHON || "python3");
   if (!candidate || spawnSync(candidate, ["-B", "-c", "import sys; assert sys.version_info >= (3,9)"], { stdio: "ignore", timeout: 10000 }).status !== 0)
-    throw new Error("HOMI requires Python 3.9 or later; set HOMI_PYTHON to its executable");
+    throw new Error("COM8 requires Python 3.9 or later; set COM8_PYTHON to its executable");
   return candidate;
 }
 const xml = (s) => String(s).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
 const unit = (s) => '"' + String(s).replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("\n", "\\n") + '"';
-const INHERITABLE = ["PATH", "HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOMI_TMUX_SOCKET"];
+const INHERITABLE = ["PATH", "COM8_SOCK_DIR", "COM8_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COM8_TMUX_SOCKET"];
 const canonical = (p) => {
   let existing = path.resolve(p), tail = [];
   while (!fs.existsSync(existing)) { tail.unshift(path.basename(existing)); existing = path.dirname(existing); }
@@ -139,9 +139,9 @@ function serviceScope() {
   return { ...scope, standard, suffix: standard ? "" : hash(JSON.stringify(scope)).slice(0, 12) };
 }
 export function serviceDefinition(platform, py, device, options = {}) {
-  const daemon = path.join(currentLink(), "vendor/lib/homi.py");
+  const daemon = path.join(currentLink(), "vendor/lib/com8.py");
   const scope = serviceScope();
-  let vars = { HOME: home(), COMM_STATE: stateRoot(), HOMI_SELF: device,
+  let vars = { HOME: home(), COMM_STATE: stateRoot(), COM8_SELF: device,
     PATH: [...new Set([path.dirname(py), "/opt/homebrew/bin", "/usr/local/bin", path.join(home(), ".local/bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"])].join(path.delimiter) };
   for (const name of INHERITABLE) if (options.environment?.[name] !== undefined) vars[name] = options.environment[name];
   for (const name of options.inherit || []) {
@@ -152,8 +152,8 @@ export function serviceDefinition(platform, py, device, options = {}) {
   // Flag order and replaying a saved environment must not change service bytes
   // or restart an unchanged daemon. Resolve values first, then order them once.
   vars = Object.fromEntries(Object.keys(vars).sort().map((name) => [name, vars[name]]));
-  const macLabel = "com.communicate.homi" + (scope.suffix ? "." + scope.suffix : "");
-  const linuxLabel = "communicate-homi" + (scope.suffix ? "-" + scope.suffix : "") + ".service";
+  const macLabel = "com.communicate.com8" + (scope.suffix ? "." + scope.suffix : "");
+  const linuxLabel = "communicate-com8" + (scope.suffix ? "-" + scope.suffix : "") + ".service";
   if (platform === "darwin") return { platform, label: macLabel, scope, environment: vars, python: py,
     path: path.join(home(), "Library/LaunchAgents", macLabel + ".plist"),
     content: `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
@@ -161,12 +161,12 @@ export function serviceDefinition(platform, py, device, options = {}) {
 <key>ProgramArguments</key><array><string>${xml(py)}</string><string>${xml(daemon)}</string><string>daemon</string></array>
 <key>EnvironmentVariables</key><dict>${Object.entries(vars).map(([k,v]) => `<key>${xml(k)}</key><string>${xml(v)}</string>`).join("")}</dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ProcessType</key><string>Interactive</string>
-<key>StandardOutPath</key><string>${xml(path.join(stateRoot(), "homi/launchd.log"))}</string>
-<key>StandardErrorPath</key><string>${xml(path.join(stateRoot(), "homi/launchd.log"))}</string>
+<key>StandardOutPath</key><string>${xml(path.join(stateRoot(), "com8/launchd.log"))}</string>
+<key>StandardErrorPath</key><string>${xml(path.join(stateRoot(), "com8/launchd.log"))}</string>
 </dict></plist>\n` };
   if (platform === "linux") return { platform, label: linuxLabel, scope, environment: vars, python: py,
     path: path.join(process.env.XDG_CONFIG_HOME || path.join(home(), ".config"), "systemd/user", linuxLabel),
-    content: `[Unit]\nDescription=HOMI durable agent identities\n[Service]\nExecStart=${unit(py)} ${unit(daemon)} daemon\n${Object.entries(vars).map(([k,v]) => `Environment=${unit(k + "=" + v)}`).join("\n")}\nRestart=always\nRestartSec=2\n[Install]\nWantedBy=default.target\n` };
+    content: `[Unit]\nDescription=COM8 durable agent identities\n[Service]\nExecStart=${unit(py)} ${unit(daemon)} daemon\n${Object.entries(vars).map(([k,v]) => `Environment=${unit(k + "=" + v)}`).join("\n")}\nRestart=always\nRestartSec=2\n[Install]\nWantedBy=default.target\n` };
   throw new Error("Persistent services are supported on macOS and Linux only");
 }
 function serviceRun(command, args, allowFailure = false) {
@@ -241,15 +241,15 @@ export function loadService(definition, activation = { active: true, enabled: tr
 export function daemonRequest(op = "status", timeout = 3000, serviceControl = false) {
   // A diagnosis never autostarts services. Preserve control authentication.
   if (serviceControl) {
-    for (const name of ["homi", "homi/control.token", "homi/homi.sock"])
+    for (const name of ["com8", "com8/control.token", "com8/com8.sock"])
       assertManagedPath(path.join(stateRoot(), name));
   }
   return new Promise((resolve) => {
-    const root = path.join(stateRoot(), "homi");
+    const root = path.join(stateRoot(), "com8");
     const request = { op };
     const token = path.join(root, "control.token");
     if (fs.existsSync(token)) request.auth = fs.readFileSync(token, "utf8").trim();
-    const socket = net.createConnection((!serviceControl && process.env.HOMI_SOCK) || path.join(root, "homi.sock"));
+    const socket = net.createConnection((!serviceControl && process.env.COM8_SOCK) || path.join(root, "com8.sock"));
     let text = "", done = false;
     const finish = (value) => { if (!done) { done = true; clearTimeout(timer); socket.destroy(); resolve(value); } };
     const timer = setTimeout(() => finish(null), timeout);
@@ -266,7 +266,7 @@ export function daemonRequest(op = "status", timeout = 3000, serviceControl = fa
 function writeService(file, data, mode = 0o600) {
   assertManagedPath(file);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const staging = fs.mkdtempSync(path.join(path.dirname(file), ".homi-unit-"));
+  const staging = fs.mkdtempSync(path.join(path.dirname(file), ".com8-unit-"));
   try {
     const tmp = path.join(staging, "unit");
     fs.writeFileSync(tmp, data, { mode, flag: "wx" });
@@ -276,7 +276,7 @@ function writeService(file, data, mode = 0o600) {
 function originalService(record) {
   if (Object.hasOwn(record || {}, "original")) return record.original;
   // Older installer records had one backup. Preserve that available lineage;
-  // never replace it with another copy of HOMI's own generated unit.
+  // never replace it with another copy of COM8's own generated unit.
   if (record?.backup) {
     assertManagedPath(record.backup);
     return { backup: record.backup, hash: hash(fs.readFileSync(record.backup)), mode: 0o600, active: true };
@@ -294,7 +294,7 @@ export async function installService(dry = false, beforeRestore = () => {}, prio
   const py = python();
   assertManagedPath(stateRoot());
   const incumbent = dry ? null : await daemonRequest("status", 3000, true);
-  const device = process.env.HOMI_SELF || incumbent?.self?.device || os.hostname().split(".")[0].toLowerCase();
+  const device = process.env.COM8_SELF || incumbent?.self?.device || os.hostname().split(".")[0].toLowerCase();
   const definition = serviceDefinition(process.platform, py, device, { ...options, environment: priorRecord?.environment });
   assertManagedPath(definition.path);
   const receipt = { label: definition.label, scope: definition.scope, path: definition.path, python: py, environment: definition.environment };
@@ -306,12 +306,12 @@ export async function installService(dry = false, beforeRestore = () => {}, prio
     throw new Error("Service unit changed outside this installation; refusing to overwrite it");
   let original = originalService(priorRecord);
   if (original !== undefined) originalBytes(original);
-  const expectedSource = fs.realpathSync(path.join(currentLink(), "vendor/lib/homi.py"));
+  const expectedSource = fs.realpathSync(path.join(currentLink(), "vendor/lib/com8.py"));
   if (priorRecord && fs.existsSync(definition.path) && active.active && hash(definition.content) === priorRecord.hash && incumbent?.ok && incumbent.self?.source_file === expectedSource) {
     console.log(`daemon unchanged (release and unit unchanged): ${JSON.stringify(receipt)}`);
     return priorRecord;
   }
-  fs.mkdirSync(path.join(stateRoot(), "homi"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(path.join(stateRoot(), "com8"), { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.dirname(definition.path), { recursive: true });
   const before = fs.existsSync(definition.path) ? fs.readFileSync(definition.path) : null;
   const beforeMode = before === null ? 0o600 : fs.statSync(definition.path).mode & 0o777;
@@ -343,7 +343,7 @@ export async function installService(dry = false, beforeRestore = () => {}, prio
       }
       await new Promise((r) => setTimeout(r, 200));
     }
-    throw new Error("Service did not answer from the selected release; inspect its preserved logs and homi doctor");
+    throw new Error("Service did not answer from the selected release; inspect its preserved logs and com8 doctor");
   } catch (error) {
     unloadService(definition);
     // The previous unit may itself use /current. Restore that pointer before

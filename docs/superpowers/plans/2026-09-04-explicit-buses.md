@@ -4,7 +4,7 @@
 
 The existing router discovers native Claude sidecars and SSH adapters. Discovery
 is implicit and does not establish a membership or authorization boundary.
-Cross-operator access exists in the separate homi plane, which the communicate
+Cross-operator access exists in the separate com8 plane, which the communicate
 package intentionally does not ship. A plugin user needs one explicit
 registration command, an honest roster, and scoped access without a shell login.
 
@@ -32,7 +32,7 @@ public directory. Independent installations connect to the same hub by invitatio
   stays in session storage; API calls require an Authorization header.
 * CLI and MCP share the same implementation. Plugin instructions make the
   natural-language registration request actionable. Source checkout and npm
-  installation must run the same new tooling without homi dependencies.
+  installation must run the same new tooling without com8 dependencies.
 
 ## Network and security boundary
 

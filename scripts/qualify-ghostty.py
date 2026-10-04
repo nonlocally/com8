@@ -33,12 +33,12 @@ def main():
     report = {"status": "fail", "source": info["source"], "version": info["version"],
               "rendering": "not tested", "font_availability": "not tested"}
     try:
-        with tempfile.TemporaryDirectory(prefix="homi-ghostty-") as directory:
+        with tempfile.TemporaryDirectory(prefix="com8-ghostty-") as directory:
             home = Path(directory) / "home with spaces"
             home.mkdir(mode=0o700)
             env = dict(os.environ)
             for key in list(env):
-                if key.startswith(("HOMI_", "GHOSTTY_")) or key in ("BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
+                if key.startswith(("COM8_", "GHOSTTY_")) or key in ("BASH_ENV", "ENV", "TMUX", "TMUX_PANE"):
                     env.pop(key)
             env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"),
                        XDG_CACHE_HOME=str(home / ".cache"), XDG_STATE_HOME=str(home / ".local/state"),
@@ -61,9 +61,9 @@ def main():
                         "background = #121212", "window-padding-x = 14")
             gate.require(shown.returncode == 0 and all(v in shown.stdout for v in expected),
                          "Ghostty did not load the installed profile from the isolated home")
-            config.write_text(config.read_text() + "homi-deliberate-invalid-option = true\n")
+            config.write_text(config.read_text() + "com8-deliberate-invalid-option = true\n")
             bad = run([args.ghostty, "+validate-config", "--config-file=" + str(config)])
-            gate.require(bad.returncode != 0 and "homi-deliberate-invalid-option" in bad.stdout + bad.stderr,
+            gate.require(bad.returncode != 0 and "com8-deliberate-invalid-option" in bad.stdout + bad.stderr,
                          "Ghostty negative control was not rejected")
             version = run([args.ghostty, "+version"])
             gate.artifact(runtime)

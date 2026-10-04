@@ -15,17 +15,17 @@ import unittest
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("homi_release_builder", ROOT / "scripts/build-release.py")
+spec = importlib.util.spec_from_file_location("com8_release_builder", ROOT / "scripts/build-release.py")
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 TRAILERS = ("Co-Authored-By: Claude <noreply@anthropic.com>\n"
             "Co-authored-by: Codex <codex@openai.com>\n"
-            "Co-authored-by: Homi <322615700+Homi@users.noreply.github.com>")
+            "Co-authored-by: Com8 <322615700+Com8@users.noreply.github.com>")
 
 
 class SourceIsolationTest(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="homi-build-test-")
+        self.temp = tempfile.TemporaryDirectory(prefix="com8-build-test-")
         self.root = Path(self.temp.name).resolve() / "repo"
         self.root.mkdir()
         self.env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
@@ -130,12 +130,12 @@ class SourceIsolationTest(unittest.TestCase):
         with mock.patch.object(builder, "run", fake_run):
             receipt = builder.build(self.root, Path(self.temp.name) / "out", self.revision, 1, True, "a" * 64)
         with tarfile.open(receipt["archive"]) as archive:
-            outer = json.load(archive.extractfile("homi-0.0.0-fixture/release.json"))
-            inner = json.load(archive.extractfile("homi-0.0.0-fixture/vendor/release.json"))
+            outer = json.load(archive.extractfile("com8-0.0.0-fixture/release.json"))
+            inner = json.load(archive.extractfile("com8-0.0.0-fixture/vendor/release.json"))
             self.assertTrue(outer["dirty"])
             self.assertTrue(inner["source"]["dirty"])
             self.assertEqual(outer["sourceSnapshot"], inner["source"]["snapshot"])
-            self.assertTrue(archive.extractfile("homi-0.0.0-fixture/vendor/VERSION").read().endswith(b".dirty\n"))
+            self.assertTrue(archive.extractfile("com8-0.0.0-fixture/vendor/VERSION").read().endswith(b".dirty\n"))
 
 
 def fingerprint(root):
@@ -162,7 +162,7 @@ def real_builds():
     # registrations, not their unrelated moving HEAD revisions.
     registrations = lambda: {line for line in builder.git("worktree", "list", "--porcelain").splitlines() if line.startswith("worktree ")}
     worktrees = registrations()
-    with tempfile.TemporaryDirectory(prefix="homi-reproducibility-") as temp:
+    with tempfile.TemporaryDirectory(prefix="com8-reproducibility-") as temp:
         temp = Path(temp)
         build_tmp = temp / "owned-temp"; build_tmp.mkdir()
         receipts = []

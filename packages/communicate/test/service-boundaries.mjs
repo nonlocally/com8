@@ -12,7 +12,7 @@ import { serviceDefinition, installService, uninstallService, assertManagedPath,
 // Exercise the actual Linux command branch on macOS without a Linux manager.
 if (process.argv.includes("--linux-fixture")) Object.defineProperty(process, "platform", { value: "linux" });
 const priorEnv = { ...process.env };
-const temp = fs.mkdtempSync("/tmp/homi-svc-");
+const temp = fs.mkdtempSync("/tmp/com8-svc-");
 const home = path.join(temp, "home"), data = path.join(home, "data"), state = path.join(home, "state");
 const bin = path.join(home, "bin"), registry = path.join(temp, "global-manager.json"), calls = path.join(temp, "calls.jsonl");
 let server;
@@ -21,14 +21,14 @@ try {
   process.env.HOME = os.userInfo().homedir;
   const standardMac = serviceDefinition("darwin", "/usr/bin/python3", "fixture");
   const standardLinux = serviceDefinition("linux", "/usr/bin/python3", "fixture");
-  assert.equal(standardMac.label, "com.communicate.homi");
-  assert.equal(standardLinux.label, "communicate-homi.service");
+  assert.equal(standardMac.label, "com.communicate.com8");
+  assert.equal(standardLinux.label, "communicate-com8.service");
   Object.assign(process.env, { HOME: home, COMMUNICATE_DATA: data, COMM_STATE: state,
     XDG_CONFIG_HOME: path.join(home, ".config"), PATH: bin + path.delimiter + priorEnv.PATH,
-    HOMI_SELF: "fixture", HOMI_SOCK: path.join(temp, "never-contact-this.sock"),
+    COM8_SELF: "fixture", COM8_SOCK: path.join(temp, "never-contact-this.sock"),
     CODEX_HOME: path.join(temp, "ambient-private-account"), SERVICE_REGISTRY: registry, SERVICE_CALLS: calls });
   fs.mkdirSync(bin, { recursive: true });
-  fs.mkdirSync(path.join(state, "homi"), { recursive: true });
+  fs.mkdirSync(path.join(state, "com8"), { recursive: true });
   const definition = serviceDefinition(process.platform, "/usr/bin/python3", "fixture");
   const standard = process.platform === "darwin" ? standardMac : standardLinux;
   assert.notEqual(definition.label, standard.label, "isolated HOME collided with production label");
@@ -86,7 +86,7 @@ if(op==='load'){
  const text=fs.readFileSync(unit,'utf8');
  if(process.env.FAIL_ORIGINAL==='1'&&text.startsWith('# original'))process.exit(9);
  if(process.env.FAIL_CURRENT==='1'&&!text.startsWith('# original'))process.exit(9);
- jobs[label]={...jobs[label],active:true,path:unit,source:text.startsWith('# original')?'/legacy/daemon.py':fs.realpathSync(path.join(process.env.COMMUNICATE_DATA,'current/vendor/lib/homi.py'))};
+ jobs[label]={...jobs[label],active:true,path:unit,source:text.startsWith('# original')?'/legacy/daemon.py':fs.realpathSync(path.join(process.env.COMMUNICATE_DATA,'current/vendor/lib/com8.py'))};
 }
 fs.writeFileSync(file,JSON.stringify(jobs));
 `;
@@ -94,7 +94,7 @@ fs.writeFileSync(file,JSON.stringify(jobs));
   const release = (name) => {
     const p = path.join(data, name);
     fs.mkdirSync(path.join(p, "vendor/lib"), { recursive: true });
-    fs.writeFileSync(path.join(p, "vendor/lib/homi.py"), "# fixture source " + name);
+    fs.writeFileSync(path.join(p, "vendor/lib/com8.py"), "# fixture source " + name);
     return p;
   };
   const first = release("one"), second = release("two");
@@ -109,7 +109,7 @@ fs.writeFileSync(file,JSON.stringify(jobs));
       socket.end(JSON.stringify({ ok: true, self: { device: "fixture", source_file: job.source } }) + "\n");
     });
   });
-  server.listen(path.join(state, "homi/homi.sock")); await once(server, "listening");
+  server.listen(path.join(state, "com8/com8.sock")); await once(server, "listening");
 
   // Global manager label collisions are rejected before bootout, even when the
   // on-disk file appears to belong to this installation.
@@ -130,9 +130,9 @@ fs.writeFileSync(file,JSON.stringify(jobs));
   assert.deepEqual(newCalls, oldCalls);
 
   const firstOriginal = record.original;
-  Object.assign(process.env, { HOMI_SOCK_DIR: path.join(temp, "socks"), HOMI_SESSIONS_DIR: path.join(temp, "sessions"),
-    HOMI_TMUX_SOCKET: path.join(temp, "tmux.sock"), CLAUDE_CONFIG_DIR: path.join(temp, "claude") });
-  const inherited = ["HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR", "HOMI_TMUX_SOCKET", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
+  Object.assign(process.env, { COM8_SOCK_DIR: path.join(temp, "socks"), COM8_SESSIONS_DIR: path.join(temp, "sessions"),
+    COM8_TMUX_SOCKET: path.join(temp, "tmux.sock"), CLAUDE_CONFIG_DIR: path.join(temp, "claude") });
+  const inherited = ["COM8_SOCK_DIR", "COM8_SESSIONS_DIR", "COM8_TMUX_SOCKET", "CLAUDE_CONFIG_DIR", "CODEX_HOME"];
   // Equal explicit values must produce identical unit bytes regardless of flag
   // order or the order used when replaying the saved service environment.
   for (const platform of ["darwin", "linux"]) {
@@ -155,7 +155,7 @@ fs.writeFileSync(file,JSON.stringify(jobs));
   fs.unlinkSync(path.join(data, "current")); fs.symlinkSync(second, path.join(data, "current"));
   record = await installService(false, () => {}, record);
   assert.deepEqual(record.original, firstOriginal, "update lost original ownership chain");
-  assert.equal(readRegistry()[definition.label].source, fs.realpathSync(path.join(second, "vendor/lib/homi.py")));
+  assert.equal(readRegistry()[definition.label].source, fs.realpathSync(path.join(second, "vendor/lib/com8.py")));
   fs.appendFileSync(definition.path, "# user edit\n");
   await assert.rejects(installService(false, () => {}, record), /changed outside/);
   assert.equal(await uninstallService(record), false, "uninstall removed user-edited unit");
@@ -309,7 +309,7 @@ fs.writeFileSync(file,JSON.stringify(jobs));
   assert.throws(() => assertManagedPath(path.join(alias, "new.json")), /symlink/);
   assert.throws(() => writeJson(path.join(alias, "new.json"), {}), /symlink/);
   const otherState = path.join(home, "symlink-state"); fs.mkdirSync(otherState);
-  fs.symlinkSync(path.join(state, "homi"), path.join(otherState, "homi"));
+  fs.symlinkSync(path.join(state, "com8"), path.join(otherState, "com8"));
   process.env.COMM_STATE = otherState;
   assert.throws(() => daemonRequest("stop", 100, true), /symlink/, "service control followed a state alias into another daemon");
   process.env.COMM_STATE = state;

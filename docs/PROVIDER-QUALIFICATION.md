@@ -15,11 +15,11 @@ changes the real account home, service configuration, plugin installation, or
 hosted-bus credentials. It does make real model requests.
 
 ```sh
-python3 scripts/qualify-provider.py /path/to/homi-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider codex --client-home /private/test-client-home \
   --evidence /private/new-codex-evidence --run-live
 
-python3 scripts/qualify-provider.py /path/to/homi-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider claude --client-home /private/test-client-home \
   --evidence /private/new-claude-evidence --run-live
 ```
@@ -58,7 +58,7 @@ The same harness can exercise normal setup and real client discovery in the
 prepared isolated client home:
 
 ```sh
-python3 scripts/qualify-provider.py /path/to/homi-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider codex --client-home /private/fresh-test-client-home \
   --evidence /private/new-installed-evidence --installed --run-live
 ```
@@ -97,7 +97,7 @@ This check covers installed messaging. The durable operations, visual directory,
 human inbox and desktop acceptance checks below remain separate.
 
 On each supported client, install the same checksum-qualified artifact using
-the normal `homi setup` path, then completely restart the client. Preserve the
+the normal `com8 setup` path, then completely restart the client. Preserve the
 original configuration backup and record all commands resolved by the client.
 Run from a disposable workspace outside every source checkout. Installation and
 legacy disabling on shared machines require their own authorization.
@@ -106,7 +106,7 @@ legacy disabling on shared machines require their own authorization.
    files against the installed release and resolve its launcher to that release.
    A tool name, plugin manifest, or successful source-checkout invocation alone
    is insufficient evidence.
-2. Ask the fresh agent to use its installed HOMI/Communicate skill to inspect
+2. Ask the fresh agent to use its installed COM8/Communicate skill to inspect
    status, claim a uniquely named durable test identity, send to a second test
    identity, and read that mailbox. Require recorded tool calls and matching
    message bytes. Remove only those test identities afterward.
@@ -130,7 +130,7 @@ do not list either as supported merely because the other passed.
 With both providers privately authenticated in one prepared isolated home, run:
 
 ```sh
-python3 scripts/qualify-provider-pair.py /path/to/homi-0.3.0 \
+python3 scripts/qualify-provider-pair.py /path/to/com8-VERSION \
   --client-home /private/fresh-pair-home \
   --evidence /private/new-pair-evidence --run-live
 ```

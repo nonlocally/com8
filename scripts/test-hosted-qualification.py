@@ -28,7 +28,7 @@ class HostedTests(unittest.TestCase):
             yield db
 
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="homi-hosted-unit-")
+        self.temp = tempfile.TemporaryDirectory(prefix="com8-hosted-unit-")
         self.root = Path(self.temp.name)
         self.db = self.root / "bus.sqlite3"
         with self.fixture_database() as db:
@@ -38,7 +38,7 @@ class HostedTests(unittest.TestCase):
                 CREATE TABLE buses(name TEXT,visibility TEXT);
                 INSERT INTO buses VALUES('general','open'),('approved-fixture','private');
                 CREATE TABLE principals(id TEXT,device TEXT,is_admin INTEGER,revoked INTEGER);
-                INSERT INTO principals VALUES('owned','homi-hosted-abcdefghijkl-codex',0,0),('peer','homi-hosted-abcdefghijkl-claude',0,0),('foreign','real-person',0,0);
+                INSERT INTO principals VALUES('owned','com8-hosted-abcdefghijkl-codex',0,0),('peer','com8-hosted-abcdefghijkl-claude',0,0),('foreign','real-person',0,0);
                 CREATE TABLE invites(digest TEXT,principal TEXT,redeemed_at REAL,expires_at REAL);
                 CREATE TABLE agents(id TEXT,principal TEXT,session_key TEXT);
                 INSERT INTO agents VALUES('own-agent','owned','codex:verified'),('peer-agent','peer','claude:verified'),('other-agent','foreign','private-session');
@@ -55,7 +55,7 @@ class HostedTests(unittest.TestCase):
         self.broker.name, self.broker.run_id = "general", "abcdefghijkl000000"
         self.broker.token, self.broker.accounts = "private-fixture-token-not-for-output-000", {"fixture-owner"}
         self.broker.invites, self.broker.principals = ["invite-own", "invite-peer"], set()
-        self.broker.labels = {"homi-hosted-abcdefghijkl-codex", "homi-hosted-abcdefghijkl-claude"}
+        self.broker.labels = {"com8-hosted-abcdefghijkl-codex", "com8-hosted-abcdefghijkl-claude"}
         self.broker.uncertain_invite_until = None
         with self.fixture_database() as db:
             for secret, principal in zip(self.broker.invites, ("owned", "peer")):
@@ -206,7 +206,7 @@ class HostedTests(unittest.TestCase):
                 def prompt(self, prompt, **kwargs):
                     self.prompts.append(prompt)
                     calls = []
-                    if "Check which HOMI" in prompt:
+                    if "Check which COM8" in prompt:
                         calls = [("bus_status", {})]
                     if "Make this existing agent" in prompt:
                         calls = [("bus_status", {}), ("bus_register", {"bus": bus, "session": "verified"})]
@@ -372,7 +372,7 @@ class HostedTests(unittest.TestCase):
         worker.close()
         self.assertTrue(worker.fleet_group_stopped)
         self.assertEqual(worker.process.returncode, 0)
-        self.assertFalse(list(self.root.glob("homi-fleet-*")))
+        self.assertFalse(list(self.root.glob("com8-fleet-*")))
 
     def test_invalid_local_transport_refused_before_process(self):
         for spec in ({"transport": "automatic"}, {"transport": "local", "python": "python3"}):

@@ -10,7 +10,7 @@ ACCOUNT="$ANU_ROOT/profiles/runtime/accounts/account"
 assert_file "$ACCOUNT" "anu-account bin present"
 
 SD="$(new_stubdir)"; export PATH="$SD:$PATH"
-export HOMI_ACCOUNT_PANE="$SD/pane"
+export COM8_ACCOUNT_PANE="$SD/pane"
 LOG="$(mktmp)/calls.log"; : > "$LOG"
 FIX="$(mktmp)"
 export ANU_USAGE_URL="http://dash.test"
@@ -36,11 +36,11 @@ REAL_JQ="$(command -v jq)"
 REAL_SLEEP="$(command -v sleep)"
 # A temp default cache for every case that doesn't set its own — so no
 # invocation in this whole suite ever touches the real per-device cache at
-# ~/.local/state/homi/accounts/tokens.json.
+# ~/.local/state/com8/accounts/tokens.json.
 export ANU_ACCOUNT_CACHE="$(mktmp)/tokens.json"
 # Same isolation for the mkdir-based pane lock — so no invocation in this
 # suite ever touches the real per-device lock dir at
-# ~/.local/state/homi/accounts/locks.
+# ~/.local/state/com8/accounts/locks.
 export ANU_ACCOUNT_LOCKDIR="$(mktmp)/locks"
 # The exact continuation line _relaunch_and_resume sends once a relaunch is
 # confirmed idle — kept as one constant so every assertion below reflects
@@ -199,7 +199,7 @@ assert_contains "$(cat "$LOG")" "ssh usage-host" "…sync to the host still ran"
 # but what a human running this for real would see on their screen ($out).
 assert_contains "$out" "claude-badhost is stored and synced, but registering it on usage-host failed" \
   "…and the printed message says the token IS stored and synced, not just 'failed'"
-assert_contains "$out" 're-run `homi-account add badhost`' "…with a concrete remedy: re-run add once the host is fixed"
+assert_contains "$out" 're-run `com8-account add badhost`' "…with a concrete remedy: re-run add once the host is fixed"
 assert_contains "$out" "accounts.json by hand" "…or paste the printed entry in by hand"
 assert_contains "$out" '"id": "claude-badhost"' "…and the entry itself is printed, for pasting"
 install_ssh_stub
@@ -209,7 +209,7 @@ sync_line="$(tail -1 "$LOG")"
 assert_contains "$sync_line" "ssh other-host" "sync takes a device"
 assert_contains "$sync_line" "umask 077" "…the remote write is umask 077"
 assert_contains "$sync_line" ".local/state" "…and warms THAT device's own launcher cache under its XDG_STATE_HOME (or \$HOME/.local/state)…"
-assert_contains "$sync_line" "homi/accounts/tokens.json" "…at the launcher cache path, not the old dashboard mirror"
+assert_contains "$sync_line" "com8/accounts/tokens.json" "…at the launcher cache path, not the old dashboard mirror"
 assert_contains "$sync_line" "mv -f" "…atomic tmp+mv on the remote"
 
 local_cache="$(mktmp)/tokens.json"
@@ -292,7 +292,7 @@ assert_not_contains "$out" "PANE" "…without the pane table"
 assert_contains "$out" "next for fable: account_alpha" "…but still with the picks"
 
 t_section "help + unknown"
-assert_contains "$("$ACCOUNT" help)" "homi-account" "help names the command"
+assert_contains "$("$ACCOUNT" help)" "com8-account" "help names the command"
 "$ACCOUNT" bogus >/dev/null 2>&1; assert_fail $? "unknown verb fails"
 
 t_section "launch"
@@ -1014,7 +1014,7 @@ assert_contains "$out" "@anu_session" "…and names the missing stamp"
 out="$(OPT_ACCOUNT= "$ACCOUNT" rotate %4 2>&1)"; rc=$?
 assert_fail $rc "rotate refuses a pane with a session but no @anu_account (not anu-launched)"
 assert_contains "$out" "@anu_account" "…and names the missing stamp"
-assert_contains "$out" "not started by homi-account launch" "…with the same message the missing-session guard uses"
+assert_contains "$out" "not started by com8-account launch" "…with the same message the missing-session guard uses"
 assert_not_contains "$(cat "$LOG")" "send-keys" "…without touching the pane"
 
 : > "$LOG"; : > "$COUNT"
@@ -1075,11 +1075,11 @@ assert_contains "$out" "account_beta → account_alpha" "…and it rotates"
 # nothing else can run either; the die must come from the binary check.
 NOPANE="$(mktmp)/bin"; mkdir -p "$NOPANE"
 : > "$LOG"
-out="$(HOMI_ACCOUNT_PANE="$NOPANE/pane" PATH="$NOPANE:/usr/bin:/bin" "$ACCOUNT" rotate %4 2>&1)"; rc=$?
+out="$(COM8_ACCOUNT_PANE="$NOPANE/pane" PATH="$NOPANE:/usr/bin:/bin" "$ACCOUNT" rotate %4 2>&1)"; rc=$?
 assert_fail $rc "rotate without the anu plugin bin on PATH fails"
 assert_contains "$out" "configured pane helper" "…naming what is actually missing"
 assert_not_contains "$out" "no such pane" "…not masquerading as a missing pane"
-out="$(HOMI_ACCOUNT_PANE="$NOPANE/pane" PATH="$NOPANE:/usr/bin:/bin" "$ACCOUNT" switch %4 --as account_alpha 2>&1)"; rc=$?
+out="$(COM8_ACCOUNT_PANE="$NOPANE/pane" PATH="$NOPANE:/usr/bin:/bin" "$ACCOUNT" switch %4 --as account_alpha 2>&1)"; rc=$?
 assert_fail $rc "switch without the anu plugin bin on PATH fails the same way"
 assert_contains "$out" "configured pane helper" "…naming what is actually missing"
 
@@ -1932,7 +1932,7 @@ assert_contains "$(cat "$LOG")" "@ACCOUNT_LAUNCH@ launch --as account_beta --nee
 assert_contains "$out" "resumed on account_beta" "…which the verb reports"
 ranking "${GOOD[@]}"
 out="$(RB_CMD_AFTER=bash RB_CMD_AFTER2=bash "$ACCOUNT" rebalance %4 2>&1)"
-assert_contains "$out" "pane left at a shell (homi-account switch %4 --as account_beta --force)" "…and when even that fails, it says how to resume it by hand"
+assert_contains "$out" "pane left at a shell (com8-account switch %4 --as account_beta --force)" "…and when even that fails, it says how to resume it by hand"
 
 # --- --tick: the watchd worker ---------------------------------------------
 ranking "${GOOD[@]}"
@@ -1980,7 +1980,7 @@ out="$("$ACCOUNT" rebalance %99 2>&1)"; rc=$?
 assert_fail $rc "an unresolvable target is refused"
 assert_contains "$out" "no such pane" "…by name"
 out="$("$ACCOUNT" help)"
-assert_contains "$out" "homi-account rebalance [<pane>] [--dry-run]" "help documents the verb"
+assert_contains "$out" "com8-account rebalance [<pane>] [--dry-run]" "help documents the verb"
 assert_contains "$out" "@anu_rebalance 0" "…and how to pause it"
 unset ANU_ACCOUNT_TEST ANU_ACCOUNT_TEST_NOW
 

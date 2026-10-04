@@ -3,9 +3,9 @@
 With Homebrew installed, start here:
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
-homi doctor
+brew install nonlocally/tap/com8
+com8 setup
+com8 doctor
 ```
 
 Setup lets you choose Claude Code, Codex, and optional tools, and review any
@@ -14,14 +14,14 @@ open a fresh session and ask your agent to create peers, send messages, or
 coordinate work. See the [Quickstart](QUICKSTART.md) for examples and
 [Homebrew](#homebrew) below for upgrades and removal.
 
-You can also install from the [HOMI 0.5.0 release archive](https://github.com/nonlocally/HOMI/releases/tag/v0.5.0).
+You can also install from the [COM8 0.6.0 release archive](https://github.com/nonlocally/com8/releases/tag/v0.6.0).
 
 ## Requirements
 
 | Needed for | Requirement |
 |---|---|
 | Launch the archive | macOS or Linux; Node.js 20 or later; Bash |
-| HOMI runtime | Python 3.9 or later; guided setup can install it when missing |
+| COM8 runtime | Python 3.9 or later; guided setup can install it when missing |
 | Terminal seats and spawned executions | tmux; included in guided dependency checks when either client is selected, even without a terminal profile |
 | Agent sessions | Claude Code CLI and/or Codex CLI; guided setup offers missing clients, with login separately selected; see [Clients](#clients) |
 | Other devices | SSH; Tailscale optional |
@@ -30,33 +30,33 @@ You can also install from the [HOMI 0.5.0 release archive](https://github.com/no
 Guided setup can install missing dependencies and clients for selected features.
 It can also join a shared bus using your invitation; this is an explicit choice.
 Provider sign-in remains with the provider, and installation alone grants no hosted access.
-Node.js must already be available to start the archive's installer; the HOMI
+Node.js must already be available to start the archive's installer; the COM8
 Homebrew formula supplies Node and the core runtime dependencies.
 
 ## Get the archive
 
-The release provides `homi-VERSION.tar.gz` and its matching `.sha256` file.
+The release provides `com8-VERSION.tar.gz` and its matching `.sha256` file.
 Download both, then verify the archive before extracting it:
 
 ```sh
-curl -fLO https://github.com/nonlocally/HOMI/releases/download/v0.5.0/homi-0.5.0.tar.gz
-curl -fLO https://github.com/nonlocally/HOMI/releases/download/v0.5.0/homi-0.5.0.tar.gz.sha256
-shasum -a 256 -c homi-0.5.0.tar.gz.sha256
-tar -xzf homi-0.5.0.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz.sha256
+shasum -a 256 -c com8-0.6.0.tar.gz.sha256
+tar -xzf com8-0.6.0.tar.gz
 ```
 
 The archive contains the CLI, the MCP server, the plugin, the daemon, and its
-production Node dependencies. HOMI itself needs no Git checkout, npm account, or
+production Node dependencies. COM8 itself needs no Git checkout, npm account, or
 registry access to install from the archive. Installing missing third-party
 tools does need network access to their installation sources. An archive copied
 to a machine over SSH installs exactly like a downloaded one.
 
 ## Run setup
 
-For Homebrew, run `homi setup`. From an extracted archive, use:
+For Homebrew, run `com8 setup`. From an extracted archive, use:
 
 ```sh
-./homi-0.5.0/bin/homi setup
+./com8-0.6.0/bin/com8 setup
 ```
 
 With no flags in an interactive terminal, `setup` guides you through the clients,
@@ -69,13 +69,13 @@ For automation or a selection you already know, use explicit flags:
 
 ```sh
 # Preview only: no downloads, login, package installation or configuration writes.
-./homi-0.5.0/bin/homi setup --install-missing --claude --codex --terminal --mesh --dry-run
+./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
 
 # Apply that selection; omit either client or profile you do not want.
-./homi-0.5.0/bin/homi setup --install-missing --claude --codex --terminal --mesh --yes
+./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --yes
 
 # CLI-only configuration, including on a server:
-./homi-0.5.0/bin/homi setup --no-clients --no-service
+./com8-0.6.0/bin/com8 setup --no-clients --no-service
 ```
 
 Add `--ghostty` on macOS to select the application, the configured Nerd Font,
@@ -99,10 +99,10 @@ downloads. `update` remains the explicit release activation command.
 | `--guided` | Choose features interactively and review the installation plan. |
 | `--install-missing` | Permit installation of missing dependencies for the selected features after confirmation, or with `--yes`. |
 | `--claude`, `--codex` | Select clients for plugin registration. In configuration-only setup, neither flag means attempt both existing CLIs. |
-| `--no-clients` | Install the CLI only; register clients later with `homi setup --claude` or `--codex`. |
+| `--no-clients` | Install the CLI only; register clients later with `com8 setup --claude` or `--codex`. |
 | `--terminal`, `--mesh` | Select owned profiles and check their required tools. |
 | `--ghostty` | Explicitly select Ghostty, its configured font, and the terminal profile on macOS. |
-| `--model` | v0.5: configure a named model connection with a hidden key prompt. Requires a terminal; automation uses `homi model add --key-file` or `--key-stdin`. |
+| `--model` | v0.5: configure a named model connection with a hidden key prompt. Requires a terminal; automation uses `com8 model add --key-file` or `--key-stdin`. |
 | `--bus=local` | Select local bus operation without starting a broker; keep saved remote connections. |
 | `--bus=HTTPS_ORIGIN` | Select a shared hub this installation has already joined. Does not enroll a new device. |
 | `--bus-invite-file=/absolute/path` | Join using a private invitation file owned by you. Cannot be combined with `--bus`. |
@@ -111,7 +111,7 @@ downloads. `update` remains the explicit release activation command.
 | `--service` | Also install the per-user daemon service (launchd or systemd `--user`). |
 | `--no-service` | Leave an existing managed service untouched during an update. |
 | `--service-inherit=NAME` | Add an allowed variable to the service environment, such as `CLAUDE_CONFIG_DIR` or `CODEX_HOME`. Repeat for each variable. |
-| `--dry-run` | Print the selected setup/dependency plan and change nothing. Use `homi profile preview` for the exact profile paths and conflicts. |
+| `--dry-run` | Print the selected setup/dependency plan and change nothing. Use `com8 profile preview` for the exact profile paths and conflicts. |
 
 ### Choosing a model
 
@@ -119,14 +119,15 @@ In v0.5, guided setup can add a model API connection, such as GLM, to power
 Claude Code or Codex directly. This is optional and does not change ordinary
 client defaults or subscription login. The service's canonical HTTPS `/v1`
 address, model ID and scoped key are needed; setup never guesses a public
-endpoint or uses a bus credential for inference. Use `homi setup --model` to
+endpoint or uses a bus credential for inference. Use `com8 setup --model` to
 configure it later. The key prompt is hidden; automated configuration uses a
-private file or stdin through `homi model add`.
+private file or stdin through `com8 model add`.
 
-Setup saves the connection without making a model request. `homi model doctor`
+Setup saves the connection without making a model request. `com8 model doctor`
 checks catalog access separately; an actual coding task establishes inference
 and tool use. See [model connections](MODELS.md) for the nonlocally endpoint
-and client requirements. Model connections require HOMI 0.5 or later.
+and client requirements. Model connections require release 0.5 or later (0.6.0 is the first
+COM8-named release).
 
 ### Choosing a bus
 
@@ -134,7 +135,7 @@ Setup keeps your existing connection unless you explicitly choose another. For
 local work, no hosted account is needed. For a shared hub, get an invitation
 from its administrator, enter it at the hidden prompt, and confirm the displayed
 HTTPS destination. You can finish installation and connect later with
-`homi setup --guided`.
+`com8 setup --guided`.
 
 Automated setup accepts `--bus-invite-file=/absolute/path` alongside an explicit
 client selection and `--yes`. The file must be a regular, non-symlink file owned
@@ -166,17 +167,17 @@ it does not silently opt into an unsupported source build.
 On Linux, system-tool recipes use `apt-get` where available. Provider clients use
 their official native installers. Missing Ghostty on Linux requires manual
 installation; the plan reports it before applying changes. A system without a
-supported recipe receives a manual prerequisite instruction. HOMI does not add
+supported recipe receives a manual prerequisite instruction. COM8 does not add
 a new package manager or a substitute container backend for that system.
 
 Existing provider executables are not implicitly upgraded. If an installed
-client lacks HOMI's required capabilities, setup reports that failure so you can
+client lacks COM8's required capabilities, setup reports that failure so you can
 choose how to update it. Installing software and signing into it are separate:
 `--yes` alone never starts login. Login uses the provider's own interactive CLI;
-HOMI does not collect your password or create a hosted account.
+COM8 does not collect your password or create a hosted account.
 
-Third-party package installation is not part of HOMI's configuration rollback.
-If a later step fails, installed packages remain available; HOMI does not remove
+Third-party package installation is not part of COM8's configuration rollback.
+If a later step fails, installed packages remain available; COM8 does not remove
 them during a retry, rollback or uninstall. Core setup and profile installation
 have their own ownership and recovery boundaries, and report any recovery needed.
 
@@ -185,7 +186,7 @@ have their own ownership and recovery boundaries, and report any recovery needed
 Core setup verifies the archive against its manifest; copies the
 release to `~/.local/share/communicate/<version>-<hash>/`, which is never modified
 again; points the stable link `~/.local/share/communicate/current` at it; creates
-`~/.local/share/communicate/bin/homi` and `bin/communicate`; registers the plugin
+`~/.local/share/communicate/bin/com8` and `bin/communicate`; registers the plugin
 with the clients you named through their own CLIs; optionally installs the
 service. If activation fails, setup attempts to restore the previous state and
 reports any recovery still needed.
@@ -194,7 +195,7 @@ Then:
 
 ```sh
 export PATH="$HOME/.local/share/communicate/bin:$PATH"   # add to ~/.bashrc, ~/.zshrc, or equivalent
-homi doctor
+com8 doctor
 ```
 
 `doctor` reports the executable in use, the installed release and its source
@@ -231,11 +232,11 @@ commands do not provide a transaction spanning all registration changes.
 
 ## The daemon
 
-`homi start` runs an unmanaged daemon for the current login. `homi setup --service`
+`com8 start` runs an unmanaged daemon for the current login. `com8 setup --service`
 installs a managed one:
 
-- macOS: `~/Library/LaunchAgents/com.communicate.homi.plist`
-- Linux: `~/.config/systemd/user/communicate-homi.service`
+- macOS: `~/Library/LaunchAgents/com.communicate.com8.plist`
+- Linux: `~/.config/systemd/user/communicate-com8.service`
 
 The service runs the installed release with an explicit environment: your home,
 the state directory, the device name, and a PATH containing the selected Python
@@ -248,15 +249,15 @@ backed up before replacement. Only one daemon owns a state root at a time.
 ## Update, roll back, uninstall
 
 If you installed optional profiles, remove their configuration separately with
-`homi profile uninstall` before removing HOMI itself.
+`com8 profile uninstall` before removing COM8 itself.
 
 ```sh
-/path/to/homi-0.3.1/bin/homi update     # from the newly verified archive
-homi rollback --dry-run
-homi rollback
-homi uninstall --claude                 # remove only this client's registration
-homi uninstall                          # remove owned integrations, service, executable links
-homi uninstall --purge                  # also delete retained release payloads
+/path/to/com8-0.6.0/bin/com8 update     # from the newly verified archive
+com8 rollback --dry-run
+com8 rollback
+com8 uninstall --claude                 # remove only this client's registration
+com8 uninstall                          # remove owned integrations, service, executable links
+com8 uninstall --purge                  # also delete retained release payloads
 ```
 
 Rules that hold throughout:
@@ -271,12 +272,58 @@ Rules that hold throughout:
   and refuses while any owned integration remains.
 - An interrupted run leaves `~/.local/share/communicate/install.lock` with the
   owner's PID and start time. `doctor` shows it. After confirming that process is
-  gone, rename that exact directory out of the way and retry; HOMI never removes
+  gone, rename that exact directory out of the way and retry; COM8 never removes
   another process's lock.
 
 Upgrading from Communicate 0.1.x or 0.2.x keeps the original payload. Use the
-new release's `bin/homi` for lifecycle commands; the old package has no `homi`
+new release's `bin/com8` for lifecycle commands; the old package has no `com8`
 entry point.
+
+Upgrading from a 0.3-0.5.1 installation: 0.6.0 renames the product command, the
+managed service label (`com.communicate.com8` / `communicate-com8.service`),
+the `COM8_*` environment variables, the durable state subdirectory under
+`~/.local/state/communicate/`, the tmux server that holds seats, the profile
+configuration and state directories under `~/.config/` and `~/.local/state/`,
+the `~/.local/bin/com8-*` profile wrappers and their shell rc block, the
+`com8_*` MCP tools and `com8-core` skill, the tag on planted session files,
+the signed-card kind and `com8v1.` invite-code prefix, the `com8-fleet:` marker
+in `~/.ssh/authorized_keys` and the `~/.ssh/id_com8` fabric key. The release
+does not migrate identities, saved messages, device links, profile ownership
+ledgers, recorded service environment overrides or a previously installed
+service, and `doctor` does not report the previous release's directories.
+Before running `com8 setup --service`:
+
+- Remove the previous service with that release's own `uninstall` (or boot out
+  and disable its unit by hand). The renamed service is installed beside the
+  old one, not in its place, and only one daemon may own a state root.
+- Run that release's `profile uninstall` so its rc block, wrappers, ownership
+  ledger and snapshot schedule are removed, then reopen your shells.
+- Keep the previous state subdirectory until you no longer need it. Re-export
+  any custom socket, sessions or tmux overrides under their `COM8_*` names when
+  you install the new service.
+- Delete planted session files that the stopped daemon left in
+  `~/.claude/sessions`; 0.6.0 would otherwise treat them as real sessions.
+- Re-create saved model connections with `com8 model add` (or
+  `com8 setup --model`). They now live in `~/.config/com8/models` with the
+  ownership marker `com8-model-connection-v1`, so connections saved by the
+  previous release are not listed, and a copied directory is refused.
+- Run `com8-box build` again before `com8-box run`; the contained-agent image
+  is now named `com8-agent`.
+- Remove or rename an existing `<repo>-worktrees/<name>` directory on the
+  previous release's branch before re-spawning that worktree agent; worktree
+  agents now use branches named `com8/<name>`.
+- After `update` repoints `current`, the previous release's launcher symlink in
+  `~/.local/share/communicate/bin` dangles until `com8 uninstall` removes it.
+
+Devices joined with `pair`, `adopt`, `connect` or `federate` must all run
+0.6.0. `pair` and `adopt` do not recognise the previous release's daemon,
+service unit, staged kernel or fabric key on the far device and would install
+a second set beside them, so upgrade every device first (removing its old unit,
+staged kernel and key file) and re-run `adopt` or `pair` from both ends.
+Invite codes and signed cards issued by the previous release are rejected;
+re-issue them after the upgrade. `authorized_keys` lines appended by the
+previous release are not recognised by `federate accept` or `federate revoke`;
+remove them by hand before accepting the same peer again.
 
 ## Private configuration
 
@@ -287,8 +334,8 @@ Nothing personal ships in the package. Where your settings go:
 | Installed releases, `current`, `bin/` | `~/.local/share/communicate/` (`COMMUNICATE_DATA`) |
 | Identities, saved messages, daemon and bus state, device links | `~/.local/state/communicate/` (`COMM_STATE`) |
 | Bus broker selection, enrollment, device credential | `~/.local/state/communicate/bus/` |
-| Optional profile files, `local.sh`, tmux/Ghostty overrides, mesh hosts | `~/.config/homi/profiles/` |
-| Python for the daemon | `HOMI_PYTHON=/path/to/python3` |
+| Optional profile files, `local.sh`, tmux/Ghostty overrides, mesh hosts | `~/.config/com8/profiles/` |
+| Python for the daemon | `COM8_PYTHON=/path/to/python3` |
 
 Keep invitations, device credentials, and hosts out of source control and
 public logs. A bus invitation grants membership on one bus; it never grants
@@ -297,10 +344,10 @@ shell access or seat control on any device.
 ## Optional profiles
 
 ```sh
-homi profile preview --terminal --mesh    # read-only: every file, action, and conflict
-homi profile install --terminal --mesh
-homi profile status
-homi profile uninstall
+com8 profile preview --terminal --mesh    # read-only: every file, action, and conflict
+com8 profile install --terminal --mesh
+com8 profile status
+com8 profile uninstall
 ```
 
 Modules: `--terminal`, `--mesh`, `--snapshots`, `--box`, `--accounts`. Guided setup
@@ -316,56 +363,61 @@ removes only what is still exactly what it wrote. See [PROFILES.md](PROFILES.md)
 
 ## Troubleshooting
 
-- **`homi: command not found`** — add `~/.local/share/communicate/bin` to PATH, or
-  call the installed `~/.local/share/communicate/bin/homi` directly.
-- **The session does not see HOMI** — restart Claude Code or start a new Codex
-  thread; `homi doctor` shows the registration and cached version. A cached
+- **`com8: command not found`** — add `~/.local/share/communicate/bin` to PATH, or
+  call the installed `~/.local/share/communicate/bin/com8` directly.
+- **The session does not see COM8** — restart Claude Code or start a new Codex
+  thread; `com8 doctor` shows the registration and cached version. A cached
   plugin proves installation, not that a running client loaded it.
 - **`daemon release parity: different`** in `doctor` — the running daemon was
-  started from another source (an unmanaged `homi start`, or an older service).
-  `homi setup --service` restarts it on the installed release.
+  started from another source (an unmanaged `com8 start`, or an older service).
+  `com8 setup --service` restarts it on the installed release.
 - **`MCP dependencies are missing`** — the installed payload was damaged.
   `uninstall --purge` from the retained archive, then `setup` again; state is
   preserved.
-- **Setup refuses a file or registration** — it is no longer what HOMI wrote.
+- **Setup refuses a file or registration** — it is no longer what COM8 wrote.
   The message names it; move it aside or reconcile the change, then retry.
 
 ## Homebrew
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
-homi doctor
+brew install nonlocally/tap/com8
+com8 setup
+com8 doctor
 ```
 
-`brew install nonlocally/tap/homi` installs the same archive under Homebrew's prefix and
-puts `homi` and `communicate` on PATH; you still run `homi setup` to register
+`brew install nonlocally/tap/com8` installs the same archive under Homebrew's prefix and
+puts `com8` and `communicate` on PATH; you still run `com8 setup` to register
 clients and, optionally, the service. Formula installation never configures your
 machine by itself.
 
 Homebrew upgrades make a new release available; activate it explicitly:
 
 ```sh
-brew upgrade nonlocally/tap/homi
-"$(brew --prefix nonlocally/tap/homi)/bin/homi" update
-homi doctor
+brew upgrade nonlocally/tap/com8
+"$(brew --prefix nonlocally/tap/com8)/bin/com8" update
+com8 doctor
 ```
 
 Calling the formula's full path ensures that `update` uses the new installer
-even if an older HOMI launcher comes first on PATH. Runtime commands continue
+even if an older COM8 launcher comes first on PATH.
+
+`com8` is a new formula, so `brew upgrade` of the formula installed for a
+0.3-0.5.1 release never reaches 0.6.0. Install `nonlocally/tap/com8`, run its
+`update` as above, then `brew uninstall` the previous formula so only one
+launcher remains on PATH. Runtime commands continue
 using the release selected by setup or rollback until you activate another one.
 
-If you selected profiles, run `homi profile uninstall` first. Then remove HOMI's
+If you selected profiles, run `com8 profile uninstall` first. Then remove COM8's
 owned client registrations and service before removing the formula:
 
 ```sh
-"$(brew --prefix nonlocally/tap/homi)/bin/homi" uninstall
-brew uninstall nonlocally/tap/homi
+"$(brew --prefix nonlocally/tap/com8)/bin/com8" uninstall
+brew uninstall nonlocally/tap/com8
 ```
 
 Use `uninstall --purge` in the first command if you also want to remove retained
 release copies. Identities, saved messages and credentials remain preserved.
-Homebrew alone does not remove HOMI's per-user integrations or state.
+Homebrew alone does not remove COM8's per-user integrations or state.
 
 ## Qualification
 

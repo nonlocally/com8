@@ -20,12 +20,12 @@ BASH = next((p for p in ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", shutil
 
 class Profiles(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory(prefix="homi-profile-")
+        self.temp = tempfile.TemporaryDirectory(prefix="com8-profile-")
         self.home = Path(self.temp.name) / "home with spaces"
         self.home.mkdir()
         self.profile = mod.Profile(self.home)
         self.env = dict(os.environ, HOME=str(self.home), PATH=str(self.home / ".local/bin") + ":" + os.environ["PATH"])
-        for key in ["TMUX", "TMUX_PANE", "HOMI_PROFILE_CONFIG", "HOMI_PROFILE_STATE", "HOMI_PROFILE_RUNTIME", "HOMI_PROFILE_MODULES", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "BASH_ENV", "ZDOTDIR", "HOMI_ACCOUNT_LAUNCHER", "HOMI_BOX_LAUNCHER", "HOMI_PANE_WATCHER", "HOMI_PROFILE_WATCH"]:
+        for key in ["TMUX", "TMUX_PANE", "COM8_PROFILE_CONFIG", "COM8_PROFILE_STATE", "COM8_PROFILE_RUNTIME", "COM8_PROFILE_MODULES", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "BASH_ENV", "ZDOTDIR", "COM8_ACCOUNT_LAUNCHER", "COM8_BOX_LAUNCHER", "COM8_PANE_WATCHER", "COM8_PROFILE_WATCH"]:
             self.env.pop(key, None)
 
     def tearDown(self):
@@ -57,7 +57,7 @@ class Profiles(unittest.TestCase):
         self.assertEqual(rc.read_text().count(mod.BEGIN), 1)
         private = self.profile.config / "local.sh"
         private.write_text("# private overlay\n")
-        data = self.home / ".local/state/homi/workstation/sessions/keep"
+        data = self.home / ".local/state/com8/workstation/sessions/keep"
         data.mkdir(parents=True)
         self.assertTrue(self.profile.uninstall()["ok"])
         self.assertIn("# my original", rc.read_text())
@@ -81,7 +81,7 @@ class Profiles(unittest.TestCase):
         waiting.install(["mesh"])
         self.profile = mod.Profile(self.home)
         self.assertEqual(self.profile.record["modules"], ["mesh", "terminal"])
-        result = self.run_tool(BASH, "-c", '. "$HOME/.config/homi/profiles/active.sh"; declare -F t; declare -F mesh')
+        result = self.run_tool(BASH, "-c", '. "$HOME/.config/com8/profiles/active.sh"; declare -F t; declare -F mesh')
         self.assertEqual(result.stdout.splitlines(), ["t", "mesh"])
         self.assertTrue(self.profile.uninstall()["ok"])
 
@@ -109,12 +109,12 @@ class Profiles(unittest.TestCase):
 
     def test_uninstall_refuses_replacement_and_keeps_entire_profile(self):
         self.install()
-        wrapper = self.home / ".local/bin/homi-agent"
+        wrapper = self.home / ".local/bin/com8-agent"
         wrapper.write_text("# replacement owned by another installer\n")
         result = self.profile.uninstall()
         self.assertFalse(result["ok"])
         self.assertEqual(result["changed"], 0)
-        self.assertTrue((self.home / ".local/bin/homi-workstation").exists())
+        self.assertTrue((self.home / ".local/bin/com8-workstation").exists())
         self.assertEqual(wrapper.read_text(), "# replacement owned by another installer\n")
 
     def test_modified_payload_and_modified_block_are_not_overwritten(self):
@@ -127,7 +127,7 @@ class Profiles(unittest.TestCase):
         rc = self.home / ".bashrc"
         rc.write_text(rc.read_text().replace("[[ $- != *i* ]]", "# edited\n[[ $- != *i* ]]"))
         self.assertFalse(self.profile.uninstall()["ok"])
-        self.assertTrue((self.home / ".local/bin/homi-workstation").exists())
+        self.assertTrue((self.home / ".local/bin/com8-workstation").exists())
 
     def test_failed_install_restores_earlier_targets(self):
         from unittest.mock import patch
@@ -142,13 +142,13 @@ class Profiles(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.install()
         self.assertEqual(rc.read_text(), "original\n")
-        self.assertFalse((self.home / ".local/bin/homi-workstation").exists())
+        self.assertFalse((self.home / ".local/bin/com8-workstation").exists())
         self.assertFalse(self.profile.ledger.exists())
 
     def test_installed_helpers_work_without_source_checkout(self):
         self.install()
-        result = self.run_tool(str(self.home / ".local/bin/homi-mesh"), "help")
-        self.assertIn("HOMI mesh", result.stdout)
+        result = self.run_tool(str(self.home / ".local/bin/com8-mesh"), "help")
+        self.assertIn("COM8 mesh", result.stdout)
         active = self.profile.config / "active.sh"
         expected = ["t", "_t_switch", "al", "alw", "mesh", "cx", "cxx", "cxc", "cdx", "cdxx", "cdxxs"]
         result = self.run_tool(BASH, "--noprofile", "--norc", "-c",
@@ -156,7 +156,7 @@ class Profiles(unittest.TestCase):
                                + '; declare -F tss tsr tsl tslm tml taa tra tap tscale anu_landing chat browser || true',
                                "test", str(active))
         self.assertEqual(result.stdout.splitlines(), expected)
-        absent = self.run_tool(str(self.home / ".local/bin/homi-workstation"), "shell", "tss", "proof", check=False)
+        absent = self.run_tool(str(self.home / ".local/bin/com8-workstation"), "shell", "tss", "proof", check=False)
         self.assertNotEqual(absent.returncode, 0)
         self.assertIn("not enabled", absent.stderr)
         self.assertNotIn(".local/share/anu", active.read_text())
@@ -193,13 +193,13 @@ class Profiles(unittest.TestCase):
         expected = "".join(str(commands / name) + "\n" for name in ["cx", "cxx", "cdx", "cdxx", "al", "alw", "t"])
         self.assertEqual(result.stdout, expected + "--dangerously-skip-permissions\n" + argument
                          + "\n--yolo\n" + argument + "\nfixture: 1 windows\nshell=" + shell + "\n")
-        self.assertNotIn("HOMI_PROFILE_RUNTIME", zsh.read_text())
+        self.assertNotIn("COM8_PROFILE_RUNTIME", zsh.read_text())
         self.assertIn("# existing zsh settings", zsh.read_text())
         ghostty = (self.profile.config / "ghostty.conf").read_text()
         self.assertNotIn("command =", ghostty)
         tmux_config = (self.profile.config / "tmux.conf").read_text()
         self.assertNotIn("default-shell", tmux_config)
-        self.assertFalse((commands / "homi-shell").exists())
+        self.assertFalse((commands / "com8-shell").exists())
         self.assertTrue(self.profile.uninstall()["ok"])
         self.assertFalse((commands / "cxx").exists())
         self.assertEqual(zsh.read_text(), "# existing zsh settings\n")
@@ -240,7 +240,7 @@ class Profiles(unittest.TestCase):
                                '[[ -n $ZSH_VERSION && ${+functions[mesh]} = 0 ]] || exit 1; '
                                'command -v mesh; mesh help', env=env)
         self.assertEqual(result.stdout.splitlines()[0], str(mesh))
-        self.assertIn("HOMI mesh", result.stdout)
+        self.assertIn("COM8 mesh", result.stdout)
         self.assertFalse(network.exists())
         self.assertTrue(self.profile.uninstall()["ok"])
         self.assertFalse(mesh.exists())
@@ -269,23 +269,23 @@ class Profiles(unittest.TestCase):
         stub = self.home / ".local/bin/claude"
         stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
         stub.chmod(0o755)
-        result = self.run_tool(str(self.home / ".local/bin/homi-agent"), "cxx", "literal $value\nnext")
+        result = self.run_tool(str(self.home / ".local/bin/com8-agent"), "cxx", "literal $value\nnext")
         self.assertEqual(result.stdout, "--dangerously-skip-permissions\nliteral $value\nnext\n")
-        result = self.run_tool(str(self.home / ".local/bin/homi-agent"), "cxc", check=False)
+        result = self.run_tool(str(self.home / ".local/bin/com8-agent"), "cxc", check=False)
         self.assertNotEqual(result.returncode, 0)
         adapter = self.home / "account adapter"
         adapter.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@"\n')
         adapter.chmod(0o755)
-        (self.profile.config / "local.sh").write_text("export HOMI_ACCOUNT_LAUNCHER=" + mod.quote(adapter) + "\n")
-        result = self.run_tool(str(self.home / ".local/bin/homi-agent"), "cdxx", "message")
+        (self.profile.config / "local.sh").write_text("export COM8_ACCOUNT_LAUNCHER=" + mod.quote(adapter) + "\n")
+        result = self.run_tool(str(self.home / ".local/bin/com8-agent"), "cdxx", "message")
         self.assertEqual(result.stdout, "launch\n--provider\ncodex\n--\n--yolo\nmessage\n")
 
     def test_snapshot_selection_installs_shared_wrapper_but_no_job(self):
         self.install(["snapshots"])
         runtime = Path(self.profile.record["payload"]) / "runtime"
-        wrapper = self.home / ".local/bin/homi-snapshot"
+        wrapper = self.home / ".local/bin/com8-snapshot"
         self.assertEqual(wrapper.read_text(), self.profile.snapshot_schedule(runtime).wrapper_text())
-        self.assertIn("homi-snapshot", self.run_tool(str(wrapper), "help").stdout)
+        self.assertIn("com8-snapshot", self.run_tool(str(wrapper), "help").stdout)
         functions = self.run_tool(BASH, "--noprofile", "--norc", "-c",
                                  '. "$1"; declare -F tss tsr; declare -F t tsl tslm tscale || true',
                                  "test", str(self.profile.config / "active.sh"))
@@ -320,7 +320,7 @@ class Profiles(unittest.TestCase):
                 self.assertFalse(self.profile.uninstall()["ok"])
             self.assertEqual(self.profile.ledger.read_bytes(), before)
             self.assertTrue(unit.exists())
-            self.assertTrue((self.home / ".local/bin/homi-snapshot").exists())
+            self.assertTrue((self.home / ".local/bin/com8-snapshot").exists())
         # An edited startup block is caught before asking the manager to unload.
         rc = self.home / ".bashrc"
         rc.write_text(rc.read_text().replace("[[ $-", "# changed\n[[ $-"))
@@ -337,7 +337,7 @@ class Profiles(unittest.TestCase):
             # No nested ownership lock, and wrappers are still available to the
             # service manager until its owned job has been stopped.
             self.assertFalse((self.profile.state / "install.lock").exists())
-            self.assertTrue((self.home / ".local/bin/homi-snapshot").exists())
+            self.assertTrue((self.home / ".local/bin/com8-snapshot").exists())
             record = json.loads(self.profile.ledger.read_text())
             unit.unlink()
             del record["entries"][str(unit)]
@@ -348,13 +348,13 @@ class Profiles(unittest.TestCase):
         with patch.object(self.profile, "snapshot_schedule", return_value=schedule):
             self.assertTrue(self.profile.uninstall()["ok"])
         schedule.uninstall.assert_called_once()
-        self.assertFalse((self.home / ".local/bin/homi-snapshot").exists())
+        self.assertFalse((self.home / ".local/bin/com8-snapshot").exists())
         self.assertEqual(json.loads(self.profile.ledger.read_text())["entries"], {})
 
     @unittest.skipUnless(shutil.which("jq"), "jq unavailable")
     def test_manual_mesh_hosts_and_ssh_export_preserve_ssh_config(self):
         self.install(["mesh"])
-        mesh = str(self.home / ".local/bin/homi-mesh")
+        mesh = str(self.home / ".local/bin/com8-mesh")
         self.run_tool(mesh, "host", "add", "lab", "scientist@lab.example", "2222")
         self.assertEqual((self.profile.config / "mesh/hosts.json").stat().st_mode & 0o077, 0)
         result = self.run_tool(BASH, "--noprofile", "--norc", "-c",
@@ -415,15 +415,15 @@ class Profiles(unittest.TestCase):
             env = dict(self.env, TMUX=socket + ",0,0", TMUX_PANE=pane)
             self.assertEqual(self.run_tool(*tm, "list-clients").stdout, "")
             self.assertNotEqual(self.run_tool(str(shim), "info", env=env, check=False).returncode, 0)
-            wrapper = str(self.home / ".local/bin/homi-workstation")
+            wrapper = str(self.home / ".local/bin/com8-workstation")
             self.run_tool(wrapper, "tile", "new", env=env)
             self.assertEqual(len(self.run_tool(*tm, "list-panes", "-t", "fixture").stdout.splitlines()), 2)
             self.run_tool(wrapper, "shell", "tss", "proof", env=env)
-            snapshot = self.home / ".local/state/homi/workstation/sessions/proof"
+            snapshot = self.home / ".local/state/com8/workstation/sessions/proof"
             self.assertTrue((snapshot / "windows.tsv").exists())
             for path in [snapshot, *snapshot.rglob("*")]:
                 self.assertEqual(path.stat().st_mode & 0o077, 0, str(path))
-            self.run_tool(str(self.home / ".local/bin/homi-snapshot"), "run",
+            self.run_tool(str(self.home / ".local/bin/com8-snapshot"), "run",
                           "snap-2026-09-24-0300", env=env)
             scheduled = snapshot.parent / "snap-2026-09-24-0300"
             self.assertTrue((scheduled / "meta.tsv").is_file())

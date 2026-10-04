@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { serviceDefinition } from "../src/lifecycle.mjs";
 
 const pkg = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), "homi-lifecycle-"));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), "com8-lifecycle-"));
 const home = path.join(temp, "home with spaces"), data = path.join(home, "data"), state = path.join(home, "state");
 fs.mkdirSync(path.join(home, "bin"), { recursive: true });
 fs.mkdirSync(path.join(home, ".claude"));
@@ -34,15 +34,15 @@ if (a[0]==='plugin' && a[1]==='list') {
 const env = { ...process.env, HOME: home, COMMUNICATE_DATA: data, COMM_STATE: state,
   CLAUDE_CONFIG_DIR: path.join(home, ".claude"), CODEX_HOME: path.join(home, ".codex"),
   XDG_CONFIG_HOME: path.join(home, ".config"), PATH: path.join(home, "bin") + path.delimiter + process.env.PATH };
-for (const key of ["CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "HOMI_SOCK", "HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR"]) delete env[key];
+for (const key of ["CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "COM8_SOCK", "COM8_SOCK_DIR", "COM8_SESSIONS_DIR"]) delete env[key];
 const assert = (condition, text) => { if (!condition) throw new Error(text); };
 const run = (entry, args, ok = true) => {
   const r = spawnSync(process.execPath, [entry, ...args], { env, encoding: "utf8", timeout: 45000 });
   assert((r.status === 0) === ok, `${args.join(" ")}: ${r.stdout}\n${r.stderr}`);
   return r;
 };
-const cli = path.join(pkg, "src/homi.mjs");
-const installed = path.join(data, "current/src/homi.mjs");
+const cli = path.join(pkg, "src/com8.mjs");
+const installed = path.join(data, "current/src/com8.mjs");
 const target = () => fs.realpathSync(path.join(data, "current"));
 const hash = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 try {
@@ -50,11 +50,11 @@ try {
   assert(!fs.existsSync(data), "dry-run created installation state");
   run(cli, ["setup", "--claude"]);
   const first = target();
-  assert(fs.existsSync(path.join(first, "vendor/lib/homi.py")), "durable kernel absent");
+  assert(fs.existsSync(path.join(first, "vendor/lib/com8.py")), "durable kernel absent");
   assert(fs.existsSync(path.join(first, "vendor/lib/bus_broker.py")), "bus absent");
   assert(!fs.existsSync(path.join(first, "vendor/lib/phone")), "phone leaked into core");
-  assert(fs.readlinkSync(path.join(data, "bin/homi")) === "../current/src/homi.mjs", "stable CLI link missing");
-  const untouched = path.join(state, "homi/mail/kept/inbox.jsonl");
+  assert(fs.readlinkSync(path.join(data, "bin/com8")) === "../current/src/com8.mjs", "stable CLI link missing");
+  const untouched = path.join(state, "com8/mail/kept/inbox.jsonl");
   fs.mkdirSync(path.dirname(untouched), { recursive: true });
   fs.writeFileSync(untouched, '{"text":"preserved fixture"}\n');
   run(installed, ["setup", "--claude"]);
@@ -77,17 +77,17 @@ try {
   for (const name of Object.keys(manifest.files)) manifest.files[name] = hash(path.join(next, "vendor", name));
   for (const name of Object.keys(manifest.packageFiles)) manifest.packageFiles[name] = hash(path.join(next, name));
   fs.writeFileSync(manifestFile, JSON.stringify(manifest));
-  const nextCli = path.join(next, "src/homi.mjs");
+  const nextCli = path.join(next, "src/com8.mjs");
   fs.writeFileSync(path.join(home, "fail-client"), "fixture");
   run(nextCli, ["setup", "--claude"], false);
   assert(target() === first, "failed client activation changed current release");
   fs.rmSync(path.join(home, "fail-client"));
   // Refuse unknown executables before switching payloads or refreshing clients.
-  const stableBin = path.join(data, "bin/homi");
+  const stableBin = path.join(data, "bin/com8");
   fs.unlinkSync(stableBin); fs.writeFileSync(stableBin, "owned by another tool");
   run(nextCli, ["setup", "--claude"], false);
   assert(target() === first && fs.readFileSync(stableBin, "utf8") === "owned by another tool", "executable conflict modified the installation");
-  fs.unlinkSync(stableBin); fs.symlinkSync("../current/src/homi.mjs", stableBin);
+  fs.unlinkSync(stableBin); fs.symlinkSync("../current/src/com8.mjs", stableBin);
 
   // Service-manager fixture, never the host's actual launchctl/systemctl. A
   // failed replacement must restore /current BEFORE reloading the previous unit.
@@ -146,7 +146,7 @@ fs.writeFileSync(state,JSON.stringify(job));
   assert(JSON.parse(fs.readFileSync(settings)).enabledPlugins["other@other"], "uninstall damaged another plugin");
   run(nextCli, ["setup", "--no-clients"]);
   assert(fs.existsSync(untouched), "reinstall removed durable mail");
-  fs.appendFileSync(path.join(next, "vendor/lib/homi.py"), "\n# tampered fixture\n");
+  fs.appendFileSync(path.join(next, "vendor/lib/com8.py"), "\n# tampered fixture\n");
   run(nextCli, ["setup", "--no-clients"], false);
   assert(target() === second, "tampered payload was activated");
 
@@ -155,6 +155,6 @@ fs.writeFileSync(state,JSON.stringify(job));
   const linux = serviceDefinition("linux", "/tmp/python tools/python3", "fixture");
   assert(mac.content.includes("python &amp; tools"), "launchd XML path was not escaped");
   assert(linux.content.includes('ExecStart="/tmp/python tools/python3"'), "systemd path with spaces was not quoted");
-  assert(mac.label.startsWith("com.communicate.homi") && linux.label.startsWith("communicate-homi"), "service identity prefix changed");
+  assert(mac.label.startsWith("com.communicate.com8") && linux.label.startsWith("communicate-com8"), "service identity prefix changed");
   console.log("PASS: lifecycle — immutable upgrade, failed activation, rollback, ownership, preserved state, tamper detection and platform service rendering");
 } finally { fs.rmSync(temp, { recursive: true, force: true }); }

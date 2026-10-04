@@ -44,17 +44,17 @@ end
 load ARGV.fetch(0)
 def require_check(value, message); raise message unless value; end
 
-Dir.mktmpdir("homi-formula-") do |root|
+Dir.mktmpdir("com8-formula-") do |root|
   root = Pathname(root).realpath
-  keg = root/"Cellar/homi/0.3.0"
-  opt = root/"opt/homi"
+  keg = root/"Cellar/com8/0.3.0"
+  opt = root/"opt/com8"
   (keg/"libexec/node_modules").mkpath
   (keg/"bin").mkpath
   opt.parent.mkpath
   opt.make_symlink(keg)
-  Homi.skip_clean "share/fixture"
+  Com8.skip_clean "share/fixture"
   [keg, opt].each do |prefix|
-    formula = Homi.new(prefix)
+    formula = Com8.new(prefix)
     require_check(formula.skip_clean?(prefix/"libexec"), "lexical libexec not protected")
     require_check(formula.skip_clean?(keg/"libexec"), "resolved libexec not protected through opt prefix")
     require_check(!formula.skip_clean?(keg/"bin"), "cleanup outside libexec was disabled")
@@ -83,11 +83,11 @@ def main():
     ruby = shutil.which("ruby")
     if not ruby:
         raise SystemExit("Ruby is required for the formula cleanup regression")
-    spec = importlib.util.spec_from_file_location("homi_formula", ROOT / "render-homebrew-formula.py")
+    spec = importlib.util.spec_from_file_location("com8_formula", ROOT / "render-homebrew-formula.py")
     renderer = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(renderer)
-    with tempfile.TemporaryDirectory(prefix="homi-formula-test-") as temporary:
-        formula = Path(temporary) / "homi.rb"
+    with tempfile.TemporaryDirectory(prefix="com8-formula-test-") as temporary:
+        formula = Path(temporary) / "com8.rb"
         formula.write_text(renderer.TEMPLATE.replace("@VERSION@", "0.3.0").replace("@SHA256@", "0" * 64))
         subprocess.run([ruby, "-", str(formula)], input=RUBY, text=True, check=True)
 

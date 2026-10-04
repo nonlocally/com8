@@ -1,0 +1,311 @@
+#!/usr/bin/env python3
+"""com8-boxed-init — the in-box shim that makes a sandboxed agent a com8 peer.
+
+Runs INSIDE the container (stdlib only). Owns the two stable sockets the
+container publishes to the host (guest-listener/host-connector is the only
+direction that crosses the VM boundary — measured):
+
+  /run/com8/agent.sock   INBOUND: the host com8 delivers cc-socks frames here.
+                         Relayed into the live in-box agent session if one
+                         exists, else held durably in /run/com8/inbox.jsonl and
+                         drained when the session appears (in-box store->wake).
+  /run/com8/outbox.sock  OUTBOUND: the host com8 holds a persistent drain
+                         connection; we stream spooled frames and clear each
+                         on its ack (at-least-once).
+
+Outbound mail is written by `com8-boxed-init send <to> <text...>` (the tiny
+client any in-box process can call): it spools a frame to /run/com8/spool/ and
+the pump streams it out. Replies never dial the frame's `from` path — a host
+path means nothing in here; they go through the outbox addressed by name.
+
+Usage:
+  com8-boxed-init [--dir /run/com8] [child-command...]   # the daemon (PID 1)
+  com8-boxed-init send <to> <text...>                    # spool one message
+"""
+import glob
+import json
+import os
+import socket
+import subprocess
+import sys
+import threading
+import time
+import uuid
+
+DIR = os.environ.get("COM8_BOXED_DIR", "/run/com8")
+SESS_DIR = os.environ.get("COM8_BOXED_SESSIONS",
+                          os.path.expanduser("~/.claude/sessions"))
+
+
+def p(*a):
+    return os.path.join(DIR, *a)
+
+
+def log(*a):
+    sys.stderr.write("[boxed-init] " + " ".join(str(x) for x in a) + "\n")
+    sys.stderr.flush()
+
+
+# ---- the send client -----------------------------------------------------------
+
+def cmd_send(argv):
+    if len(argv) < 2:
+        sys.stderr.write("usage: com8-boxed-init send <to> <text...>\n")
+        return 1
+    frame = {"to": argv[0], "text": " ".join(argv[1:]),
+             "msg_id": uuid.uuid4().hex, "ts": time.time()}
+    os.makedirs(p("spool"), exist_ok=True)
+    tmp = p("spool", ".tmp-%s" % frame["msg_id"])
+    with open(tmp, "w") as f:
+        f.write(json.dumps(frame))
+        f.flush()
+        os.fsync(f.fileno())
+    os.rename(tmp, p("spool", "%d-%s.json" % (int(time.time() * 1000),
+                                              frame["msg_id"])))
+    print("spooled: %s" % frame["msg_id"])
+    return 0
+
+
+# ---- inbound: agent.sock -> live session or hold-file ---------------------------
+
+def find_session():
+    """The newest live in-box agent session socket (pid alive + socket path)."""
+    best = None
+    for f in glob.glob(os.path.join(SESS_DIR, "*.json")):
+        try:
+            with open(f) as fh:
+                sc = json.load(fh)
+            pid = int(sc.get("pid") or os.path.basename(f).split(".")[0])
+            sock = sc.get("messagingSocketPath")
+            if not sock or not os.path.exists(sock):
+                continue
+            os.kill(pid, 0)
+            st = sc.get("startedAt") or 0
+            if best is None or st > best[0]:
+                best = (st, sock)
+        except Exception:
+            continue
+    return best[1] if best else None
+
+
+def relay(sock_path, raw_line):
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.settimeout(5)
+    try:
+        s.connect(sock_path)
+        s.sendall(raw_line + b"\n")
+        try:
+            s.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        s.recv(4096)  # best-effort ack read
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            s.close()
+        except OSError:
+            pass
+
+
+def hold(raw_line):
+    with open(p("inbox.jsonl"), "ab") as f:
+        f.write(raw_line + b"\n")
+        f.flush()
+        os.fsync(f.fileno())
+
+
+def drain_held():
+    """Deliver held lines when a session appears; forward-only cursor file."""
+    try:
+        with open(p("inbox.jsonl"), "rb") as f:
+            lines = [ln for ln in f.read().split(b"\n") if ln.strip()]
+    except OSError:
+        return
+    try:
+        cur = int(open(p(".cursor")).read().strip() or 0)
+    except (OSError, ValueError):
+        cur = 0
+    if cur >= len(lines):
+        return
+    sess = find_session()
+    if not sess:
+        return
+    for i in range(cur, len(lines)):
+        if not relay(sess, lines[i]):
+            return
+        with open(p(".cursor"), "w") as f:
+            f.write(str(i + 1))
+    log("drained", len(lines) - cur, "held message(s) into the session")
+
+
+def inbound_server(stop):
+    sp = p("agent.sock")
+    try:
+        os.unlink(sp)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sp)
+    srv.listen(16)
+    srv.settimeout(1.0)
+    log("inbound bound:", sp)
+    while not stop.is_set():
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            return
+        threading.Thread(target=inbound_conn, args=(conn,), daemon=True).start()
+
+
+def inbound_conn(conn):
+    conn.settimeout(5)
+    buf = b""
+    try:
+        while b"\n" not in buf:
+            chunk = conn.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    except OSError:
+        pass
+    line = buf.split(b"\n", 1)[0].strip()
+    if line:
+        # Rewrite `from` to our relay path? No — in-box replies go via the
+        # outbox by name (the send client). Strip nothing; relay verbatim.
+        sess = find_session()
+        if sess and relay(sess, line):
+            ok = True
+        else:
+            hold(line)
+            ok = True  # held durably counts as accepted
+        try:
+            conn.sendall((json.dumps({"ok": ok}) + "\n").encode())
+        except OSError:
+            pass
+    try:
+        conn.close()
+    except OSError:
+        pass
+
+
+# ---- outbound: spool/ -> outbox.sock (host drains, acks clear) -------------------
+
+def outbox_server(stop):
+    sp = p("outbox.sock")
+    try:
+        os.unlink(sp)
+    except OSError:
+        pass
+    srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    srv.bind(sp)
+    srv.listen(4)
+    srv.settimeout(1.0)
+    log("outbox bound:", sp)
+    while not stop.is_set():
+        try:
+            conn, _ = srv.accept()
+        except socket.timeout:
+            continue
+        except OSError:
+            return
+        pump(conn, stop)
+
+
+def pump(conn, stop):
+    """One drain connection: stream spooled frames oldest-first, clear each on
+    its ack line. The host reconnects if we drop."""
+    conn.settimeout(1.0)
+    inflight = {}
+    buf = b""
+    log("host drain connected")
+    try:
+        while not stop.is_set():
+            # 1. offer any spooled frames not yet in flight
+            os.makedirs(p("spool"), exist_ok=True)
+            for f in sorted(os.listdir(p("spool"))):
+                if not f.endswith(".json"):
+                    continue
+                path = p("spool", f)
+                try:
+                    frame = json.load(open(path))
+                except Exception:
+                    os.rename(path, path + ".bad")
+                    continue
+                mid = frame.get("msg_id")
+                if mid in inflight:
+                    continue
+                conn.sendall((json.dumps(frame) + "\n").encode())
+                inflight[mid] = path
+            # 2. read acks
+            try:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    return
+                buf += chunk
+            except socket.timeout:
+                continue
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                try:
+                    ack = json.loads(line.decode())
+                except Exception:
+                    continue
+                path = inflight.pop(ack.get("ack"), None)
+                if path and ack.get("ok"):
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+                elif path:
+                    log("negative ack for", ack.get("ack"), "- kept in spool")
+    except OSError as e:
+        log("drain dropped:", e)
+    finally:
+        try:
+            conn.close()
+        except OSError:
+            pass
+
+
+# ---- main ------------------------------------------------------------------------
+
+def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "send":
+        sys.exit(cmd_send(sys.argv[2:]))
+    args = sys.argv[1:]
+    global DIR
+    if args[:1] == ["--dir"]:
+        DIR = args[1]
+        args = args[2:]
+    os.makedirs(DIR, exist_ok=True)
+    os.makedirs(p("spool"), exist_ok=True)
+    stop = threading.Event()
+    threading.Thread(target=inbound_server, args=(stop,), daemon=True).start()
+    threading.Thread(target=outbox_server, args=(stop,), daemon=True).start()
+
+    child = None
+    if args:
+        log("starting child:", " ".join(args))
+        child = subprocess.Popen(args)
+    try:
+        while True:
+            drain_held()
+            if child is not None and child.poll() is not None:
+                log("child exited:", child.returncode)
+                # keep serving mail; the session may be resumed by exec
+                child = None
+            time.sleep(2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+
+
+if __name__ == "__main__":
+    main()

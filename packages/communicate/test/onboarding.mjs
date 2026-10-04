@@ -124,7 +124,7 @@ test("explicit client-free setup does not install tmux or a terminal profile", a
   assert.equal(f.state.tools.tmux, undefined);
 });
 
-test("fresh selected software is installed before HOMI setup", async () => {
+test("fresh selected software is installed before COM8 setup", async () => {
   const state = snapshot({ missing: ["brew", "python3", "bash", "tmux", "jq", "fzf", "font", "claude", "codex", "ghostty"] });
   const plan = makePlan(state, ["--codex", "--terminal", "--mesh", "--ghostty", "--yes"]);
   assert.deepEqual(plan.blocked, []);
@@ -496,7 +496,7 @@ for (const consent of [true, false]) {
 
 test("automated private invitation never appears in logs or the returned setup plan", async () => {
   const state = snapshot(), plan = makePlan(state), f = fixture(plan, state);
-  const temp = mkdtempSync(path.join(os.tmpdir(), "homi-invite-consent-"));
+  const temp = mkdtempSync(path.join(os.tmpdir(), "com8-invite-consent-"));
   try {
     const code = "commbus1." + Buffer.from(JSON.stringify({ url: "https://shared.example", invite: "private-file-value" })).toString("base64url");
     const file = path.join(temp, "invite"); writeFileSync(file, code, { mode: 0o600 });
@@ -518,7 +518,7 @@ test("automated private invitation never appears in logs or the returned setup p
 for (const mode of ["local", "existing", "invite"]) {
   for (const fails of [false, true]) {
     test(`${mode} bus setup uses the selected Python and restores PATH after ${fails ? "failure" : "success"}`, async () => {
-      const temp = mkdtempSync(path.join(os.tmpdir(), "homi-bus-python-"));
+      const temp = mkdtempSync(path.join(os.tmpdir(), "com8-bus-python-"));
       const originalPath = process.env.PATH;
       try {
         const earlier = path.join(temp, "earlier"), selected = path.join(temp, "selected");
@@ -561,7 +561,7 @@ for (const mode of ["local", "existing", "invite"]) {
 }
 
 test("default command runner preserves literal executable paths and arguments", async () => {
-  const temp = mkdtempSync(path.join(os.tmpdir(), "homi-onboard-argv-"));
+  const temp = mkdtempSync(path.join(os.tmpdir(), "com8-onboard-argv-"));
   try {
     const executable = path.join(temp, "installer ; literal $HOME `echo ignored`.mjs"), log = path.join(temp, "argv.json");
     const sentinel = path.join(temp, "must-not-exist");

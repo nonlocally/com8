@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in actual-client registry restoration checks for an extracted HOMI artifact.
+"""Opt-in actual-client registry restoration checks for an extracted COM8 artifact.
 
 Requires Python 3.11+, Node, and selected client CLIs. Uses fresh private homes,
 local inert plugins and metadata/configuration commands only. No credentials or
@@ -81,8 +81,8 @@ def run_owned(arguments, *, env, cwd, timeout):
 
 
 def artifact(root):
-    require((root / "bin/homi").is_file() and (root / "src/homi.mjs").is_file(),
-            "Use an extracted release containing bin/homi and src/homi.mjs")
+    require((root / "bin/com8").is_file() and (root / "src/com8.mjs").is_file(),
+            "Use an extracted release containing bin/com8 and src/com8.mjs")
     require(not (root / ".git").exists(), "Use an extracted artifact, not a checkout")
     manifest = json.loads((root / "vendor/release.json").read_text())
     release = json.loads((root / "release.json").read_text())
@@ -130,7 +130,7 @@ class Scenario:
         self.forbidden = root / "forbidden-calls"
         for name in ("launchctl", "systemctl", "ssh", "gh", "tailscale", "tmux", "pane"):
             script = self.bin / name
-            script.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$HOMI_QUALIFY_FORBIDDEN"\nexit 93\n')
+            script.write_text('#!/bin/sh\nprintf "%s\\n" "$0 $*" >> "$COM8_QUALIFY_FORBIDDEN"\nexit 93\n')
             script.chmod(0o700)
         for name, binary in {**providers, "node": node}.items():
             if binary:
@@ -144,11 +144,11 @@ class Scenario:
                     "XDG_STATE_HOME": str(self.home / ".local/state"), "XDG_CACHE_HOME": str(self.home / ".cache"),
                     "XDG_RUNTIME_DIR": str(root / "run"), "TMPDIR": str(root / "tmp"),
                     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1",
-                    "PYTHONDONTWRITEBYTECODE": "1", "LC_ALL": "C", "HOMI_QUALIFY_FORBIDDEN": str(self.forbidden)}
+                    "PYTHONDONTWRITEBYTECODE": "1", "LC_ALL": "C", "COM8_QUALIFY_FORBIDDEN": str(self.forbidden)}
         for folder in (root / "run", root / "tmp", self.home / ".claude", self.home / ".codex", self.home / "state"):
             folder.mkdir(mode=0o700)
         self.claude_settings = self.home / ".claude/settings.json"
-        private_json(self.claude_settings, {"env": {"HOMI_RESTORATION_SENTINEL": "preserve-unrelated"},
+        private_json(self.claude_settings, {"env": {"COM8_RESTORATION_SENTINEL": "preserve-unrelated"},
                                             "permissions": {"allow": []}})
         self.codex_config = self.home / ".codex/config.toml"
         self.codex_base = '# fixture-only unrelated settings\n[sandbox_workspace_write]\nwritable_roots = []\n\n[profiles.restoration_sentinel]\nmodel_reasoning_effort = "low"\n'
@@ -175,8 +175,8 @@ class Scenario:
     def client(self, *args):
         return self.run(self.provider + " " + " ".join(args), [self.bin / self.provider, *args])
 
-    def homi(self, *args):
-        return self.run("homi " + " ".join(args), [self.runtime / "bin/homi", *args])
+    def com8(self, *args):
+        return self.run("com8 " + " ".join(args), [self.runtime / "bin/com8", *args])
 
     def config(self, provider=None):
         if (provider or self.provider) == "claude":
@@ -247,9 +247,9 @@ class Scenario:
         unrelated = self.config(other)
         preserved = self.sentinel.read_bytes()
         for removal in ("selective", "full"):
-            self.homi("setup", "--" + self.provider, "--no-service")
+            self.com8("setup", "--" + self.provider, "--no-service")
             if removal == "selective":
-                self.homi("update", "--" + self.provider, "--no-service")
+                self.com8("update", "--" + self.provider, "--no-service")
             active = self.snapshot()
             self.report[removal + "_active"] = active
             self.check(removal + " setup installed plugin", len(active["plugins"]) == 1)
@@ -259,7 +259,7 @@ class Scenario:
             self.report[removal + "_runtime"] = str(active_path)
             ledger = json.loads((self.home / "data/install.json").read_text())
             self.check(removal + " no managed service", not ledger.get("service"))
-            self.homi("uninstall", *(["--" + self.provider] if removal == "selective" else []))
+            self.com8("uninstall", *(["--" + self.provider] if removal == "selective" else []))
             restored = self.snapshot()
             self.report[removal + "_restored"] = restored
             self.check(removal + " restores original registry and settings", restored == before)
@@ -303,7 +303,7 @@ def main():
             for scenario in scenarios:
                 if scenario == "policy" and provider != "codex":
                     continue
-                with tempfile.TemporaryDirectory(prefix="homi-client-restore-") as temp:
+                with tempfile.TemporaryDirectory(prefix="com8-client-restore-") as temp:
                     case = Scenario(runtime, Path(temp).resolve(), provider, scenario, providers, node, args.timeout)
                     try:
                         case.execute()

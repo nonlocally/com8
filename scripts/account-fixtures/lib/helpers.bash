@@ -6,7 +6,7 @@
 # ==============================================================================
 
 # Root is explicit so donor fixtures cannot fall back to a live Anu install.
-ANU_ROOT="${HOMI_TEST_ROOT:?isolated fixture runner required}"
+ANU_ROOT="${COM8_TEST_ROOT:?isolated fixture runner required}"
 export ANU_ROOT
 # --- temp dirs, auto-cleaned on exit -----------------------------------------
 declare -a _ANU_TMP=()

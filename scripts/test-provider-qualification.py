@@ -86,7 +86,7 @@ class ProofTests(unittest.TestCase):
                 recipient = clients["initial"]
                 if not recipient.closed or not recipient.completed:
                     raise RuntimeError("live recipient would auto-dequeue before harness shutdown")
-                payload = fields["message"].split("HOMI_PAYLOAD_BEGIN\n", 1)[1].rsplit("\nHOMI_PAYLOAD_END", 1)[0]
+                payload = fields["message"].split("COM8_PAYLOAD_BEGIN\n", 1)[1].rsplit("\nCOM8_PAYLOAD_END", 1)[0]
                 state["reply_context"] = {"id": "message", "payload": payload, "recipient": "recipient", "hub": hub}
                 with sqlite3.connect(recipient.cwd / "state/bus/bus.sqlite3") as db:
                     db.execute("CREATE TABLE messages(id TEXT, conversation TEXT)")

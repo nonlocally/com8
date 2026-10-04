@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify an extracted HOMI release with a real disposable-runner user manager.
+"""Qualify an extracted COM8 release with a real disposable-runner user manager.
 
 Refuses shared hosts before opening the artifact or creating files. The runner's
 real HOME is required for systemd's default unit search; only fresh data/state,
@@ -42,12 +42,12 @@ class Proof:
         require(Path(os.environ["HOME"]).resolve() == self.home, "HOME must be the runner account's real home")
         self.work.mkdir(parents=True, mode=0o700)
         os.chmod(self.work, 0o700)
-        self.base = Path(tempfile.mkdtemp(prefix="homi-sd-", dir="/tmp"))
-        self.env = {key: value for key, value in os.environ.items() if not key.startswith(("HOMI_", "COMM_", "COMMUNICATE_", "XDG_", "DBUS_", "CLAUDE_", "CODEX_"))}
+        self.base = Path(tempfile.mkdtemp(prefix="com8-sd-", dir="/tmp"))
+        self.env = {key: value for key, value in os.environ.items() if not key.startswith(("COM8_", "COMM_", "COMMUNICATE_", "XDG_", "DBUS_", "CLAUDE_", "CODEX_"))}
         self.env.update(HOME=str(self.home), COMMUNICATE_DATA=str(self.base / "data"),
-                        COMM_STATE=str(self.base / "state"), HOMI_SELF="systemd-proof",
-                        HOMI_SOCK_DIR=str(self.base / "socks"), HOMI_SESSIONS_DIR=str(self.base / "sessions"),
-                        HOMI_TMUX_SOCKET=str(self.base / "tmux.sock"),
+                        COMM_STATE=str(self.base / "state"), COM8_SELF="systemd-proof",
+                        COM8_SOCK_DIR=str(self.base / "socks"), COM8_SESSIONS_DIR=str(self.base / "sessions"),
+                        COM8_TMUX_SOCKET=str(self.base / "tmux.sock"),
                         CLAUDE_CONFIG_DIR=str(self.base / "claude"), CODEX_HOME=str(self.base / "codex"),
                         XDG_RUNTIME_DIR=f"/run/user/{os.getuid()}",
                         DBUS_SESSION_BUS_ADDRESS=f"unix:path=/run/user/{os.getuid()}/bus",
@@ -81,15 +81,15 @@ class Proof:
     def protected_state(self):
         paths = self.home / ".config/systemd/user"
         files = {str(p.relative_to(paths)): fingerprint(p) for p in paths.rglob("*")
-                 if "homi" in p.name and p != self.unit and (p.is_file() or p.is_symlink())} if paths.exists() else {}
+                 if "com8" in p.name and p != self.unit and (p.is_file() or p.is_symlink())} if paths.exists() else {}
         units = set()
         for command in ("list-units", "list-unit-files"):
             # Some systemd releases exit 1 for an unmatched unit-file pattern.
-            # Read the inventory successfully, then select HOMI names locally;
+            # Read the inventory successfully, then select COM8 names locally;
             # a manager failure must still fail this protection check.
             result = self.manager(command, "--all", "--no-legend", "--plain")
             units.update(line.split()[0] for line in result.stdout.splitlines()
-                         if line.split() and "homi" in line.split()[0])
+                         if line.split() and "com8" in line.split()[0])
         units.discard(self.label)
         return {"files": files, "units": {name: self.state(name) for name in sorted(units)},
                 "client_configs": {str(p): fingerprint(p) for p in
@@ -100,11 +100,11 @@ class Proof:
         if ready.returncode:
             require(self.bootstrap, "user manager unavailable; --start-user-manager is required on this disposable runner")
             # Starting a user's default target can activate already-enabled
-            # units. Only bootstrap a fresh runner with no existing HOMI units.
+            # units. Only bootstrap a fresh runner with no existing COM8 units.
             for root in (self.home / ".config/systemd/user", self.home / ".local/share/systemd/user",
                          Path("/etc/systemd/user"), Path("/usr/lib/systemd/user")):
-                require(not root.exists() or not any("homi" in p.name for p in root.rglob("*")),
-                        "manager bootstrap refused: pre-existing HOMI unit files require an already-running manager")
+                require(not root.exists() or not any("com8" in p.name for p in root.rglob("*")),
+                        "manager bootstrap refused: pre-existing COM8 unit files require an already-running manager")
             account = pwd.getpwuid(os.getuid()).pw_name
             linger = self.run("loginctl", "show-user", account, "--property=Linger", "--value", check=False).stdout.strip()
             if linger != "yes":
@@ -124,7 +124,7 @@ class Proof:
         self.report["systemd_version"] = self.run("systemctl", "--version").stdout.splitlines()[0]
 
     def cli(self, *args, **kwargs):
-        return self.run(self.runtime / "bin/homi", *args, **kwargs)
+        return self.run(self.runtime / "bin/com8", *args, **kwargs)
 
     def status(self):
         result = self.cli("status", "--json", check=False)
@@ -160,27 +160,27 @@ class Proof:
         definition = json.loads(self.run("node", "--input-type=module", "-e", program,
                                         self.runtime / "src/lifecycle.mjs", shutil.which("python3")).stdout)
         self.label, self.unit = definition["label"], Path(definition["path"])
-        require(self.label.startswith("communicate-homi-") and self.label.endswith(".service"), "qualification needs a scoped unit")
+        require(self.label.startswith("communicate-com8-") and self.label.endswith(".service"), "qualification needs a scoped unit")
         require(self.unit == self.home / ".config/systemd/user" / self.label, "unexpected user unit search path")
         require(not self.unit.exists() and not self.unit.is_symlink() and self.state(self.label)["LoadState"] == "not-found",
                 "qualification unit already exists; refusing to adopt it")
         self.report.update(unit=self.label, unit_path=str(self.unit))
         self.protected = self.protected_state()
         self.report["protected_before"] = self.protected
-        setup = ["setup", "--no-clients", "--service", "--service-inherit=HOMI_SOCK_DIR",
-                 "--service-inherit=HOMI_SESSIONS_DIR", "--service-inherit=HOMI_TMUX_SOCKET",
+        setup = ["setup", "--no-clients", "--service", "--service-inherit=COM8_SOCK_DIR",
+                 "--service-inherit=COM8_SESSIONS_DIR", "--service-inherit=COM8_TMUX_SOCKET",
                  "--service-inherit=CLAUDE_CONFIG_DIR", "--service-inherit=CODEX_HOME"]
         self.setup_attempted = True
         self.cli(*setup)
         first, first_unit = self.await_runtime()
         active = (self.base / "data/current").resolve(strict=True)
-        require(first["self"]["source_file"] == str(active / "vendor/lib/homi.py"), "daemon uses a source checkout or another payload")
+        require(first["self"]["source_file"] == str(active / "vendor/lib/com8.py"), "daemon uses a source checkout or another payload")
         require(first["self"]["source_commit"] == self.report["artifact"]["source"]["commit"], "daemon commit does not match the artifact")
-        require(first["self"]["sock_dir"] == self.env["HOMI_SOCK_DIR"], "service lost its private socket root")
+        require(first["self"]["sock_dir"] == self.env["COM8_SOCK_DIR"], "service lost its private socket root")
         require(Path(first_unit["FragmentPath"]).resolve() == self.unit.resolve(), "manager loaded a different unit")
         require(first_unit["UnitFileState"] == "enabled", "service was not enabled")
         service_record = json.loads((self.base / "data/install.json").read_text())["service"]
-        for key in ("HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR", "HOMI_TMUX_SOCKET", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
+        for key in ("COM8_SOCK_DIR", "COM8_SESSIONS_DIR", "COM8_TMUX_SOCKET", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
             require(service_record["environment"][key] == self.env[key], "service omitted an explicit fixture environment value")
         self.report["first_status"] = first["self"]
         self.check("CLI-only setup starts the scoped installed payload with private roots and matching manager PID")
@@ -189,9 +189,9 @@ class Proof:
         sentinel = "systemd-persistence-'literal'-$HOME-`no-shell`-" + self.base.name
         self.cli("send", "systemd-proof", "--from", "qualification", "--", sentinel)
         require(sentinel in self.cli("inbox", "systemd-proof").stdout, "durable inbox lacks literal sentinel")
-        mail_path = self.base / "state/homi/mail/systemd-proof/inbox.jsonl"
+        mail_path = self.base / "state/com8/mail/systemd-proof/inbox.jsonl"
         mail = mail_path.read_bytes()
-        identities = json.loads((self.base / "state/homi/identities.json").read_text())
+        identities = json.loads((self.base / "state/com8/identities.json").read_text())
         unit_before = fingerprint(self.unit)
         self.cli(*setup)
         repeated, repeated_unit = self.await_runtime()
@@ -203,7 +203,7 @@ class Proof:
         self.manager("restart", self.label)
         restarted, _ = self.await_runtime(first["self"]["pid"])
         require(restarted["self"]["source_file"] == first["self"]["source_file"], "restart changed runtime provenance")
-        require(mail_path.read_bytes() == mail and json.loads((self.base / "state/homi/identities.json").read_text()) == identities,
+        require(mail_path.read_bytes() == mail and json.loads((self.base / "state/com8/identities.json").read_text()) == identities,
                 "manager restart changed durable identity or mail")
         require(sentinel in self.cli("inbox", "systemd-proof").stdout, "restarted service cannot read preserved mail")
         self.report["restarted_pid"] = restarted["self"]["pid"]
@@ -216,12 +216,12 @@ class Proof:
         require(not self.unit.exists() and not self.unit.is_symlink(), "first uninstall left the owned unit")
         require(not Path(f'/proc/{restarted["self"]["pid"]}').exists(), "first uninstall left the managed process alive")
         require(self.status() is None, "first uninstall left a responding daemon")
-        require(mail_path.read_bytes() == mail and json.loads((self.base / "state/homi/identities.json").read_text()) == identities,
+        require(mail_path.read_bytes() == mail and json.loads((self.base / "state/com8/identities.json").read_text()) == identities,
                 "uninstall removed or changed persistent identity/mail")
         self.check("first uninstall stops and removes the owned service while preserving identity and mail")
         require(artifact.files(self.runtime) == artifact_before, "qualification mutated the input artifact")
-        require(self.protected_state() == self.protected, "pre-existing HOMI units or client configuration changed")
-        self.check("input artifact, pre-existing HOMI units and client configuration remain unchanged")
+        require(self.protected_state() == self.protected, "pre-existing COM8 units or client configuration changed")
+        self.check("input artifact, pre-existing COM8 units and client configuration remain unchanged")
         self.report["ok"] = True
 
     def cleanup(self):
@@ -234,7 +234,7 @@ class Proof:
             except Exception as error:
                 errors.append("cannot inspect owned service ledger: " + str(error))
         if self.setup_attempted and self.unit and (ledger_service or self.unit.exists() or self.unit.is_symlink()):
-            # Use the installer's ownership checks; never blanket-stop HOMI units
+            # Use the installer's ownership checks; never blanket-stop COM8 units
             # or unlink a changed/foreign service just to make cleanup pass.
             try:
                 self.cli("uninstall", "--no-clients")

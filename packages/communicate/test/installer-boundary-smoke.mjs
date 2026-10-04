@@ -7,11 +7,11 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const pkg = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const cli = path.join(pkg, 'src/homi.mjs');
+const cli = path.join(pkg, 'src/com8.mjs');
 // macOS's per-user TMPDIR leaves too little room for the Unix control socket.
 // Keep both the state root and peer sockets short and private, like other
-// daemon fixtures; HOMI_SOCK_DIR alone does not move state/homi/homi.sock.
-const temp = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'homi-install-'));
+// daemon fixtures; COM8_SOCK_DIR alone does not move state/com8/com8.sock.
+const temp = fs.mkdtempSync(path.join(process.platform === 'darwin' ? '/tmp' : os.tmpdir(), 'com8-install-'));
 const homes = [];
 const daemons = [];
 function fixture(name) {
@@ -21,9 +21,9 @@ function fixture(name) {
     COMM_STATE: path.join(home, 'state'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
     CODEX_HOME: path.join(home, '.codex'), XDG_CONFIG_HOME: path.join(home, '.config'),
     PATH: path.join(home, 'bin') + path.delimiter + process.env.PATH };
-  for (const key of ['HOMI_SOCK','HOMI_SOCK_DIR','HOMI_SESSIONS_DIR','HOMI_DAEMON_DIR','CLAUDE_CODE_MESSAGING_SOCKET','COMMUNICATE_HOME','CODEX_THREAD_ID']) delete env[key];
-  env.HOMI_SOCK_DIR = path.join(home, 'socks');
-  env.HOMI_SESSIONS_DIR = path.join(home, 'sessions');
+  for (const key of ['COM8_SOCK','COM8_SOCK_DIR','COM8_SESSIONS_DIR','COM8_DAEMON_DIR','CLAUDE_CODE_MESSAGING_SOCKET','COMMUNICATE_HOME','CODEX_THREAD_ID']) delete env[key];
+  env.COM8_SOCK_DIR = path.join(home, 'socks');
+  env.COM8_SESSIONS_DIR = path.join(home, 'sessions');
   fs.writeFileSync(path.join(home, 'bin/claude'), `#!/usr/bin/env node
 const fs=require('node:fs'),path=require('node:path'),a=process.argv.slice(2),h=process.env.HOME;
 fs.appendFileSync(path.join(h,'calls'),JSON.stringify(a)+'\\n');
@@ -120,7 +120,7 @@ try {
 
   const installedRepoSetup = spawnSync(path.join(pkg,'vendor/bin/communicate'), ['setup-repo','--dry-run'], { env: normal.env, encoding: 'utf8', timeout: 15000 });
   assert.notEqual(installedRepoSetup.status,0);
-  assert.match(installedRepoSetup.stderr,/installed HOMI release: use homi setup/);
+  assert.match(installedRepoSetup.stderr,/installed COM8 release: use com8 setup/);
   assert(!fs.existsSync(path.join(normal.env.COMMUNICATE_DATA,'repo-path')));
   const damaged = fixture('missing-dependencies'); run(damaged, ['setup','--no-clients']);
   const active = fs.realpathSync(path.join(damaged.env.COMMUNICATE_DATA,'current'));
@@ -130,15 +130,15 @@ try {
   assert.equal(fs.realpathSync(path.join(damaged.env.COMMUNICATE_DATA,'current')),active);
   const busy = fixture('running-unmanaged-daemon'); run(busy, ['setup','--no-clients']);
   const busyRoot = fs.realpathSync(path.join(busy.env.COMMUNICATE_DATA,'current'));
-  const busyCli = path.join(busyRoot,'src/homi.mjs');
+  const busyCli = path.join(busyRoot,'src/com8.mjs');
   const start = spawnSync(process.execPath,[busyCli,'start'],{env:busy.env,encoding:'utf8',timeout:15000});
   daemons.push([busyCli,busy.env]);
-  const daemonLog = path.join(busy.env.COMM_STATE, 'homi/daemon.log');
+  const daemonLog = path.join(busy.env.COMM_STATE, 'com8/daemon.log');
   assert.equal(start.status,0,[start.error?.message, start.stdout, start.stderr,
     fs.existsSync(daemonLog) ? fs.readFileSync(daemonLog, 'utf8') : 'daemon log not created'].filter(Boolean).join('\n'));
   const purge = run(busy,['uninstall','--purge'],false);
   assert.match(purge.stderr,/running daemon still uses a retained release/);
-  assert(fs.existsSync(path.join(busyRoot,'vendor/lib/homi.py')),'purge deleted active daemon code');
+  assert(fs.existsSync(path.join(busyRoot,'vendor/lib/com8.py')),'purge deleted active daemon code');
   const stop = spawnSync(process.execPath,[busyCli,'stop'],{env:busy.env,encoding:'utf8',timeout:15000});
   assert.equal(stop.status,0,stop.stdout+stop.stderr);
   run(busy,['uninstall','--purge']);

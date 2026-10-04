@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# COM8's public entry point. Keep each address space explicit and preserve the
+# proven communicate implementation underneath it.
+set -euo pipefail
+
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  self_dir="$(cd "$(dirname "$self")" && pwd)"
+  self="$(readlink "$self")"
+  [[ "$self" = /* ]] || self="$self_dir/$self"
+done
+root="$(cd "$(dirname "$self")/.." && pwd)"
+cmd="${1:---help}"
+[ "$#" -eq 0 ] || shift
+
+package_cli() {
+  local candidate
+  for candidate in "${COM8_PACKAGE_CLI:-}" \
+      "$root/../src/com8.mjs" "$root/packages/communicate/src/com8.mjs"; do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+      exec node "$candidate" "$cmd" "$@"
+    fi
+  done
+  printf 'com8: package management is unavailable in this source-only payload; install a COM8 release.\n' >&2
+  exit 127
+}
+
+case "$cmd" in
+  help|-h|--help)
+    cat <<'EOF'
+COM8 — persistent agent identities, communication, and execution
+
+  com8 setup [--claude|--codex|--no-clients] [--service] [--dry-run]
+  com8 setup --guided              choose clients, dependencies, profiles and bus
+  com8 setup --model               configure a named model connection during setup
+  com8 setup --install-missing [--claude|--codex|--no-clients]
+             [--terminal] [--mesh] [--ghostty] [--service|--no-service]
+             [--yes] [--dry-run]
+  com8 doctor | version | update | rollback | uninstall
+
+  com8 start | status | agents
+  com8 claim NAME ...              assign a durable identity
+  com8 spawn ...                   create an agent execution
+  com8 send NAME MESSAGE ...       send durable mail
+  com8 inbox NAME                  read stored messages
+  com8 ask | reply | wait ...       request and receive replies
+  com8 seat ...                    observe and control execution
+
+  com8 bus ...                     register, discover, and message on a bus
+  com8 native ...                  existing communicate native/session commands
+  com8 model ...                   named private model connections for coding clients
+  com8 profile ...                 optional terminal and mesh configuration
+
+An identity can retain mail while its execution is stopped. Bus registration
+and native sessions retain their own addresses and delivery capabilities.
+The communicate command remains compatible. See docs/CLI.md for examples.
+Bare setup in a terminal starts the guide. Dependencies are installed only
+after a reviewed plan; noninteractive dependency setup requires --yes.
+EOF
+    ;;
+  setup|update|rollback|uninstall|doctor|serve)
+    package_cli "$@"
+    ;;
+  version|--version)
+    if [ -f "$root/VERSION" ]; then
+      printf 'COM8 '; cat "$root/VERSION"
+    else
+      package_cli "$@"
+    fi
+    ;;
+  bus)
+    exec "$root/bin/communicate" bus "$@"
+    ;;
+  native)
+    exec "$root/bin/communicate" "$@"
+    ;;
+  model)
+    exec "${COM8_PYTHON:-python3}" -B "$root/lib/model_connections.py" "$@"
+    ;;
+  profile|profiles)
+    if [ ! -f "$root/profiles/manage.py" ]; then
+      printf 'com8: profiles are unavailable in this installation.\n' >&2
+      exit 127
+    fi
+    exec python3 "$root/profiles/manage.py" "$@"
+    ;;
+  daemon)
+    exec "$root/bin/communicate" com8 "$@"
+    ;;
+  *)
+    exec "$root/bin/communicate" com8 "$cmd" "$@"
+    ;;
+esac
