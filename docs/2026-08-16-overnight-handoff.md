@@ -3,7 +3,7 @@
 *2026-08-16, overnight session. Everything below is committed on `fabric-v2`
 (pushed), tested (**171/171 across 11 suites**), live-proven on real hardware
 where noted, and hardened against an adversarial code review. Nothing in
-`~/COM8` was touched or deleted.*
+the anu monorepo checkout (the retired predecessor repository) was touched or deleted.*
 
 ## What exists now, in one paragraph
 
@@ -149,7 +149,7 @@ noted here so they're not lost):
 
 1. **`npm publish`** of `@aadarwal/com8` (+ `mcp-publisher` registry push) —
    built + tarball-verified locally; publishing is outward-facing.
-2. **`~/COM8` retirement** — you said you'd drive deletion in the morning.
+2. **Retirement of the anu monorepo checkout** — you said you'd drive deletion in the morning.
    The harvest triage (what to keep/reject and why) is in
    `docs/studies/2026-08-16-harvest-old-com8.md`.
 3. **Cross-fleet live test with a real second operator** — the machinery is

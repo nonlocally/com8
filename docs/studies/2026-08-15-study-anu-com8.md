@@ -1,6 +1,8 @@
-# Study: anu/COM8 comm, identity, and cross-device layers (evidence base for the agent-fabric design)
+# Study: the anu monorepo comm, identity, and cross-device layers (evidence base for the agent-fabric design)
 
-Date: 2026-08-15 · Method: subagent deep-read of /Users/aadarwal/COM8 (= QPG-MIT/COM8)
+*Historical note: this study predates the product rename; "anu monorepo" refers to the retired predecessor repository, not to this repository.*
+
+Date: 2026-08-15 · Method: subagent deep-read of the local anu monorepo checkout (QPG-MIT predecessor project)
 Repo: 513 commits, all self-authored; 100+ PRs. Comm-layer arc: #4 taa/tra/tscale → #7 al/alw
 → #22 agentlog → #25 meshsync → #26 mesh spawn → #43 the anu plugin (`pane`) → #44 MCP →
 #49 conduct/see a team → #51 reply channel → #52 contained reply (box) → #53/54/55
@@ -184,7 +186,7 @@ stale swarm JSON. (4) Reuse the watchd daemon lifecycle. (5) Consume viz/state.j
 `pane needs --json` + `pane status --json` as stable contracts. (6) **Cross-device auth is a
 greenfield decision** — no prior art to preserve.
 
-## What anu/COM8 got right (must survive any merge)
+## What the anu monorepo got right (must survive any merge)
 
 1. One command, no fumbling — the substrate owns tmux/Enter/quoting/timing.
 2. Verify by observed state, never hope; exit 2 for sent-but-unconfirmed.

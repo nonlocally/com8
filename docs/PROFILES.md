@@ -222,7 +222,7 @@ minimal secrets client against fake providers/network/stores. Real quota-driven
 handoff and private service access still need separate acceptance checks.
 
 Where Ghostty is installed, qualify its actual parser against the release with
-`python3 scripts/qualify-ghostty.py /path/to/com8-0.3.0`. This installs the artifact's
+`python3 scripts/qualify-ghostty.py /path/to/com8-VERSION`. This installs the artifact's
 terminal profile in a temporary home, validates the generated include, checks the
 loaded settings, and requires rejection of a deliberately invalid option. It opens
 no window and checks neither rendering nor whether the requested font is available.

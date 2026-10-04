@@ -20,8 +20,10 @@ path that owns the target; a matching label in another path is not a substitute.
 | Registered bus agent | `com8 bus status`, `register`, `agents`, `send`, `reply` | Exact registrations under the selected hub's membership rules. |
 | Terminal seat | `com8 seat spawn`, `read`, `send`, `state`, `bind` | Explicit terminal control on the configured tmux server or granted remote link. |
 
-The compatible forms are `communicate com8`, `communicate`, and `communicate
-bus`. The plugin identifier remains `communicate@communicate` during migration.
+`communicate com8` is the kernel's subcommand spelling of `com8`; `communicate`
+and `communicate bus` keep their own meanings. The previous release's command,
+MCP tool and skill names are not aliased. The plugin identifier remains
+`communicate@communicate`.
 MCP tools `com8_*` expose durable identities/seats; existing `bus_*` and native
 tools retain their meanings. `com8 profile` is optional terminal/mesh setup;
 do not alter shell or desktop settings to satisfy a messaging request.

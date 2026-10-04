@@ -48,7 +48,7 @@ Your agent selects the saved connection when it launches that worker. Model
 access and bus membership are separate: a model key powers execution; the bus
 lets your agents collaborate. See [model connections](docs/MODELS.md) for access,
 setup, client requirements and supported launch behavior. Model connections
-require COM8 0.5 or later.
+require release 0.5 or later (0.6.0 is the first COM8-named release).
 
 ## Give your agents a task
 

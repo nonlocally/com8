@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Qualify an extracted COM8 runtime without a checkout or provider credentials.
 
-Usage: python3 qualify-installed.py /path/to/com8-0.3.0 [--previous-runtime PATH]
+Usage: python3 qualify-installed.py /path/to/com8-VERSION [--previous-runtime PATH]
 Only disposable copies/homes are changed. No service manager, provider, network,
 package manager, Git checkout, or existing tmux server is used. JSON is stdout.
 """

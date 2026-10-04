@@ -107,8 +107,8 @@ source. All three archives must have the same reviewed checksum.
 
 ```json
 {
-  "runtime": "/private/release/com8-0.3.0",
-  "archive": "/private/release/com8-0.3.0.tar.gz",
+  "runtime": "/private/release/com8-0.6.0",
+  "archive": "/private/release/com8-0.6.0.tar.gz",
   "archive_sha256": "<64 hexadecimal characters>",
   "source": "<full reviewed release source commit>",
   "timeout": 360,
@@ -118,8 +118,8 @@ source. All three archives must have the same reviewed checksum.
       "python": "/opt/homebrew/bin/python3",
       "path": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       "provider_bin": "/private/provider-bin/claude",
-      "runtime": "/private/release/com8-0.3.0",
-      "archive": "/private/release/com8-0.3.0.tar.gz",
+      "runtime": "/private/release/com8-0.6.0",
+      "archive": "/private/release/com8-0.6.0.tar.gz",
       "client_home": "/private/fleet-claude-home",
       "disposable_home": true,
       "evidence": "/private/evidence/fleet-claude-run-1",
@@ -130,8 +130,8 @@ source. All three archives must have the same reviewed checksum.
       "python": "/opt/homebrew/bin/python3",
       "path": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
       "provider_bin": "/private/provider-bin/codex",
-      "runtime": "/private/release/com8-0.3.0",
-      "archive": "/private/release/com8-0.3.0.tar.gz",
+      "runtime": "/private/release/com8-0.6.0",
+      "archive": "/private/release/com8-0.6.0.tar.gz",
       "client_home": "/private/fleet-codex-home",
       "disposable_home": true,
       "evidence": "/private/evidence/fleet-codex-run-1",
@@ -160,8 +160,8 @@ or copied between devices. Do not put credential values in the run config.
 ## Local validation and live invocation
 
 ```sh
-python3 scripts/qualify-provider-fleet.py self-test /private/release/com8-0.3.0 \
-  --archive /private/release/com8-0.3.0.tar.gz \
+python3 scripts/qualify-provider-fleet.py self-test /private/release/com8-0.6.0 \
+  --archive /private/release/com8-0.6.0.tar.gz \
   --archive-sha256 <reviewed-sha256>
 python3 scripts/test-provider-qualification.py
 

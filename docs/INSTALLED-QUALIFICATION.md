@@ -5,7 +5,7 @@ Extract the archive; no repository checkout, Python packages, model credentials,
 or fixture tree are required. The machine needs Node, Python 3.9+, and Bash 4+.
 
 ```sh
-python3 qualify-installed.py /path/to/com8-0.3.0 > qualification.json
+python3 qualify-installed.py /path/to/com8-VERSION > qualification.json
 ```
 
 The exit status is zero when the exercised checks pass. JSON separates passing

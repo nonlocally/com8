@@ -6,7 +6,7 @@ Node, and the selected client CLIs. This testing requirement is separate from
 COM8's Python 3.9+ runtime requirement.
 
 ```sh
-python3 scripts/qualify-client-restoration.py /path/to/com8-0.3.0 \
+python3 scripts/qualify-client-restoration.py /path/to/com8-VERSION \
   --run-clients --evidence /path/to/new-private-evidence-directory
 ```
 

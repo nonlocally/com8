@@ -1,6 +1,9 @@
 # com8 distribution + MCP server — design (buildable)
 
-Date: 2026-08-16 · Verified now: npm `com8` is TAKEN (dead package) → scoped name required;
+*Historical note: this study predates the product rename; its npm-name check concerned the previous name and was reworded on 2026-10-04.*
+
+Date: 2026-08-16 · Verified now: the bare npm name for the previous product name is TAKEN (dead package) → scoped
+name required (this check was for the previous name and has not been redone for `com8`);
 `@modelcontextprotocol/sdk` latest = 1.30.0 (no 2026-07-28 beta dist-tag on npm yet); node 26,
 python3 3.14; `claude mcp add` (stdio + `--transport http`) and `codex mcp add` both present.
 

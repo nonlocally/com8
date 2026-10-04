@@ -1,4 +1,4 @@
-# @aadarwal/com8 — compatibility package
+# @aadarwal/com8 — legacy-interface package (new name as of 0.6.0)
 
 COM8 now ships one combined artifact with durable identities and mailboxes,
 terminal seats, native Claude/Codex delivery, the bus, and optional workstation
@@ -27,7 +27,9 @@ identity, `--no-mcp` maps to `--no-clients`, and `--no-persist` maps to
 `--no-service`. Legacy setup preserves the measured claim/send/inbox self-test.
 Without `--no-persist`, legacy setup requests a persistent user service. The
 combined installation's stable daemon is preferred to an old legacy daemon path.
-All faces resolve the same `COMM_STATE` and control socket; existing durable
-state is preserved. Node.js 20+ and Python 3.9+ are required; seats require tmux.
+All faces of one installation resolve the same `COMM_STATE` and control socket,
+so durable state is kept across COM8 updates. An upgrade from the previous
+product name does not carry it over: the durable state subdirectory and control
+socket moved (see the upgrade notes in [docs/INSTALL.md](../../docs/INSTALL.md)). Node.js 20+ and Python 3.9+ are required; seats require tmux.
 
 MIT license.

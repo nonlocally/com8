@@ -1,6 +1,7 @@
 # Workstation source provenance
 
-Selected shell, Ghostty, tmux, and mesh helpers are adapted from Anu/COM8,
+Selected shell, Ghostty, tmux, and mesh helpers are adapted from the Anu monorepo
+(the predecessor project; repository name rewritten by the 2026-10-04 rename),
 commit `80d3c86`, authored by Aadarsh Agarwal and contributors. Imported at the
 owner's direction for the MIT-licensed COM8 consolidation on 2026-09-24.
 

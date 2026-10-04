@@ -2,6 +2,8 @@
 
 Date: 2026-08-15 · Status: **draft, awaiting review** · Home: the `communicate` repo (grows into v0.3)
 
+*Historical note: this document predates the product rename; references to the retired predecessor project (the anu monorepo and its Go engine extraction) were reworded on 2026-10-04 and do not describe this repository.*
+
 > This design merges two systems that each solved one half of the same problem.
 > **communicate** delivers a message *as a turn* — an inbound socket message resumes
 > an idle Claude session ("a message is a wake"), rendered as an attributed peer
@@ -35,11 +37,11 @@ The organizing spine is the four-layer decomposition:
 
 1. **Home = the `communicate` repo.** The socket protocol, the registry (name→capability),
    the mailbox, and the reply-channel discipline all live here or map cleanly onto it; the
-   studies' verdict was "one home." `QPG-MIT/COM8-engine` — the Go kernel that first named
+   studies' verdict was "one home." The predecessor engine repository (slug rewritten by the 2026-10-04 rename) — the Go kernel that first named
    "identity is a registry object, not a pane id" — is the thesis but **no longer exists on
    GitHub; the only copy is on this disk** (push it somewhere before designing further on it).
 
-2. **Com8 per device, not per agent.** One lightweight launchd-managed daemon owns the
+2. **COM8 per device, not per agent.** One lightweight launchd-managed daemon owns the
    mailboxes, the route table, the liveness loop, and the store→wake handoff. Individual
    agents do **not** need a stable reachable address; the com8 does. This collapses the
    N×N socket-management mess (PR #9's whole struggle) into one stable link per device pair.
@@ -225,7 +227,7 @@ the eventual operator console, not v1).
 - **Tailnet reachability from inside a box** is unverified — measure before Layer 4 depends on it.
 - **The com8 can inject a turn into any local session** — it is a privileged local
   daemon; its own socket must be `0700`/owned, and it must honor Claude's held-message gate.
-- **COM8-engine is one disk copy from lost** — preserve it; it's where the core idea is stated.
+- **The predecessor engine repository is one disk copy from lost** — preserve it; it's where the core idea is stated.
 - **Merge-order hazard:** PR #9's honest-liveness rule contradicts `communicate directory`'s
   file-existence join — the merge must pick the probe ladder and delete the other.
 - **Name-ownership mechanism** (claim/release/expiry) needs a concrete protocol, not just "the
@@ -238,6 +240,6 @@ the eventual operator console, not v1).
 | communicate protocol | wire frame; socket-as-turn delivery ("a message is a wake"); across-accounts by construction; MECHANISM.md |
 | anu `pane` | deliver-and-verify; the one state classifier; the durable reply-file channel; the clean `_resolve` seam |
 | PR #9 Switchboard | provenance liveness; "a socket file is not a listener"; launchd stable-path persistence; `aliases:`; "patching doesn't move an agent" |
-| COM8-engine | "identity is a registry object, not a pane id" — the four separable planes |
+| the predecessor's Go engine extraction | "identity is a registry object, not a pane id" — the four separable planes |
 | apple/container | per-VM isolation; unix socket crosses the boundary → sandbox identity == peer identity |
 | the collaborator work | the forward-only restricted key; grant-capability-not-credentials; GitHub as auditable fallback |

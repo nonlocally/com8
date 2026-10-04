@@ -1,6 +1,8 @@
-# Harvest triage: old anu/COM8 → new com8 (what ideas to take, reject, rethink)
+# Harvest triage: the old anu monorepo → new COM8 (what ideas to take, reject, rethink)
 
-Date: 2026-08-16 · Method: subagent read-only catalog of /Users/aadarwal/COM8 + the anu study.
+*Historical note: this study predates the product rename; "anu monorepo" refers to the retired predecessor repository, not to this repository.*
+
+Date: 2026-08-16 · Method: subagent read-only catalog of the local anu monorepo checkout (the QPG-MIT predecessor project) + the anu study.
 Purpose: decide what IDEAS carry into the clean-slate com8 rebuild. Borrow ideas, never code.
 Verified live: both swarm state dirs empty — the swarm layer is dead code.
 
@@ -62,7 +64,7 @@ them — no cluster-side daemon, works on any Slurm cluster you can ssh to); tun
 login node (compute nodes firewalled); apptainer exec --nv for GPU-in-container; teardown
 discipline. Weak spot: recovery state in @ncn_* window options dies with the window.
 
-**Com8 rebuild:** the ssh session is a **tmux seat**; profile skills become *capability patterns
+**COM8 rebuild:** the ssh session is a **tmux seat**; profile skills become *capability patterns
 over seat verbs*, not commands: seat_spawn an ssh seat → human authenticates once → conductor
 seat_send/read/wait from ANY device (seat ops ride links). Consent gate → `notify` + human reply
 (durable, auditable) instead of an ephemeral chat yes. Seat metadata (host/job id/tunnel) moves
@@ -75,7 +77,7 @@ Anu got right: creds stripped by omission; the container carries the kernel (pan
 dir mounted so a contained worker's result is [confirmed], not scraped); commit identity as env;
 resource caps. Must change: the reply dir is RW+shared across all workers (its own comment admits
 this); all boxes share one /root/.claude login (shared credential, no per-agent identity);
-ANTHROPIC_API_KEY passed wholesale. **Com8 rebuild:** what crosses the boundary is the com8
+ANTHROPIC_API_KEY passed wholesale. **COM8 rebuild:** what crosses the boundary is the com8
 client + ONE per-agent credential — each contained agent gets its own claimed identity and a
 mount/socket scoped to ITS mailbox only, so a compromised worker spoofs nobody and reads no
 sibling's mail. Box seats (exec-channel driver) join later per the sandbox track.

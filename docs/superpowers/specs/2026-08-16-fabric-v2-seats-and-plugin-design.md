@@ -2,8 +2,10 @@
 
 Date: 2026-08-16 · Status: **draft, awaiting review** · Builds on: `2026-08-15-agent-fabric-design.md` (v1, shipped as com8 in PR #10)
 
+*Historical note: this document predates the product rename; references to the retired predecessor project (the anu monorepo and its Go engine extraction) were reworded on 2026-10-04 and do not describe this repository.*
+
 > v1 shipped the message plane: durable identities, mailboxes, store→wake, links.
-> v2 completes the fabric so the anu plugin (`~/COM8/plugins/anu`) can retire —
+> v2 completes the fabric so the anu plugin (`plugins/anu` in the predecessor anu monorepo checkout) can retire —
 > which requires restoring something the first v2 sketch wrongly discarded:
 > **the seat plane**. The v1 spec already reserved `pane:` as a typed reach on an
 > identity; the cluster-conductor pattern (an agent driving a live, Duo-authenticated
@@ -141,7 +143,7 @@ explicit interactive escape hatch.
    MCP tools from Claude Code *and* codex, across devices.
 4. **Publish** (npm + Registry; per-client install lines) and **retire**: when
    no client config references `plugins/anu` and its call count is zero for two
-   weeks, delete it from `~/COM8`. `pane_present` stays with nv (editor
+   weeks, delete it from the predecessor anu monorepo checkout. `pane_present` stays with nv (editor
    concern); beam survives untouched.
 
 ## Out of scope (v2)

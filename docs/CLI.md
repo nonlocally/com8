@@ -42,7 +42,8 @@ backs its own previous definition up beside it before refreshing it.
 
 Model connections configure execution, not identity or bus membership. See
 [model connections](MODELS.md) for private setup, client requirements and
-qualification limits. These commands require COM8 0.5 or later.
+qualification limits. These commands require release 0.5 or later
+(0.6.0 is the first COM8-named release).
 
 ## Receipts
 

@@ -7,10 +7,10 @@ makes two model requests. It does not fetch credentials, register a hosted
 account, or replace any active client configuration.
 
 ```sh
-python3 -B scripts/qualify-seat-provider.py /path/to/com8-0.3.0 \
+python3 -B scripts/qualify-seat-provider.py /path/to/com8-VERSION \
   --evidence /private/new-seat-evidence --run-live
 
-python3 -B scripts/qualify-seat-provider.py /path/to/com8-0.3.0 \
+python3 -B scripts/qualify-seat-provider.py /path/to/com8-VERSION \
   --evidence /private/new-cli-seat-evidence --launch cli --run-live
 ```
 

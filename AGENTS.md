@@ -15,7 +15,9 @@ merely to unify naming.
 - `lib/com8*.py`, `lib/com8.sh`: persistent identity, mail, seats and remote links.
   Message permission and seat-control permission remain separate.
 - `packages/communicate`: combined CLI/MCP distribution and installation.
-  `packages/com8` is the legacy entry; compatibility package names remain.
+  `packages/com8` is the legacy entry; its npm and MCP registry names follow the
+  product rename, while `@aadarwal/communicate` and the `communicate`
+  plugin/marketplace identifiers remain.
 - `plugins/communicate`, `.agents`: compatible Claude/Codex plugin identities.
 - `profiles`: optional terminal/mesh defaults, helpers and owned configuration.
 
@@ -37,7 +39,10 @@ Queue acceptance, runtime submission and a correlated reply are different result
 ## Development discipline
 
 Runtime state and credentials stay outside source and artifacts. Preserve state,
-command and service identifiers unless a tested migration changes them. Installers
+command and service identifiers unless a tested migration changes them; the COM8
+rename is the recorded exception, which changed those identifiers without a
+migration, and the upgrade paragraph in docs/INSTALL.md describes the manual
+steps. Installers
 merge owned settings, retain backups, and remove only objects they still own.
 Ordinary uninstall preserves identity, mail and user data.
 

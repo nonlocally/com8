@@ -1,5 +1,7 @@
 # Fabric observations — 2026-08-17 deep study
 
+*Historical note: this document predates the product rename; references to the retired predecessor project (the anu monorepo and its Go engine extraction) were reworded on 2026-10-04 and do not describe this repository.*
+
 A full-fabric study made before designing the user-identity layer (@handles):
 three parallel readers over the daemon, the distribution path, and the repo's
 history; an interview with the live builder session; two adversarial design
@@ -155,8 +157,8 @@ them. Items the @handles work fixes on its way are marked [handles].
   `lib/peer.sh`, `lib/wake.sh`, `lib/claude.sh`, `lib/codex.sh` still do
   what com8 does not; kept deliberately, but they carry the pre-com8 flaws
   (bare-string identity, no delivery semantics).
-- **COM8-engine is one disk copy from lost** (`~/src/QPG-MIT/COM8-engine`,
-  no longer on GitHub) — the repo where identity-as-registry-object was
+- **The predecessor engine repository is one disk copy from lost** (a local
+  `~/src/QPG-MIT` clone, path rewritten by the 2026-10-04 rename; no longer on GitHub) — the repo where identity-as-registry-object was
   first stated. Preservation hazard already recorded in the v1 spec; still
   outstanding.
 - M-5 (recorded in the overnight handoff, still open): `depart` has a

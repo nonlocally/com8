@@ -1,6 +1,8 @@
 # Study: Apple `container` + anu `box` — sandbox/permission primitives (evidence base for the agent-fabric design)
 
-Date: 2026-08-15 · Method: subagent study of the local CLI + /Users/aadarwal/COM8 box wrapper
+*Historical note: this document predates the product rename; references to the retired predecessor project (the anu monorepo and its Go engine extraction) were reworded on 2026-10-04 and do not describe this repository.*
+
+Date: 2026-08-15 · Method: subagent study of the local CLI + the predecessor anu monorepo checkout's box wrapper (path rewritten by the 2026-10-04 rename)
 + upstream apple/container + apple/containerization docs.
 Host verified: macOS 26.5.1 (Darwin 25.5.0), arm64, `container` 1.0.0
 (`/opt/homebrew/bin/container`); guest kernel kata `vmlinux-6.18.15-186`; init
@@ -59,7 +61,7 @@ Bind mounts are virtiofs (every inspect mount shows `"type":{"virtiofs":{}}`). A
 named volumes (ext4 block devices, better I/O), `--tmpfs` (guest-memory-only). `--read-only`
 root; `ro` per-mount.
 
-**What `box` mounts** (`COM8/config/bash/fns/box:45-58`): the git toplevel at its own real
+**What `box` mounts** (the predecessor anu monorepo's `config/bash/fns/box:45-58`): the git toplevel at its own real
 path; and if cwd is a *linked worktree*, the main repo too (via `--git-common-dir`) — which
 is what makes the worktree's absolute-path `.git` pointer resolve inside the VM, and makes
 agent-emitted paths valid on both sides.

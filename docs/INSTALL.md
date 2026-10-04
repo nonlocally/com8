@@ -126,7 +126,8 @@ private file or stdin through `com8 model add`.
 Setup saves the connection without making a model request. `com8 model doctor`
 checks catalog access separately; an actual coding task establishes inference
 and tool use. See [model connections](MODELS.md) for the nonlocally endpoint
-and client requirements. Model connections require COM8 0.5 or later.
+and client requirements. Model connections require release 0.5 or later (0.6.0 is the first
+COM8-named release).
 
 ### Choosing a bus
 
@@ -302,6 +303,17 @@ Before running `com8 setup --service`:
   you install the new service.
 - Delete planted session files that the stopped daemon left in
   `~/.claude/sessions`; 0.6.0 would otherwise treat them as real sessions.
+- Re-create saved model connections with `com8 model add` (or
+  `com8 setup --model`). They now live in `~/.config/com8/models` with the
+  ownership marker `com8-model-connection-v1`, so connections saved by the
+  previous release are not listed, and a copied directory is refused.
+- Run `com8-box build` again before `com8-box run`; the contained-agent image
+  is now named `com8-agent`.
+- Remove or rename an existing `<repo>-worktrees/<name>` directory on the
+  previous release's branch before re-spawning that worktree agent; worktree
+  agents now use branches named `com8/<name>`.
+- After `update` repoints `current`, the previous release's launcher symlink in
+  `~/.local/share/communicate/bin` dangles until `com8 uninstall` removes it.
 
 Devices joined with `pair`, `adopt`, `connect` or `federate` must all run
 0.6.0. `pair` and `adopt` do not recognise the previous release's daemon,
@@ -387,7 +399,12 @@ com8 doctor
 ```
 
 Calling the formula's full path ensures that `update` uses the new installer
-even if an older COM8 launcher comes first on PATH. Runtime commands continue
+even if an older COM8 launcher comes first on PATH.
+
+`com8` is a new formula, so `brew upgrade` of the formula installed for a
+0.3-0.5.1 release never reaches 0.6.0. Install `nonlocally/tap/com8`, run its
+`update` as above, then `brew uninstall` the previous formula so only one
+launcher remains on PATH. Runtime commands continue
 using the release selected by setup or rollback until you activate another one.
 
 If you selected profiles, run `com8 profile uninstall` first. Then remove COM8's

@@ -10,7 +10,7 @@ must-measures from the v1 spec.
    path appears at container start owned by the invoking user; host connects first try; bytes
    flow both ways. Multiple `--publish-socket` per container work. **Connect-success proves
    nothing** — an unbound guest side still accepts connect then EOFs immediately, so a recv-probe
-   is required — which is EXACTLY com8's existing liveness ladder. Com8's measured-liveness
+   is required — which is EXACTLY com8's existing liveness ladder. COM8's measured-liveness
    semantics survive the vsock forwarder unchanged.
 2. **Host socket → container via virtiofs mount: DOES NOT WORK.** A host-bound UDS mounted into
    the guest is *visible* (`listdir` shows it) but INERT: `stat` → `EOPNOTSUPP (95)`, `connect` →

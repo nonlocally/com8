@@ -132,7 +132,7 @@ def getpass_user():
 # The daemon's code version, surfaced in status so a stale running daemon is
 # detectable (a git pull or npm upgrade never restarts a KeepAlive'd daemon —
 # without this field nothing can even say the code on disk moved on).
-COM8_VERSION = "0.5.0"
+COM8_VERSION = "0.6.0"
 # Resolve once at module load. A running daemon must continue to report its
 # actual code even after the installer's /current symlink changes underneath it.
 COM8_SOURCE_FILE = os.path.realpath(__file__)

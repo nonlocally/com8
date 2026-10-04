@@ -15,11 +15,11 @@ changes the real account home, service configuration, plugin installation, or
 hosted-bus credentials. It does make real model requests.
 
 ```sh
-python3 scripts/qualify-provider.py /path/to/com8-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider codex --client-home /private/test-client-home \
   --evidence /private/new-codex-evidence --run-live
 
-python3 scripts/qualify-provider.py /path/to/com8-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider claude --client-home /private/test-client-home \
   --evidence /private/new-claude-evidence --run-live
 ```
@@ -58,7 +58,7 @@ The same harness can exercise normal setup and real client discovery in the
 prepared isolated client home:
 
 ```sh
-python3 scripts/qualify-provider.py /path/to/com8-0.3.0 \
+python3 scripts/qualify-provider.py /path/to/com8-VERSION \
   --provider codex --client-home /private/fresh-test-client-home \
   --evidence /private/new-installed-evidence --installed --run-live
 ```
@@ -130,7 +130,7 @@ do not list either as supported merely because the other passed.
 With both providers privately authenticated in one prepared isolated home, run:
 
 ```sh
-python3 scripts/qualify-provider-pair.py /path/to/com8-0.3.0 \
+python3 scripts/qualify-provider-pair.py /path/to/com8-VERSION \
   --client-home /private/fresh-pair-home \
   --evidence /private/new-pair-evidence --run-live
 ```
