@@ -1,12 +1,12 @@
 {
   "name": "communicate",
-  "version": "0.5.1",
-  "description": "HOMI: durable agent identities, native Claude/Codex messaging, shared buses and explicit terminal seats.",
+  "version": "0.6.0",
+  "description": "COM8: durable agent identities, native Claude/Codex messaging, shared buses and explicit terminal seats.",
   "author": {
     "name": "Aadarsh Agarwal",
     "url": "https://github.com/aadarwal"
   },
-  "repository": "https://github.com/nonlocally/HOMI",
+  "repository": "https://github.com/nonlocally/com8",
   "license": "MIT",
   "keywords": [
     "agents",
@@ -21,7 +21,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "HOMI",
+    "displayName": "COM8",
     "shortDescription": "Durable identities, agent messaging, buses and terminal seats",
     "developerName": "Aadarsh Agarwal",
     "category": "Productivity",
@@ -30,7 +30,7 @@
       "Write"
     ],
     "websiteURL": "https://docs.nonlocally.org",
-    "longDescription": "HOMI combines existing-session Claude/Codex routing, registered buses with a graph and human inbox, persistent identities with saved messages, and explicit tmux seat control. Local operation works without a hosted account. Remote enrollment and terminal control remain separately authorized. Compatible communicate commands and plugin identifiers are retained.",
+    "longDescription": "COM8 combines existing-session Claude/Codex routing, registered buses with a graph and human inbox, persistent identities with saved messages, and explicit tmux seat control. Local operation works without a hosted account. Remote enrollment and terminal control remain separately authorized. Compatible communicate commands and plugin identifiers are retained.",
     "defaultPrompt": [
       "Create an agent to investigate a failing test",
       "Register this session on my configured bus",

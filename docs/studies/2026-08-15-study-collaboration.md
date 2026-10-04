@@ -7,22 +7,22 @@ history across repos.
 
 | Repo | What it is | Pane/identity work? |
 |---|---|---|
-| `~/src/appliedphotonics/homi` | pure photonics domain (paper→GDS pipeline, Streamlit, MCP servers) | No |
-| `~/src/QPG-MIT/homi-anu-powered` | not a repo — one orphaned experiment `.gds` | No |
-| `~/src/QPG-MIT/HOMI-engine` | **the Go kernel extraction** — "standalone extraction of the anu agent engine" (15 commits, ~30 h) | **Yes — the distillation, not the origin** |
+| `~/src/appliedphotonics/com8` | pure photonics domain (paper→GDS pipeline, Streamlit, MCP servers) | No |
+| `~/src/QPG-MIT/com8-anu-powered` | not a repo — one orphaned experiment `.gds` | No |
+| `~/src/QPG-MIT/COM8-engine` | **the Go kernel extraction** — "standalone extraction of the anu agent engine" (15 commits, ~30 h) | **Yes — the distillation, not the origin** |
 
 The pane-to-pane *implementation* (`pane send/ask/reply`, the classifier, swarm, mesh spawn)
-lives in the anu monorepo `/Users/aadarwal/HOMI` (= `QPG-MIT/HOMI`); `HOMI-engine` is the Go
-rewrite that names the idea. Its architecture table (`HOMI-engine/ARCHITECTURE.md:20-27`):
+lives in the anu monorepo `/Users/aadarwal/COM8` (= `QPG-MIT/COM8`); `COM8-engine` is the Go
+rewrite that names the idea. Its architecture table (`COM8-engine/ARCHITECTURE.md:20-27`):
 
 > | **Identity + state** | the pane id (`%82`) | the registry object (`<state-dir>/`) |
 > | **Execution / PTY** | the pane | the **supervisor** (tmux, dedicated socket) |
 > | **Isolation** | (usually none) or a hand-mounted box | the **substrate backend** |
 > | **Display / control** | the pane | a **renderer** |
 
-Caveats: **`QPG-MIT/HOMI-engine` no longer exists on GitHub** ("Could not resolve") — the
-local clone is the only surviving copy. `/Users/aadarwal/HOMI-engine` (home dir) is a
-*different thing* — a worktree of QPG-MIT/HOMI, not the Go repo.
+Caveats: **`QPG-MIT/COM8-engine` no longer exists on GitHub** ("Could not resolve") — the
+local clone is the only surviving copy. `/Users/aadarwal/COM8-engine` (home dir) is a
+*different thing* — a worktree of QPG-MIT/COM8, not the Go repo.
 
 **Where the collaboration actually happened: `aadarwal/communicate`** — the collaborator has 2
 commits here, authored PR #2 and issues #7/#8; the cross-fleet bridge negotiation is issues
@@ -143,7 +143,7 @@ time as provenance; the on-prem tidy3d container is single-seat — `--dependenc
 chains work. **Credentials were never shared. The capability crossed the boundary; the
 account did not.**
 
-**(b) Direct, via `ncn`** (`HOMI/plugins/ncn/skills/ncn-cluster/SKILL.md`): a host conductor
+**(b) Direct, via `ncn`** (`COM8/plugins/ncn/skills/ncn-cluster/SKILL.md`): a host conductor
 drives a live human-authenticated SSH pane (send-keys/capture-pane), **inheriting Duo/2FA
 without ever holding a credential**; `sbatch` is consent-gated ("it consumes node-hours, so
 get a yes first"); the job script is cluster-agnostic (resources from the submit line,
@@ -157,7 +157,7 @@ through a localhost port, holding a token, never an SSH credential. Teardown man
 
 ## 5. Ideas worth carrying
 
-1. **Identity is a registry object, not a pane id** (HOMI-engine) — separate identity/state,
+1. **Identity is a registry object, not a pane id** (COM8-engine) — separate identity/state,
    execution/PTY, isolation, display.
 2. **The confirmed-reply channel**: "a reply is proof of completion, never a guess from
    scraping a screen" — paired with probed liveness (measure time-to-EOF).
@@ -198,6 +198,6 @@ through a localhost port, holding a token, never an SSH credential. Teardown man
 10. Scattering one idea across three repos — the unified design needs one home.
 
 **Key threads:** `aadarwal/communicate#2,#3,#4,#6,#7,#8,#9` · `QPG-MIT/PixCell-running#87` ·
-`QPG-MIT/HOMI#43,#52,#53,#55,#64,#26,#28` ·
-`~/src/QPG-MIT/HOMI-engine/{ARCHITECTURE.md,STATUS.md}` ·
-`HOMI/plugins/ncn/skills/ncn-cluster/{SKILL.md,jlab.sbatch}` · `~/.ssh/config:36`
+`QPG-MIT/COM8#43,#52,#53,#55,#64,#26,#28` ·
+`~/src/QPG-MIT/COM8-engine/{ARCHITECTURE.md,STATUS.md}` ·
+`COM8/plugins/ncn/skills/ncn-cluster/{SKILL.md,jlab.sbatch}` · `~/.ssh/config:36`

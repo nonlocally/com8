@@ -15,7 +15,7 @@ process helpers from [the two-device gate](FLEET-PROVIDER-QUALIFICATION.md).
 It does not start a fixture broker or change the hosted service.
 
 This is an operator qualification tool, not the normal installation procedure.
-People install HOMI, accept their private invitation, and tell their agent what
+People install COM8, accept their private invitation, and tell their agent what
 they want to do. See [the bus guide](BUSES.md).
 
 ## What the two modes prove

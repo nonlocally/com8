@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Generate a formula for an immutable, checksum-verified HOMI release archive."""
+"""Generate a formula for an immutable, checksum-verified COM8 release archive."""
 import argparse
 import re
 from pathlib import Path
 
-TEMPLATE = '''class Homi < Formula
+TEMPLATE = '''class Com8 < Formula
   desc "Persistent agent identities, messaging, and execution"
-  homepage "https://github.com/nonlocally/HOMI"
-  url "https://github.com/nonlocally/HOMI/releases/download/v@VERSION@/homi-@VERSION@.tar.gz"
+  homepage "https://github.com/nonlocally/com8"
+  url "https://github.com/nonlocally/com8/releases/download/v@VERSION@/com8-@VERSION@.tar.gz"
   sha256 "@SHA256@"
   license "MIT"
 
@@ -32,7 +32,7 @@ TEMPLATE = '''class Homi < Formula
     # Homebrew moves metafiles out of libexec when the prefix has none.
     # Expose the license at the prefix while retaining the immutable runtime.
     prefix.install_symlink libexec/"LICENSE"
-    (bin/"homi").write_env_script libexec/"bin/homi",
+    (bin/"com8").write_env_script libexec/"bin/com8",
       PATH: "#{Formula["node"].opt_bin}:#{Formula["python@3.14"].opt_bin}:#{Formula["bash"].opt_bin}:$PATH"
     (bin/"communicate").write_env_script libexec/"bin/communicate",
       PATH: "#{Formula["node"].opt_bin}:#{Formula["python@3.14"].opt_bin}:#{Formula["bash"].opt_bin}:$PATH"
@@ -41,23 +41,23 @@ TEMPLATE = '''class Homi < Formula
   def caveats
     <<~EOS
       Choose your clients and optional workstation tools:
-        homi setup
-        homi doctor
+        com8 setup
+        com8 doctor
 
       Preview an explicit selection, including missing dependencies:
-        homi setup --install-missing --claude --codex --terminal --mesh --dry-run
+        com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
       Replace --dry-run with --yes to apply it. Add --ghostty on macOS if wanted.
 
       To enable the persistent local daemon:
-        homi setup --service
+        com8 setup --service
 
       Terminal and mesh profiles are optional. Preview before applying:
-        homi profile preview --terminal --mesh
+        com8 profile preview --terminal --mesh
 
       Guided setup offers missing selected tools and clients. Login is a separate choice.
       Selected clients include tmux for agent seats; terminal configuration remains optional.
       Terminal shortcuts work from zsh or Bash; your interactive and login shells stay unchanged.
-      Existing clients are not implicitly upgraded; HOMI uninstall keeps third-party packages.
+      Existing clients are not implicitly upgraded; COM8 uninstall keeps third-party packages.
       Installing or upgrading this formula does not replace your terminal configuration.
     EOS
   end
@@ -68,12 +68,12 @@ TEMPLATE = '''class Homi < Formula
     JSON.parse((libexec/"release.json").read).fetch("files").each do |name, sha|
       assert_equal sha, Digest::SHA256.file(libexec/name).hexdigest
     end
-    assert_match "@VERSION@", shell_output("#{bin}/homi version")
-    assert_match "bus", shell_output("#{bin}/homi --help")
+    assert_match "@VERSION@", shell_output("#{bin}/com8 version")
+    assert_match "bus", shell_output("#{bin}/com8 --help")
     ENV["HOME"] = testpath
     ENV["COMMUNICATE_DATA"] = testpath/"data"
     ENV["COMM_STATE"] = testpath/"state"
-    system bin/"homi", "setup", "--no-clients", "--dry-run"
+    system bin/"com8", "setup", "--no-clients", "--dry-run"
     refute_path_exists testpath/"data"
   end
 end

@@ -1,8 +1,8 @@
-name: HOMI qualification
+name: COM8 qualification
 on:
   pull_request:
   push:
-    branches: [main, release/homi-public]
+    branches: [main, release/com8-public]
   workflow_dispatch:
 
 permissions:
@@ -47,7 +47,7 @@ jobs:
       - name: Optional configuration checks
         run: |
           python3 scripts/test-profiles.py
-          python3 scripts/test-homi-box.py
+          python3 scripts/test-com8-box.py
           bash scripts/test-snapshots.sh
       - name: Build immutable runtime
         run: |
@@ -55,23 +55,23 @@ jobs:
           python3 scripts/build-release.py
       - name: Qualify the extracted runtime without checkout fallback
         run: |
-          mkdir -p "$RUNNER_TEMP/homi-artifact"
-          tar -xzf "dist/homi-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/homi-artifact"
-          python3 scripts/qualify-installed.py "$RUNNER_TEMP/homi-artifact/homi-$(cat VERSION)" > "$RUNNER_TEMP/homi-artifact-qualification.json"
+          mkdir -p "$RUNNER_TEMP/com8-artifact"
+          tar -xzf "dist/com8-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/com8-artifact"
+          python3 scripts/qualify-installed.py "$RUNNER_TEMP/com8-artifact/com8-$(cat VERSION)" > "$RUNNER_TEMP/com8-artifact-qualification.json"
       - name: Check fleet harness fixtures against the shipped runtime without SSH or providers
-        run: python3 scripts/qualify-provider-fleet.py self-test "$RUNNER_TEMP/homi-artifact/homi-$(cat VERSION)" --archive "dist/homi-$(cat VERSION).tar.gz"
+        run: python3 scripts/qualify-provider-fleet.py self-test "$RUNNER_TEMP/com8-artifact/com8-$(cat VERSION)" --archive "dist/com8-$(cat VERSION).tar.gz"
       - name: Check hosted qualification boundaries without network or providers
         run: python3 -B scripts/test-hosted-qualification.py
       - uses: actions/upload-artifact@v4
         with:
-          name: homi-runtime-${{ runner.os }}-node${{ matrix.node }}
-          path: dist/homi-*.tar.gz*
+          name: com8-runtime-${{ runner.os }}-node${{ matrix.node }}
+          path: dist/com8-*.tar.gz*
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: homi-qualification-${{ runner.os }}-node${{ matrix.node }}
-          path: ${{ runner.temp }}/homi-artifact-qualification.json
+          name: com8-qualification-${{ runner.os }}-node${{ matrix.node }}
+          path: ${{ runner.temp }}/com8-artifact-qualification.json
           if-no-files-found: warn
 
   dashboard:
@@ -88,21 +88,21 @@ jobs:
           python-version: '3.12'
       - uses: actions/download-artifact@v4
         with:
-          name: homi-runtime-Linux-node20
-          path: ${{ runner.temp }}/homi-ui-artifact
+          name: com8-runtime-Linux-node20
+          path: ${{ runner.temp }}/com8-ui-artifact
       - name: Install isolated browser test dependencies
         run: |
           python -m pip install playwright==1.63.0
           python -m playwright install --with-deps chromium
       - name: Qualify shipped dashboard assets
         run: |
-          tar -xzf "$RUNNER_TEMP/homi-ui-artifact/homi-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/homi-ui-artifact"
-          python scripts/qualify-browser.py "$RUNNER_TEMP/homi-ui-artifact/homi-$(cat VERSION)" --evidence "$RUNNER_TEMP/homi-ui-evidence"
+          tar -xzf "$RUNNER_TEMP/com8-ui-artifact/com8-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/com8-ui-artifact"
+          python scripts/qualify-browser.py "$RUNNER_TEMP/com8-ui-artifact/com8-$(cat VERSION)" --evidence "$RUNNER_TEMP/com8-ui-evidence"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: homi-dashboard-qualification
-          path: ${{ runner.temp }}/homi-ui-evidence
+          name: com8-dashboard-qualification
+          path: ${{ runner.temp }}/com8-ui-evidence
           if-no-files-found: warn
 
   systemd:
@@ -124,17 +124,17 @@ jobs:
       - name: Build an independent immutable runtime
         run: |
           python3 scripts/build-release.py
-          mkdir -p "$RUNNER_TEMP/homi-systemd-artifact"
-          tar -xzf "dist/homi-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/homi-systemd-artifact"
+          mkdir -p "$RUNNER_TEMP/com8-systemd-artifact"
+          tar -xzf "dist/com8-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/com8-systemd-artifact"
       - name: Qualify actual scoped systemd service lifecycle on the disposable runner
         run: |
-          python3 scripts/qualify-systemd.py "$RUNNER_TEMP/homi-systemd-artifact/homi-$(cat VERSION)" \
-            --work "$RUNNER_TEMP/homi-systemd-evidence" --disposable-ci --start-user-manager
+          python3 scripts/qualify-systemd.py "$RUNNER_TEMP/com8-systemd-artifact/com8-$(cat VERSION)" \
+            --work "$RUNNER_TEMP/com8-systemd-evidence" --disposable-ci --start-user-manager
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: homi-systemd-qualification
-          path: ${{ runner.temp }}/homi-systemd-evidence
+          name: com8-systemd-qualification
+          path: ${{ runner.temp }}/com8-systemd-evidence
           if-no-files-found: warn
 
   homebrew:
@@ -164,29 +164,29 @@ jobs:
       - name: Qualify canonical Homebrew install and reinstall on the disposable runner
         run: |
           version="$(cat VERSION)"
-          archive="$GITHUB_WORKSPACE/dist/homi-$version.tar.gz"
+          archive="$GITHUB_WORKSPACE/dist/com8-$version.tar.gz"
           sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
-          python3 scripts/render-homebrew-formula.py "$version" "$sha" "$RUNNER_TEMP/homi.rb"
-          python3 scripts/qualify-homebrew.py "$archive" "$RUNNER_TEMP/homi.rb" \
-            --work "$RUNNER_TEMP/homi-brew-evidence" --disposable-ci
+          python3 scripts/render-homebrew-formula.py "$version" "$sha" "$RUNNER_TEMP/com8.rb"
+          python3 scripts/qualify-homebrew.py "$archive" "$RUNNER_TEMP/com8.rb" \
+            --work "$RUNNER_TEMP/com8-brew-evidence" --disposable-ci
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: homi-homebrew-qualification
-          path: ${{ runner.temp }}/homi-brew-evidence
+          name: com8-homebrew-qualification
+          path: ${{ runner.temp }}/com8-brew-evidence
           if-no-files-found: warn
       - name: Qualify TTY cancellation and fresh automated dependency setup on the disposable runner
         run: |
-          mkdir -p "$RUNNER_TEMP/homi-onboarding-artifact"
-          tar -xzf "dist/homi-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/homi-onboarding-artifact"
-          python3 scripts/qualify-onboarding.py "$RUNNER_TEMP/homi-onboarding-artifact/homi-$(cat VERSION)" \
-            --work "$RUNNER_TEMP/homi-onboarding-evidence" --disposable-ci
+          mkdir -p "$RUNNER_TEMP/com8-onboarding-artifact"
+          tar -xzf "dist/com8-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/com8-onboarding-artifact"
+          python3 scripts/qualify-onboarding.py "$RUNNER_TEMP/com8-onboarding-artifact/com8-$(cat VERSION)" \
+            --work "$RUNNER_TEMP/com8-onboarding-evidence" --disposable-ci
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: homi-onboarding-qualification
+          name: com8-onboarding-qualification
           path: |
-            ${{ runner.temp }}/homi-onboarding-evidence/report.json
-            ${{ runner.temp }}/homi-onboarding-evidence/command-*.log
-            ${{ runner.temp }}/homi-onboarding-evidence/interactive-cancel.log
+            ${{ runner.temp }}/com8-onboarding-evidence/report.json
+            ${{ runner.temp }}/com8-onboarding-evidence/command-*.log
+            ${{ runner.temp }}/com8-onboarding-evidence/interactive-cancel.log
           if-no-files-found: warn

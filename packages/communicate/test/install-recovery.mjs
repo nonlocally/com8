@@ -11,7 +11,7 @@ import { withInstallLock, installLockStatus } from '../src/lifecycle.mjs';
 import { buildIntegration, removeIntegration } from '../src/integration.mjs';
 
 const pkg = fileURLToPath(new URL('..', import.meta.url));
-const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'homi-recovery-'));
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'com8-recovery-'));
 const prior = { ...process.env };
 const data = path.join(temp, 'data'), lock = path.join(data, 'install.lock');
 let child;

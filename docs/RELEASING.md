@@ -1,7 +1,7 @@
 # Release qualification
 
 Test the actual artifact, installation and advertised behavior together. Existing
-native communication, buses, durable HOMI and selected terminal helpers are the
+native communication, buses, durable COM8 and selected terminal helpers are the
 baseline implementation.
 
 ## Build
@@ -10,7 +10,7 @@ Commit source and keep root/package/plugin release versions consistent:
 
 ```sh
 python3 scripts/build-release.py
-python3 scripts/render-homebrew-formula.py VERSION SHA256 /path/to/tap/Formula/homi.rb
+python3 scripts/render-homebrew-formula.py VERSION SHA256 /path/to/tap/Formula/com8.rb
 ```
 
 The builder captures the current commit and uses an owned detached temporary Git

@@ -49,7 +49,7 @@ export function readPrivateInvitation(file) {
 function callBus(args, { env = process.env, cli = communicateCli, run = spawnSync, input } = {}) {
   let result;
   try { result = run(cli, ["bus", ...args], { env, input, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], timeout: 20000, maxBuffer: 256 * 1024 }); }
-  catch { throw new Error("The bus command could not run; inspect your HOMI installation and retry."); }
+  catch { throw new Error("The bus command could not run; inspect your COM8 installation and retry."); }
   // Even an error from the broker is untrusted and could echo credentials.
   if (result.error || result.status !== 0) throw new Error("The bus command did not complete. Check the selected hub and its invitation, then retry.");
   try {

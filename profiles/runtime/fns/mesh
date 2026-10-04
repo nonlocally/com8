@@ -9,7 +9,7 @@
 
 # Refresh cached tailscale status (respects TTL)
 _mesh_refresh() {
-  local cache_dir="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh"
+  local cache_dir="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh"
   local cache_file="$cache_dir/devices.json"
   local meta_file="$cache_dir/devices.meta"
   local max_age="${MESH_CACHE_TTL:-30}"
@@ -122,7 +122,7 @@ _mesh_devices() {
   local filter="${1:-compute}"
   _mesh_refresh || return 1
 
-  local cache="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json"
+  local cache="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json"
   local self_name
   self_name=$(jq -r '.Self.DNSName | split(".")[0]' "$cache")
 
@@ -177,7 +177,7 @@ _mesh_devices() {
 
 # Parse manual SSH hosts from hosts.json as TSV (same format as _mesh_devices)
 _mesh_manual_hosts() {
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   [[ -f "$hosts_file" ]] || return 0
 
   jq -r '.[] | [
@@ -207,7 +207,7 @@ _mesh_all_devices() {
 # Preview info for a manual host
 _mesh_manual_info() {
   local name="$1"
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   [[ -f "$hosts_file" ]] || { echo "No hosts file."; return 1; }
 
   jq -r --arg name "$name" '
@@ -237,7 +237,7 @@ _mesh_preview() {
 # Check if a device name is a manual host
 _mesh_is_manual() {
   local name="$1"
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   [[ -f "$hosts_file" ]] && jq -e --arg n "$name" '.[] | select(.name == $n)' "$hosts_file" >/dev/null 2>&1
 }
 
@@ -245,7 +245,7 @@ _mesh_is_manual() {
 _mesh_is_self() {
   local device="$1"
   _mesh_refresh || return 1
-  local cache="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json"
+  local cache="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json"
   local self_name
   self_name=$(jq -r '.Self.DNSName | split(".")[0]' "$cache")
   [[ "$device" == "$self_name" ]]
@@ -253,7 +253,7 @@ _mesh_is_self() {
 
 # Source path for FZF subshells (preview/execute commands run in separate processes)
 _mesh_src() {
-  echo "${HOMI_PROFILE_RUNTIME}/fns/mesh"
+  echo "${COM8_PROFILE_RUNTIME}/fns/mesh"
 }
 
 # FZF single device picker
@@ -306,7 +306,7 @@ _mesh_probe() {
   local device="$1"
   [[ -z "$device" ]] && return 1
 
-  local profile_dir="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/profiles"
+  local profile_dir="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/profiles"
   local profile="$profile_dir/$device.json"
   local max_age="${MESH_PROBE_TTL:-300}"
 
@@ -460,7 +460,7 @@ _mesh_probe_display() {
   local device="$1"
   [[ -z "$device" ]] && return 1
 
-  local profile="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/profiles/$device.json"
+  local profile="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/profiles/$device.json"
 
   # Run probe if no cached data
   if [[ ! -f "$profile" ]]; then
@@ -527,7 +527,7 @@ _mesh_probe_display() {
 _mesh_info() {
   local device="$1"
   _mesh_refresh 2>/dev/null
-  local cache="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json"
+  local cache="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json"
   [[ ! -f "$cache" ]] && { echo "No cache data."; return 1; }
 
   local self_name
@@ -642,7 +642,7 @@ _mesh_host_add() {
     echo 'mesh: port must be an integer from 1 to 65535' >&2; return 1;
   }
 
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   mkdir -p "$(dirname "$hosts_file")" || return 1
   [[ ! -f "$hosts_file" ]] && echo '[]' > "$hosts_file"
 
@@ -672,7 +672,7 @@ _mesh_host_rm() {
   local name="$1"
   [[ -z "$name" ]] && { echo "Usage: mesh host rm <name>"; return 1; }
 
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   [[ ! -f "$hosts_file" ]] && { echo "mesh: no hosts file."; return 1; }
 
   if ! jq -e --arg n "$name" '.[] | select(.name == $n)' "$hosts_file" >/dev/null 2>&1; then
@@ -688,7 +688,7 @@ _mesh_host_rm() {
 
 # List all manual SSH hosts
 _mesh_host_list() {
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   [[ ! -f "$hosts_file" ]] && { echo "No manual hosts configured."; return 0; }
 
   local bold='\033[1m'
@@ -707,10 +707,10 @@ _mesh_host_list() {
 
 # Generate a separate SSH file from Tailscale devices + manual hosts.
 _mesh_ssh_config_generate() {
-  local config_file="${HOMI_PROFILE_CONFIG}/mesh/ssh.conf"
-  mkdir -p "${HOMI_PROFILE_CONFIG}/mesh"
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
-  local ts_cache="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json"
+  local config_file="${COM8_PROFILE_CONFIG}/mesh/ssh.conf"
+  mkdir -p "${COM8_PROFILE_CONFIG}/mesh"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
+  local ts_cache="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json"
 
   mkdir -p "$HOME/.ssh"
 
@@ -718,7 +718,7 @@ _mesh_ssh_config_generate() {
   tmp_config=$(mktemp)
 
   cat > "$tmp_config" <<HEADER
-# Auto-generated by HOMI mesh
+# Auto-generated by COM8 mesh
 # Do NOT edit above the USER CONFIG line — changes will be overwritten
 # Run 'mesh sshconfig' to regenerate
 # Last generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -770,7 +770,7 @@ HEADER
 
 _mesh_help() {
   cat <<'HELP'
-HOMI mesh (optional workstation module)
+COM8 mesh (optional workstation module)
   mesh [hub]                  select a manual or Tailscale host
   mesh ssh [-w] HOST          shell here, or a tmux pane/window
   mesh vnc HOST              configured VNC access (platform dependent)
@@ -781,7 +781,7 @@ HOMI mesh (optional workstation module)
   mesh probe HOST | detail HOST | monitor [COMMAND] [HOST...]
   mesh deploy COMMAND [HOST]  launch a configured command in a remote pane
   mesh sshconfig             generate a separate SSH file; never replace ~/.ssh/config
-Manual hosts: $HOMI_PROFILE_CONFIG/mesh/hosts.json; user mapping: users.json.
+Manual hosts: $COM8_PROFILE_CONFIG/mesh/hosts.json; user mapping: users.json.
 Tailscale is optional for manual hosts. Nothing is connected at shell startup.
 HELP
 }
@@ -860,7 +860,7 @@ _mesh_status() {
   local bold='\033[1m'
   local cyan='\033[36m'
   local reset='\033[0m'
-  local profile_dir="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/profiles"
+  local profile_dir="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/profiles"
 
   printf "${bold}  %-24s %-8s %-8s %-18s %-7s %s${reset}\n" \
     "DEVICE" "OS" "STATUS" "IP" "LOAD" "MEM"
@@ -915,10 +915,10 @@ _mesh_status() {
 _mesh_device_user() {
   local device="$1"
   if _mesh_is_manual "$device"; then
-    jq -r --arg n "$device" '.[] | select(.name == $n) | .user' "$HOMI_PROFILE_CONFIG/mesh/hosts.json"
+    jq -r --arg n "$device" '.[] | select(.name == $n) | .user' "$COM8_PROFILE_CONFIG/mesh/hosts.json"
     return
   fi
-  local users_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/users.json"
+  local users_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/users.json"
   if [[ -f "$users_file" ]]; then
     local user
     user=$(jq -r --arg name "$device" '
@@ -933,10 +933,10 @@ _mesh_device_user() {
 _mesh_device_port() {
   local device="$1"
   if _mesh_is_manual "$device"; then
-    jq -r --arg n "$device" '.[] | select(.name == $n) | .port // 22' "$HOMI_PROFILE_CONFIG/mesh/hosts.json"
+    jq -r --arg n "$device" '.[] | select(.name == $n) | .port // 22' "$COM8_PROFILE_CONFIG/mesh/hosts.json"
     return
   fi
-  local users_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/users.json"
+  local users_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/users.json"
   [[ -f "$users_file" ]] || return 0
   local port
   port=$(jq -r --arg name "$device" '
@@ -957,10 +957,10 @@ _mesh_ssh_opts() {
 _mesh_device_ip() {
   local device="$1"
   if _mesh_is_manual "$device"; then
-    jq -r --arg n "$device" '.[] | select(.name == $n) | .host' "$HOMI_PROFILE_CONFIG/mesh/hosts.json"
+    jq -r --arg n "$device" '.[] | select(.name == $n) | .host' "$COM8_PROFILE_CONFIG/mesh/hosts.json"
     return
   fi
-  local cache="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json"
+  local cache="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json"
   jq -r --arg name "$device" '
     [.Self, (.Peer | to_entries[].value)] |
     map(select((.DNSName | split(".")[0]) == $name)) |
@@ -1029,7 +1029,7 @@ _mesh_ssh_manual() {
     esac
   done
 
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   local host user port
   read -r host user port < <(
     jq -r --arg name "$name" '
@@ -1140,7 +1140,7 @@ _mesh_vnc() {
 # (e.g. a trusted LAN where the server is reachable directly).
 _mesh_vnc_manual() {
   local name="$1"
-  local hosts_file="${HOMI_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/homi/profiles}/mesh/hosts.json"
+  local hosts_file="${COM8_PROFILE_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/com8/profiles}/mesh/hosts.json"
   local host user port
   read -r host user port < <(
     jq -r --arg name "$name" '
@@ -1238,7 +1238,7 @@ _mesh_ping() {
   # No device specified: ping all online compute devices
   _mesh_refresh || return 1
   local self_name
-  self_name=$(jq -r '.Self.DNSName | split(".")[0]' "${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.json")
+  self_name=$(jq -r '.Self.DNSName | split(".")[0]' "${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.json")
 
   while IFS=$'\t' read -r name os status ip relay is_self; do
     [[ "$is_self" == "self" ]] && continue
@@ -1251,7 +1251,7 @@ _mesh_ping() {
 
 # Force cache refresh
 _mesh_force_refresh() {
-  local meta_file="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/devices.meta"
+  local meta_file="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/devices.meta"
   rm -f "$meta_file"
   _mesh_refresh && echo "mesh: cache refreshed." || echo "mesh: refresh failed."
 }
@@ -1265,7 +1265,7 @@ _mesh_detail() {
   # Export functions so the subshell can use them
   tmux display-popup -E -w 60% -h 50% -T " $device " \
     "bash -c '
-      source \"${HOMI_PROFILE_RUNTIME}/fns/mesh\"
+      source \"${COM8_PROFILE_RUNTIME}/fns/mesh\"
       while true; do
         clear
         _mesh_probe \"$device\" >/dev/null 2>&1
@@ -1274,7 +1274,7 @@ _mesh_detail() {
         read -t 5 -n 1 key
         case \"\$key\" in
           q) break ;;
-          r) rm -f \"\${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/mesh/profiles/$device.json\" ;;
+          r) rm -f \"\${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/mesh/profiles/$device.json\" ;;
         esac
       done
     '"

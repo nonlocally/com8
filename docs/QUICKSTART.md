@@ -1,15 +1,15 @@
 # Quickstart
 
-Install HOMI, sign in to the coding clients you want to use, and give your agent
+Install COM8, sign in to the coding clients you want to use, and give your agent
 a task to coordinate. Start with a review or a research comparison so you can
 see collaborators exchange findings and bring back an answer.
 
 ## 1. Install and choose your tools
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
-homi doctor
+brew install nonlocally/tap/com8
+com8 setup
+com8 doctor
 ```
 
 Choose Claude Code, Codex, or both. Setup shows its plan and offers missing
@@ -19,7 +19,7 @@ optional.
 
 On macOS, Ghostty is a separate choice. The optional terminal shortcuts work
 from zsh or Bash without changing your interactive shell. The background service
-is optional too; your agent can start HOMI when a task needs it.
+is optional too; your agent can start COM8 when a task needs it.
 
 For Linux, an archive installation, or explicit noninteractive selections, use
 the [installation guide](INSTALL.md). An archive needs Node.js 20+ and Bash to
@@ -32,7 +32,7 @@ optional tools may be unavailable; that does not make the installation broken.
 
 If you selected provider login during setup, complete that provider's own flow.
 Otherwise, sign in through Claude Code or Codex normally. Installing the clients
-does not sign you in, and HOMI does not collect your provider credentials.
+does not sign you in, and COM8 does not collect your provider credentials.
 
 Open a fresh Claude Code CLI or Codex CLI session in your project. Restart
 Claude Code or start a new Codex thread if it was running during setup, so it
@@ -42,7 +42,7 @@ With the terminal profile, `cx` and `cdx` are convenient launch commands;
 `cxx` and `cdxx` retain their full-auto permission settings. You can also
 launch the clients directly.
 
-To add a client later, run `homi setup --guided` and select it. See
+To add a client later, run `com8 setup --guided` and select it. See
 [client requirements](INSTALL.md#clients) if setup reports an unsupported
 version or capability.
 
@@ -70,7 +70,7 @@ For an existing reviewer:
 > Ask the Codex reviewer to check this change for correctness and missing tests.
 > Discuss any disagreements with it and bring me the findings that still matter.
 
-HOMI connects the agents; their models and available tools perform the work.
+COM8 connects the agents; their models and available tools perform the work.
 The coordinating agent should bring back an actual response. If a client needs
 login, a route is unavailable, or a worker has not answered, it should explain
 that condition. A saved message or queued request alone is not an answer.
@@ -83,7 +83,7 @@ configured bus first.
 
 Other machines must be connected explicitly. A shared bus needs its owner's
 invitation; access to your own machines can use a configured SSH connection.
-Installing HOMI alone grants neither. Guided setup can connect an invited device
+Installing COM8 alone grants neither. Guided setup can connect an invited device
 to [bus.nonlocally.org](https://bus.nonlocally.org) or your team's hub; it keeps
 existing connections unless you choose otherwise. See
 [work with agents on other computers](HOSTED.md) for the full joining flow.
@@ -104,6 +104,6 @@ delivery; a queued message alone does not establish that the app processed it.
 - [CLI reference](CLI.md): direct identity, message and terminal operations for
   scripts or debugging, including what delivery receipts prove.
 
-HOMI retains identities and messages when an execution stops. It does not
+COM8 retains identities and messages when an execution stops. It does not
 preserve arbitrary process memory. Keep your project files and normal
 provider session history as you ordinarily would.

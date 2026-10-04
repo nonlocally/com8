@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build an installable, deterministic HOMI runtime archive from the lockfile.
+"""Build an installable, deterministic COM8 runtime archive from the lockfile.
 
 The archive includes production Node dependencies. Installing it requires Node,
 Python and Bash, but never a Git checkout, npm credentials, or npm registry access.
@@ -27,7 +27,7 @@ def git(*args, cwd=ROOT, text=True):
 def run(*args, cwd=ROOT):
     # Node/npm can retain a compile cache in os.tmpdir(). Keep tool-created
     # scratch data inside an owned directory too, not the caller's TMPDIR.
-    with tempfile.TemporaryDirectory(prefix="homi-release-tools-", dir=Path(cwd).parent) as temp:
+    with tempfile.TemporaryDirectory(prefix="com8-release-tools-", dir=Path(cwd).parent) as temp:
         env = {**os.environ, "TMPDIR": temp, "TMP": temp, "TEMP": temp,
                "NODE_COMPILE_CACHE": str(Path(temp) / "node-compile-cache")}
         subprocess.run(args, cwd=cwd, env=env, check=True)
@@ -78,7 +78,7 @@ def worktree_snapshot(revision, root=ROOT):
 @contextlib.contextmanager
 def isolated_source(revision, snapshot=None, root=ROOT):
     """Own one detached temporary worktree and remove only that registration."""
-    with tempfile.TemporaryDirectory(prefix="homi-release-source-") as temp:
+    with tempfile.TemporaryDirectory(prefix="com8-release-source-") as temp:
         source = Path(temp) / "source"
         registered = False
         try:
@@ -158,9 +158,9 @@ def build(source, output, revision, epoch, dirty, snapshot_hash):
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
         (package / "vendor/VERSION").write_text(f"{version}+{revision[:12]}.dirty\n")
     output.mkdir(parents=True, exist_ok=True)
-    target = output / f"homi-{version}.tar.gz"
-    with tempfile.TemporaryDirectory(prefix="homi-release-") as temp:
-        stage = Path(temp) / f"homi-{version}"
+    target = output / f"com8-{version}.tar.gz"
+    with tempfile.TemporaryDirectory(prefix="com8-release-") as temp:
+        stage = Path(temp) / f"com8-{version}"
         stage.mkdir()
         for name in ("src", "vendor"):
             shutil.copytree(package / name, stage / name, symlinks=True)
@@ -169,7 +169,7 @@ def build(source, output, revision, epoch, dirty, snapshot_hash):
         shutil.copy2(source / "LICENSE", stage / "LICENSE")
         run("npm", "ci", "--omit=dev", "--ignore-scripts", cwd=stage)
         (stage / "bin").mkdir()
-        for name, entry in (("homi", "homi.mjs"), ("communicate", "cli.mjs")):
+        for name, entry in (("com8", "com8.mjs"), ("communicate", "cli.mjs")):
             path = stage / "bin" / name
             path.write_text(launcher(entry))
             path.chmod(0o755)
@@ -178,7 +178,7 @@ def build(source, output, revision, epoch, dirty, snapshot_hash):
         for name, data in lock.get("packages", {}).items():
             if name:
                 dependencies[name] = {k: data[k] for k in ("version", "integrity", "license") if k in data}
-        manifest = {"product": "HOMI", "version": version, "source": revision,
+        manifest = {"product": "COM8", "version": version, "source": revision,
                     "dirty": dirty, "sourceDateEpoch": epoch, "dependencies": dependencies,
                     "files": {}}
         if snapshot_hash:

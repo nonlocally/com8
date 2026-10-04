@@ -32,7 +32,7 @@ async function withConfig(operation) {
     if (!p) return;
     pending.delete(message.id);
     // Error payloads may contain user configuration. Keep them private.
-    if (message.error) p.reject(new Error(`Codex ${p.method} refused the settings operation; HOMI requires layered config/read and versioned config/value/write (verified with Codex 0.156.1). Previous configuration must be preserved.`));
+    if (message.error) p.reject(new Error(`Codex ${p.method} refused the settings operation; COM8 requires layered config/read and versioned config/value/write (verified with Codex 0.156.1). Previous configuration must be preserved.`));
     else p.resolve(message.result);
   });
   const timeout = setTimeout(() => { fail(new Error("Codex config API timed out; client state needs inspection before retry")); child.kill("SIGKILL"); }, 30000);
@@ -42,7 +42,7 @@ async function withConfig(operation) {
     child.stdin.write(JSON.stringify({ id, method, params }) + "\n");
   });
   try {
-    await request("initialize", { clientInfo: { name: "homi-installer", version: "0.4.0" } });
+    await request("initialize", { clientInfo: { name: "com8-installer", version: "0.4.0" } });
     return await operation(request);
   } finally {
     clearTimeout(timeout); lines.close(); child.stdin.end(); child.kill("SIGTERM");
@@ -58,7 +58,7 @@ function userSettings(result) {
   const layers = result.layers.filter((layer) => layer.name?.type === "user" && !layer.name.profile && samePath(layer.name.file, settingsPath()));
   if (layers.length !== 1 || !layers[0].version) throw new Error("Codex user config layer/version could not be verified; no client changes made");
   if (result.layers.some((layer) => layer !== layers[0] && layer.config?.plugins?.[ID] !== undefined))
-    throw new Error("Codex HOMI plugin has settings in another profile or managed layer; reconcile those settings before setup/uninstall");
+    throw new Error("Codex COM8 plugin has settings in another profile or managed layer; reconcile those settings before setup/uninstall");
   return { settings: layers[0].config?.plugins?.[ID] ?? null, version: layers[0].version };
 }
 

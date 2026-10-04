@@ -34,8 +34,8 @@ _t_client_value() {
 # shell invocations resolve it once from their pane rather than after fzf exits.
 _t_client() {
   local target=()
-  if [[ -n ${HOMI_TMUX_CLIENT:-} ]]; then
-    _t_client_value "$HOMI_TMUX_CLIENT" '#{client_name}'
+  if [[ -n ${COM8_TMUX_CLIENT:-} ]]; then
+    _t_client_value "$COM8_TMUX_CLIENT" '#{client_name}'
     return
   elif [[ -n ${TMUX_PANE:-} ]]; then
     target=(-t "$TMUX_PANE")

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give every homi identity four independent axes — **identity · workspace · place · surface** — plus a capability **card** that is derived as a side effect of creating the agent, so the fabric can restart, relocate, and describe its agents honestly.
+**Goal:** Give every com8 identity four independent axes — **identity · workspace · place · surface** — plus a capability **card** that is derived as a side effect of creating the agent, so the fabric can restart, relocate, and describe its agents honestly.
 
-**Architecture:** The daemon's identity record grows from 5 flat fields into four namespaced sub-records. Everything is derived at claim/spawn time (never a separate remembered write), persisted in `identities.json`, and surfaced through both faces (CLI + MCP). No new store, no new daemon, no new process supervisor — homi records *what would be needed* to restart, and leaves the deciding to whoever restarts.
+**Architecture:** The daemon's identity record grows from 5 flat fields into four namespaced sub-records. Everything is derived at claim/spawn time (never a separate remembered write), persisted in `identities.json`, and surfaced through both faces (CLI + MCP). No new store, no new daemon, no new process supervisor — com8 records *what would be needed* to restart, and leaves the deciding to whoever restarts.
 
-**Tech Stack:** Python 3.9+ stdlib only (`lib/homi.py`, `lib/homi_seat.py`), bash verb layer (`lib/homi.sh`), TypeScript MCP face (`packages/homi/src/server.ts`), bash test suites (`scripts/test-homi-*.sh`).
+**Tech Stack:** Python 3.9+ stdlib only (`lib/com8.py`, `lib/com8_seat.py`), bash verb layer (`lib/com8.sh`), TypeScript MCP face (`packages/com8/src/server.ts`), bash test suites (`scripts/test-com8-*.sh`).
 
 **Spec:** This plan argues from the four studies in `docs/studies/2026-08-16-*.md` (harvest, sandbox, distribution, crossfleet) and the ontology agreed with the user, restated in **The Ontology** below. Executors should read the ontology section and `docs/2026-08-16-overnight-handoff.md`.
 
@@ -26,7 +26,7 @@ Four axes, independent. Each can change without the others.
 
 ## Global Constraints
 
-- **Python 3.9 floor.** `lib/homi.py` must import on macOS system python3 (3.9.6 on air-2). No walrus-in-comprehension tricks, no `match`, no `X | Y` type syntax.
+- **Python 3.9 floor.** `lib/com8.py` must import on macOS system python3 (3.9.6 on air-2). No walrus-in-comprehension tricks, no `match`, no `X | Y` type syntax.
 - **Stdlib only** in the daemon. No pip, ever. The npm package vendors it verbatim.
 - **The four invariants hold** (`docs/2026-08-16-overnight-handoff.md`): an address must not die; never advertise what you have not measured; durability before delivery; decouple failure domains.
 - **The registry law:** any field that requires a separate remembered write will die. Every field added here is derived at claim/spawn and may be *overridden* afterward, never *required*.
@@ -41,32 +41,32 @@ Four axes, independent. Each can change without the others.
 
 | File | Responsibility | Change |
 |---|---|---|
-| `lib/homi.py` | the daemon: identity records, claim/spawn/move, ops | modify — the bulk of this plan |
-| `lib/homi_workspace.py` | **new** — git interrogation + worktree creation, no daemon deps | create |
-| `lib/homi_seat.py` | seat driver: classify, send, read | modify — `measure()` for surface state |
-| `lib/homi.sh` | bash verb pass-through | modify — new verbs |
-| `packages/homi/src/server.ts` | MCP face | modify — new tools + instructions |
-| `scripts/test-homi-workspace.sh` | **new** — workspace recording + worktree | create |
-| `scripts/test-homi-card.sh` | **new** — card derivation + override | create |
-| `scripts/test-homi-move.sh` | move suite | modify — workspace carriage |
+| `lib/com8.py` | the daemon: identity records, claim/spawn/move, ops | modify — the bulk of this plan |
+| `lib/com8_workspace.py` | **new** — git interrogation + worktree creation, no daemon deps | create |
+| `lib/com8_seat.py` | seat driver: classify, send, read | modify — `measure()` for surface state |
+| `lib/com8.sh` | bash verb pass-through | modify — new verbs |
+| `packages/com8/src/server.ts` | MCP face | modify — new tools + instructions |
+| `scripts/test-com8-workspace.sh` | **new** — workspace recording + worktree | create |
+| `scripts/test-com8-card.sh` | **new** — card derivation + override | create |
+| `scripts/test-com8-move.sh` | move suite | modify — workspace carriage |
 | `registry/` | 5 stale cards | **delete entries**, keep one example |
 | `lib/directory.sh` | name→capability join with file-existence liveness | **delete** |
 
-`homi_workspace.py` is a separate file on purpose: git interrogation is pure, testable without a daemon, and `homi.py` is already 3,394 lines.
+`com8_workspace.py` is a separate file on purpose: git interrogation is pure, testable without a daemon, and `com8.py` is already 3,394 lines.
 
 ---
 
 ## Task 0: Remove what is superseded and lying
 
-Two surfaces are both replaced by homi *and* actively wrong. The user's instruction: *"just because something was there before does not mean that we need to keep it or that it is correct."*
+Two surfaces are both replaced by com8 *and* actively wrong. The user's instruction: *"just because something was there before does not mean that we need to keep it or that it is correct."*
 
 **Delete:**
 1. `registry/*.md` entries — superseded by the derived card (Task 5), stale since 2026-08-09, and they publish another person's hostname, GitHub handle, private repo name, and a 1,126-run failure to a repo intended for open source.
-2. `lib/directory.sh` + the `directory` verb — its liveness is a **file-existence join**, the exact defect the v1 spec flagged as a merge hazard and the switchboard doc records as having *"reported a peer LIVE for a 26-hour outage."* `homi agents` replaces it with measured liveness.
+2. `lib/directory.sh` + the `directory` verb — its liveness is a **file-existence join**, the exact defect the v1 spec flagged as a merge hazard and the switchboard doc records as having *"reported a peer LIVE for a 26-hour outage."* `com8 agents` replaces it with measured liveness.
 
 **Explicitly NOT deleted, with reasons** (so a later reader knows this was decided, not missed):
-- `lib/router.sh` (16 call sites), `lib/peer.sh` (17), `lib/wake.sh` (28), `lib/claude.sh`, `lib/codex.sh` — these still do things homi does not: bridging a remote Claude session as a native peer, presenting Codex as a peer, and event triggers (`wake --on-pr`). Removing them is its own migration plan, not a side effect of this one.
-- `origin/switchboard` — its provenance ladder is already absorbed into homi; its `aliases` idea is adopted in Task 1. Delete the branch **after** Task 1 lands, when nothing in it is unrepresented.
+- `lib/router.sh` (16 call sites), `lib/peer.sh` (17), `lib/wake.sh` (28), `lib/claude.sh`, `lib/codex.sh` — these still do things com8 does not: bridging a remote Claude session as a native peer, presenting Codex as a peer, and event triggers (`wake --on-pr`). Removing them is its own migration plan, not a side effect of this one.
+- `origin/switchboard` — its provenance ladder is already absorbed into com8; its `aliases` idea is adopted in Task 1. Delete the branch **after** Task 1 lands, when nothing in it is unrepresented.
 
 **Files:**
 - Delete: `registry/aadarwal-communicate-maintainer.md`, `registry/<their-agent>.md`, `registry/gds-agent.md`, `registry/mini-agent.md`, `registry/tidy3d-agent.md`, `lib/directory.sh`
@@ -110,7 +110,7 @@ availability: on demand
 # example-agent
 
 This directory is the *shareable* form of a capability card. Cards are
-generated into the identity record by `homi claim`/`homi spawn` and live in
+generated into the identity record by `com8 claim`/`com8 spawn` and live in
 the daemon's state; this folder is for cards you deliberately choose to write
 by hand and share.
 
@@ -138,8 +138,8 @@ In `bin/communicate`, delete the `source "$COMM_HOME/lib/directory.sh"` line and
 
 ```python
 def list_agents():
-    """Agents reachable through homi, with measured liveness."""
-    out = subprocess.run(["communicate", "homi", "agents", "--json"],
+    """Agents reachable through com8, with measured liveness."""
+    out = subprocess.run(["communicate", "com8", "agents", "--json"],
                          capture_output=True, text=True, timeout=15)
     if out.returncode != 0:
         return {"agents": [], "error": out.stderr.strip()}
@@ -154,7 +154,7 @@ def list_agents():
 
 ```bash
 grep -rn 'directory_show\|lib/directory' bin/ lib/ scripts/ packages/ || echo "clean"
-./scripts/test-homi-core.sh 2>&1 | tail -1
+./scripts/test-com8-core.sh 2>&1 | tail -1
 ```
 Expected: `clean`, then `pass=46 fail=0`.
 
@@ -171,10 +171,10 @@ entries: EXAMPLE.md stays, entries are gitignored.
 
 lib/directory.sh joined name->capability against FILE EXISTENCE for liveness --
 the defect the v1 spec flagged as a merge hazard and which once reported a peer
-LIVE through a 26-hour outage. homi agents replaces it with measured liveness.
+LIVE through a 26-hour outage. com8 agents replaces it with measured liveness.
 
 Kept deliberately: router/peer/wake/claude/codex (16-28 call sites; they still do
-what homi does not). Their removal is its own migration."
+what com8 does not). Their removal is its own migration."
 ```
 
 ---
@@ -182,24 +182,24 @@ what homi does not). Their removal is its own migration."
 ## Task 1: The identity record grows four axes
 
 **Files:**
-- Modify: `lib/homi.py` — `_do_claim` (~line 1177), `_persist_identities` (~line 362), `_load_identities` (~line 1356)
-- Test: `scripts/test-homi-core.sh` (append)
+- Modify: `lib/com8.py` — `_do_claim` (~line 1177), `_persist_identities` (~line 362), `_load_identities` (~line 1356)
+- Test: `scripts/test-com8-core.sh` (append)
 
 **Interfaces:**
 - Produces:
-  - `Homi._blank_axes() -> dict` returning `{"workspace": None, "place": {...}, "surface": None, "card": None, "aliases": []}`
+  - `Com8._blank_axes() -> dict` returning `{"workspace": None, "place": {...}, "surface": None, "card": None, "aliases": []}`
   - persisted identity shape: `{claimed_at, kind, home, boxed, aliases, workspace, place, surface, card}`
   - `place` record: `{"kind": "local"|"boxed"|"remote", "device": str|None}`
 - Consumes: nothing.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `scripts/test-homi-core.sh` before its final `echo`:
+Append to `scripts/test-com8-core.sh` before its final `echo`:
 
 ```bash
 echo "== identity record carries the four axes"
-"$COMM" homi claim axistest >/dev/null 2>&1
-python3 - "$COMM_STATE/homi/identities.json" <<'PY' && ok "identity has workspace/place/surface/card/aliases keys" || bad "four-axis record"
+"$COMM" com8 claim axistest >/dev/null 2>&1
+python3 - "$COMM_STATE/com8/identities.json" <<'PY' && ok "identity has workspace/place/surface/card/aliases keys" || bad "four-axis record"
 import json,sys
 d=json.load(open(sys.argv[1]))["axistest"]
 for k in ("workspace","place","surface","card","aliases"):
@@ -212,13 +212,13 @@ PY
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-core.sh 2>&1 | grep -E 'four-axis|pass='
+./scripts/test-com8-core.sh 2>&1 | grep -E 'four-axis|pass='
 ```
 Expected: `FAIL four-axis record`.
 
 - [ ] **Step 3: Implement the blank axes and persist them**
 
-In `lib/homi.py`, add the helper method to the `Homi` class (place it directly above `_do_claim`):
+In `lib/com8.py`, add the helper method to the `Com8` class (place it directly above `_do_claim`):
 
 ```python
     def _blank_axes(self, boxed=False):
@@ -286,7 +286,7 @@ In `_load_identities`, restore them after a successful claim (mirroring the exis
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-core.sh 2>&1 | tail -1
+./scripts/test-com8-core.sh 2>&1 | tail -1
 ```
 Expected: `pass=47 fail=0`.
 
@@ -294,20 +294,20 @@ Expected: `pass=47 fail=0`.
 
 ```bash
 T=$(mktemp -d); mkdir -p "$T/sess"
-export COMM_STATE="$T/s" HOMI_SOCK_DIR="$T/k" HOMI_SESSIONS_DIR="$T/sess" HOMI_SELF=compat HOMI_TICK=1
-mkdir -p "$T/s/homi"
-printf '{"legacy": {"claimed_at": 1.0, "kind": "local", "home": null}}' > "$T/s/homi/identities.json"
-bin/communicate homi start >/dev/null 2>&1 && sleep 1
-bin/communicate homi agents | grep -q legacy && echo "OK legacy identity loaded" || echo "FAIL"
-bin/communicate homi stop >/dev/null 2>&1; rm -rf "$T"
+export COMM_STATE="$T/s" COM8_SOCK_DIR="$T/k" COM8_SESSIONS_DIR="$T/sess" COM8_SELF=compat COM8_TICK=1
+mkdir -p "$T/s/com8"
+printf '{"legacy": {"claimed_at": 1.0, "kind": "local", "home": null}}' > "$T/s/com8/identities.json"
+bin/communicate com8 start >/dev/null 2>&1 && sleep 1
+bin/communicate com8 agents | grep -q legacy && echo "OK legacy identity loaded" || echo "FAIL"
+bin/communicate com8 stop >/dev/null 2>&1; rm -rf "$T"
 ```
 Expected: `OK legacy identity loaded`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/homi.py scripts/test-homi-core.sh
-git -c commit.gpgsign=false commit -m "feat(homi): identity record carries four axes from birth
+git add lib/com8.py scripts/test-com8-core.sh
+git -c commit.gpgsign=false commit -m "feat(com8): identity record carries four axes from birth
 
 Every identity now has workspace/place/surface/card/aliases the moment it is
 claimed, defaulting to empty. Derived-at-birth, never a separate remembered
@@ -321,21 +321,21 @@ unchanged."
 ## Task 2: Workspace — recorded always, worktree opt-in
 
 **Files:**
-- Create: `lib/homi_workspace.py`
-- Modify: `lib/homi.py` — `_do_claim` signature, `_do_spawn` (~line 852), `op()` dispatch, `cli_call`
-- Modify: `lib/homi.sh` (pass-through unchanged; verbs already forwarded)
-- Test: `scripts/test-homi-workspace.sh` (new)
+- Create: `lib/com8_workspace.py`
+- Modify: `lib/com8.py` — `_do_claim` signature, `_do_spawn` (~line 852), `op()` dispatch, `cli_call`
+- Modify: `lib/com8.sh` (pass-through unchanged; verbs already forwarded)
+- Test: `scripts/test-com8-workspace.sh` (new)
 
 **Interfaces:**
 - Produces:
-  - `homi_workspace.describe(path) -> dict|None` → `{"path": abs, "ref": sha|None, "branch": str|None, "worktree": False}`
-  - `homi_workspace.make_worktree(repo, name) -> dict` → same shape with `"worktree": True`; raises `WorkspaceError`
-  - `Homi._do_claim(name, boxed=False, cwd=None, worktree=False)`
+  - `com8_workspace.describe(path) -> dict|None` → `{"path": abs, "ref": sha|None, "branch": str|None, "worktree": False}`
+  - `com8_workspace.make_worktree(repo, name) -> dict` → same shape with `"worktree": True`; raises `WorkspaceError`
+  - `Com8._do_claim(name, boxed=False, cwd=None, worktree=False)`
 - Consumes: `_blank_axes()` from Task 1.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/test-homi-workspace.sh`:
+Create `scripts/test-com8-workspace.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -343,16 +343,16 @@ Create `scripts/test-homi-workspace.sh`:
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMM="$HERE/bin/communicate"
-T="$(mktemp -d /tmp/homi-ws.XXXXXX)"
-export COMM_STATE="$T/state" HOMI_SOCK_DIR="$T/socks" HOMI_SESSIONS_DIR="$T/sess"
-export HOMI_SELF=wshost HOMI_TICK=1
-mkdir -p "$HOMI_SESSIONS_DIR"
+T="$(mktemp -d /tmp/com8-ws.XXXXXX)"
+export COMM_STATE="$T/state" COM8_SOCK_DIR="$T/socks" COM8_SESSIONS_DIR="$T/sess"
+export COM8_SELF=wshost COM8_TICK=1
+mkdir -p "$COM8_SESSIONS_DIR"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); printf 'ok   %s\n' "$*"; }
 bad(){ fail=$((fail+1)); printf 'FAIL %s\n' "$*"; }
-cleanup(){ "$COMM" homi stop >/dev/null 2>&1||true; rm -rf "$T"; }
+cleanup(){ "$COMM" com8 stop >/dev/null 2>&1||true; rm -rf "$T"; }
 trap cleanup EXIT
-ID="$COMM_STATE/homi/identities.json"
+ID="$COMM_STATE/com8/identities.json"
 
 # a real git repo to point at
 REPO="$T/repo"; mkdir -p "$REPO"; cd "$REPO"
@@ -362,10 +362,10 @@ git -c commit.gpgsign=false commit -qm "first"
 SHA="$(git rev-parse --short HEAD)"; BR="$(git rev-parse --abbrev-ref HEAD)"
 cd "$HERE"
 
-"$COMM" homi start >/dev/null 2>&1
+"$COMM" com8 start >/dev/null 2>&1
 
 echo "== a git workspace is recorded with ref + branch"
-"$COMM" homi claim ws1 --cwd "$REPO" >/dev/null 2>&1
+"$COMM" com8 claim ws1 --cwd "$REPO" >/dev/null 2>&1
 python3 - "$ID" "$REPO" "$SHA" "$BR" <<'PY' && ok "git workspace recorded (path/ref/branch)" || bad "git workspace record"
 import json,sys,os
 d=json.load(open(sys.argv[1]))["ws1"]["workspace"]
@@ -377,7 +377,7 @@ PY
 
 echo "== a non-git directory still records its path (no ref)"
 mkdir -p "$T/plain"
-"$COMM" homi claim ws2 --cwd "$T/plain" >/dev/null 2>&1
+"$COMM" com8 claim ws2 --cwd "$T/plain" >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "non-git workspace records path, ref=None" || bad "non-git workspace"
 import json,sys
 d=json.load(open(sys.argv[1]))["ws2"]["workspace"]
@@ -386,62 +386,62 @@ assert d["ref"] is None and d["branch"] is None, d
 PY
 
 echo "== no --cwd means no workspace (never invented)"
-"$COMM" homi claim ws3 >/dev/null 2>&1
+"$COMM" com8 claim ws3 >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "workspace stays null when not given" || bad "workspace invented"
 import json,sys
 assert json.load(open(sys.argv[1]))["ws3"]["workspace"] is None
 PY
 
 echo "== --worktree creates a real worktree on its own branch"
-"$COMM" homi claim ws4 --cwd "$REPO" --worktree >/dev/null 2>&1
+"$COMM" com8 claim ws4 --cwd "$REPO" --worktree >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "worktree recorded with worktree:true" || bad "worktree record"
 import json,sys,os
 d=json.load(open(sys.argv[1]))["ws4"]["workspace"]
 assert d["worktree"] is True, d
-assert d["branch"]=="homi/ws4", d
+assert d["branch"]=="com8/ws4", d
 assert os.path.isdir(d["path"]), d
 PY
-( cd "$REPO" && git worktree list | grep -q 'homi/ws4' ) && ok "git agrees the worktree exists" || bad "git worktree list"
+( cd "$REPO" && git worktree list | grep -q 'com8/ws4' ) && ok "git agrees the worktree exists" || bad "git worktree list"
 
 echo "== a second agent on the same repo gets its own worktree"
-"$COMM" homi claim ws5 --cwd "$REPO" --worktree >/dev/null 2>&1
+"$COMM" com8 claim ws5 --cwd "$REPO" --worktree >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "two worktree agents do not collide" || bad "worktree collision"
 import json,sys
 d=json.load(open(sys.argv[1]))
 assert d["ws4"]["workspace"]["path"]!=d["ws5"]["workspace"]["path"]
-assert d["ws5"]["workspace"]["branch"]=="homi/ws5"
+assert d["ws5"]["workspace"]["branch"]=="com8/ws5"
 PY
 
-"$COMM" homi stop >/dev/null 2>&1
+"$COMM" com8 stop >/dev/null 2>&1
 echo; echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
 ```
 
 ```bash
-chmod +x scripts/test-homi-workspace.sh
+chmod +x scripts/test-com8-workspace.sh
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-workspace.sh 2>&1 | tail -3
+./scripts/test-com8-workspace.sh 2>&1 | tail -3
 ```
 Expected: failures — `--cwd` is not a recognised flag yet.
 
 - [ ] **Step 3: Implement the workspace module**
 
-Create `lib/homi_workspace.py`:
+Create `lib/com8_workspace.py`:
 
 ```python
 #!/usr/bin/env python3
-"""homi_workspace — the workspace axis: what material an agent works on.
+"""com8_workspace — the workspace axis: what material an agent works on.
 
 A workspace is a directory, plus (when it is a git repo) the commit and branch
 it was at. Recording it costs one subprocess and makes three things possible
 that are impossible without it: restarting an agent where it was, moving one to
 another machine honestly, and telling two agents apart on one repo.
 
-Pure functions over paths — no daemon state, no imports from homi.py.
+Pure functions over paths — no daemon state, no imports from com8.py.
 """
 import os
 import subprocess
@@ -482,13 +482,13 @@ def describe(path):
 
 
 def make_worktree(repo, name, base=None):
-    """Create `<repo>-worktrees/<name>` on branch `homi/<name>`. Idempotent:
+    """Create `<repo>-worktrees/<name>` on branch `com8/<name>`. Idempotent:
     an existing worktree for that branch is adopted, not duplicated."""
     src = os.path.abspath(os.path.expanduser(repo))
     top = _git(src, "rev-parse", "--show-toplevel")
     if not top:
         raise WorkspaceError("--worktree needs a git repo: %s" % src)
-    branch = "homi/%s" % name
+    branch = "com8/%s" % name
     dest = os.path.join(os.path.dirname(top),
                         "%s-worktrees" % os.path.basename(top), name)
     if os.path.isdir(dest):
@@ -507,11 +507,11 @@ def make_worktree(repo, name, base=None):
 
 - [ ] **Step 4: Wire it into claim**
 
-In `lib/homi.py`, import it beside the seat driver (near line 52):
+In `lib/com8.py`, import it beside the seat driver (near line 52):
 
 ```python
-import homi_seat  # the seat plane (tmux driver)
-import homi_workspace  # the workspace axis (git interrogation, worktrees)
+import com8_seat  # the seat plane (tmux driver)
+import com8_workspace  # the workspace axis (git interrogation, worktrees)
 ```
 
 Change `_do_claim`'s signature and record the workspace after the axes are set (in **both** the boxed and unboxed branches, just before `self._persist_identities()`):
@@ -523,11 +523,11 @@ Change `_do_claim`'s signature and record the workspace after the axes are set (
 ```python
             if cwd:
                 try:
-                    ws = (homi_workspace.make_worktree(cwd, name) if worktree
-                          else homi_workspace.describe(cwd))
+                    ws = (com8_workspace.make_worktree(cwd, name) if worktree
+                          else com8_workspace.describe(cwd))
                     with self.mu:
                         self.identities[name]["workspace"] = ws
-                except homi_workspace.WorkspaceError as e:
+                except com8_workspace.WorkspaceError as e:
                     self.log("workspace not recorded for", name, ":", e)
 ```
 
@@ -558,7 +558,7 @@ In `cli_call`'s `claim`/`release` handler, parse the flags (replace the flag-str
             args = args[:i] + args[i + 2:]
         args = [a for a in args if a not in ("--boxed", "--worktree")]
         if not args:
-            sys.stderr.write("usage: communicate homi %s <name> "
+            sys.stderr.write("usage: communicate com8 %s <name> "
                              "[--cwd DIR] [--worktree] [--boxed]\n" % op)
             return 1
         req = {"op": op, "name": args[0]}
@@ -577,7 +577,7 @@ In `cli_call`'s `claim`/`release` handler, parse the flags (replace the flag-str
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-workspace.sh 2>&1 | tail -3
+./scripts/test-com8-workspace.sh 2>&1 | tail -3
 ```
 Expected: `pass=6 fail=0`.
 
@@ -585,7 +585,7 @@ Expected: `pass=6 fail=0`.
 
 ```bash
 for t in core ask link seat seat-link spawn mcp fleet move boxed workspace; do
-  printf '%-11s ' "$t:"; ./scripts/test-homi-$t.sh 2>&1 | tail -1
+  printf '%-11s ' "$t:"; ./scripts/test-com8-$t.sh 2>&1 | tail -1
 done
 ```
 Expected: all `fail=0`.
@@ -593,12 +593,12 @@ Expected: all `fail=0`.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add lib/homi_workspace.py lib/homi.py scripts/test-homi-workspace.sh
-git -c commit.gpgsign=false commit -m "feat(homi): the workspace axis -- recorded always, worktree opt-in
+git add lib/com8_workspace.py lib/com8.py scripts/test-com8-workspace.sh
+git -c commit.gpgsign=false commit -m "feat(com8): the workspace axis -- recorded always, worktree opt-in
 
-homi claim/spawn --cwd records {path, ref, branch} so the fabric knows what
+com8 claim/spawn --cwd records {path, ref, branch} so the fabric knows what
 material an agent works on; --worktree additionally creates <repo>-worktrees/
-<name> on branch homi/<name> so two agents on one repo cannot collide.
+<name> on branch com8/<name> so two agents on one repo cannot collide.
 
 A workspace need not be a repo -- a data corpus records its path with ref=None.
 Recording is best-effort and never blocks a claim: an unreadable path logs and
@@ -609,23 +609,23 @@ leaves the axis null rather than failing."
 
 ## Task 3: Supervision — spawn records what a restart would need
 
-Today `_do_spawn` knows `cmd` and `cwd`, persists neither, and `homi_seat.py:22` claims otherwise. Consequence: **homi cannot restart an agent it created.**
+Today `_do_spawn` knows `cmd` and `cwd`, persists neither, and `com8_seat.py:22` claims otherwise. Consequence: **com8 cannot restart an agent it created.**
 
 **Files:**
-- Modify: `lib/homi.py` — `_do_spawn` (~line 852), `op()`, `cli_call`
-- Test: `scripts/test-homi-spawn.sh` (append)
+- Modify: `lib/com8.py` — `_do_spawn` (~line 852), `op()`, `cli_call`
+- Test: `scripts/test-com8-spawn.sh` (append)
 
 **Interfaces:**
-- Produces: `supervision` sub-record `{"cmd": str, "cli": str|None, "cwd": str|None, "spawned_at": float}` on the identity; `Homi._do_restart(name) -> dict`
+- Produces: `supervision` sub-record `{"cmd": str, "cli": str|None, "cwd": str|None, "spawned_at": float}` on the identity; `Com8._do_restart(name) -> dict`
 - Consumes: `_blank_axes()` (Task 1), workspace recording (Task 2).
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `scripts/test-homi-spawn.sh` before its final `echo`:
+Append to `scripts/test-com8-spawn.sh` before its final `echo`:
 
 ```bash
 echo "== spawn records what a restart would need"
-"$COMM" homi spawn sup1 --cwd "$PWD" -- bash --norc --noprofile >/dev/null 2>&1
+"$COMM" com8 spawn sup1 --cwd "$PWD" -- bash --norc --noprofile >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "supervision record persisted (cmd/cwd)" || bad "supervision record"
 import json,sys
 d=json.load(open(sys.argv[1]))["sup1"]
@@ -637,9 +637,9 @@ PY
 
 echo "== restart brings the agent back on a new seat"
 old="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sup1"]["seat"])' "$ID")"
-"$COMM" homi seat kill "$old" >/dev/null 2>&1
+"$COMM" com8 seat kill "$old" >/dev/null 2>&1
 sleep 0.5
-"$COMM" homi restart sup1 >/dev/null 2>&1
+"$COMM" com8 restart sup1 >/dev/null 2>&1
 new="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sup1"]["seat"])' "$ID")"
 [ -n "$new" ] && [ "$new" != "$old" ] && ok "restart produced a new live seat ($old -> $new)" || bad "restart ($old -> $new)"
 ```
@@ -647,7 +647,7 @@ new="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["sup1"]["s
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-spawn.sh 2>&1 | grep -E 'supervision|restart|pass='
+./scripts/test-com8-spawn.sh 2>&1 | grep -E 'supervision|restart|pass='
 ```
 Expected: `FAIL supervision record`.
 
@@ -700,11 +700,11 @@ Add `supervision` to `_persist_identities`'s projection and to the `_load_identi
 
 - [ ] **Step 4: Implement restart**
 
-Add to the `Homi` class, directly after `_do_spawn`:
+Add to the `Com8` class, directly after `_do_spawn`:
 
 ```python
     def _do_restart(self, name):
-        """Bring a spawned agent back using the supervision record. homi is not
+        """Bring a spawned agent back using the supervision record. com8 is not
         a process supervisor (deliberately) -- it stores what a restart WOULD
         need and performs one only when asked."""
         with self.mu:
@@ -712,7 +712,7 @@ Add to the `Homi` class, directly after `_do_spawn`:
         sup = ent.get("supervision")
         if not sup or not sup.get("cmd"):
             return {"ok": False, "err": "%s has no supervision record "
-                    "(was it created with homi spawn?)" % name}
+                    "(was it created with com8 spawn?)" % name}
         ws = ent.get("workspace") or {}
         cwd = sup.get("cwd") or ws.get("path")
         old = ent.get("seat")
@@ -742,7 +742,7 @@ Add a CLI handler in `cli_call` (place beside the `premove` handler):
 ```python
     if op == "restart":
         if not args:
-            sys.stderr.write("usage: communicate homi restart <name>\n")
+            sys.stderr.write("usage: communicate com8 restart <name>\n")
             return 1
         r = _call({"op": "restart", "name": args[0]}, timeout=60)
         if r.get("ok"):
@@ -752,25 +752,25 @@ Add a CLI handler in `cli_call` (place beside the `premove` handler):
         return 1
 ```
 
-Add `restart` to the verb list in `lib/homi.sh`'s pass-through case and to its usage string.
+Add `restart` to the verb list in `lib/com8.sh`'s pass-through case and to its usage string.
 
 - [ ] **Step 5: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-spawn.sh 2>&1 | tail -3
+./scripts/test-com8-spawn.sh 2>&1 | tail -3
 ```
 Expected: `pass=12 fail=0`.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/homi.py lib/homi.sh scripts/test-homi-spawn.sh
-git -c commit.gpgsign=false commit -m "feat(homi): supervision record + restart -- homi can bring back what it spawned
+git add lib/com8.py lib/com8.sh scripts/test-com8-spawn.sh
+git -c commit.gpgsign=false commit -m "feat(com8): supervision record + restart -- com8 can bring back what it spawned
 
 spawn now persists {cmd, cli, cwd, spawned_at} and records the workspace, so a
-crashed or killed agent can be restarted where it was. homi remains NOT a
+crashed or killed agent can be restarted where it was. com8 remains NOT a
 process supervisor: it stores what a restart would need and performs one only
-when asked. homi_seat.py's docstring claimed this already existed; now it does."
+when asked. com8_seat.py's docstring claimed this already existed; now it does."
 ```
 
 ---
@@ -780,29 +780,29 @@ when asked. homi_seat.py's docstring claimed this already existed; now it does."
 Today `move` rsyncs the transcript, `mkdir -p`s the project directory **empty**, and tells the agent to `cd` into it. The mind arrives; the world does not.
 
 **Files:**
-- Modify: `lib/homi.py` — `_move_run` (~line 2704)
-- Test: `scripts/test-homi-move.sh` (append)
+- Modify: `lib/com8.py` — `_move_run` (~line 2704)
+- Test: `scripts/test-com8-move.sh` (append)
 
 **Interfaces:**
-- Consumes: `workspace` (Task 2), `homi_workspace.describe` (Task 2).
+- Consumes: `workspace` (Task 2), `com8_workspace.describe` (Task 2).
 - Produces: `_move_run` gains `require_workspace` behaviour; report lines include a `workspace:` line.
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `scripts/test-homi-move.sh` before its final `echo`:
+Append to `scripts/test-com8-move.sh` before its final `echo`:
 
 ```bash
 echo "== move refuses when the target has no matching workspace"
 python3 - <<'PYEOF' && ok "move refuses a missing target workspace" || bad "move workspace gate"
 import sys; sys.path.insert(0, "lib")
-import homi
-homi._find_transcript = lambda name: None
+import com8
+com8._find_transcript = lambda name: None
 # target reports the workspace path does NOT exist (exit 1 from the probe)
 def fake_ssh(target, script, timeout=30):
     if "WSCHECK" in script:
         return (0, "WS:missing", "")
     return (0, "H:/home/u\nC:/usr/bin/communicate\nS:/home/u/.st", "")
-homi._ssh_run = fake_ssh
+com8._ssh_run = fake_ssh
 def caller(req):
     op = req.get("op")
     if op == "premove":
@@ -813,7 +813,7 @@ def caller(req):
     if op == "status":
         return {"ok": True, "links": {"dev": {"addr": "u@dev"}}}
     return {"ok": True}
-r = homi._move_run(caller, "agent1", "dev", addr="u@dev")
+r = com8._move_run(caller, "agent1", "dev", addr="u@dev")
 assert r.get("ok") is False, r
 assert "workspace" in (r.get("err") or "").lower(), r
 PYEOF
@@ -821,9 +821,9 @@ PYEOF
 echo "== --allow-missing-workspace proceeds with an explicit warning"
 python3 - <<'PYEOF' && ok "--allow-missing-workspace proceeds and warns" || bad "workspace override"
 import sys; sys.path.insert(0, "lib")
-import homi
-homi._find_transcript = lambda name: None
-homi._ssh_run = lambda t, s, timeout=30: (0, "WS:missing", "") if "WSCHECK" in s \
+import com8
+com8._find_transcript = lambda name: None
+com8._ssh_run = lambda t, s, timeout=30: (0, "WS:missing", "") if "WSCHECK" in s \
     else (0, "H:/home/u\nC:/usr/bin/communicate\nS:/home/u/.st", "")
 def caller(req):
     op = req.get("op")
@@ -834,7 +834,7 @@ def caller(req):
     if op == "status":
         return {"ok": True, "links": {"dev": {"addr": "u@dev"}}}
     return {"ok": True}
-r = homi._move_run(caller, "agent1", "dev", addr="u@dev", allow_missing_workspace=True)
+r = com8._move_run(caller, "agent1", "dev", addr="u@dev", allow_missing_workspace=True)
 assert r.get("ok"), r
 assert any("workspace" in l.lower() for l in r.get("lines") or []), r
 PYEOF
@@ -843,7 +843,7 @@ PYEOF
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-move.sh 2>&1 | grep -E 'workspace|pass='
+./scripts/test-com8-move.sh 2>&1 | grep -E 'workspace|pass='
 ```
 Expected: `FAIL move workspace gate`.
 
@@ -919,15 +919,15 @@ Also add `"workspace": ent.get("workspace")` to `_do_premove`'s return dict so t
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-move.sh 2>&1 | tail -3
+./scripts/test-com8-move.sh 2>&1 | tail -3
 ```
 Expected: `pass=20 fail=0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/homi.py scripts/test-homi-move.sh
-git -c commit.gpgsign=false commit -m "fix(homi): move carries the workspace, or refuses
+git add lib/com8.py scripts/test-com8-move.sh
+git -c commit.gpgsign=false commit -m "fix(com8): move carries the workspace, or refuses
 
 move rsynced the transcript, created the project dir EMPTY, and told the agent
 to cd into it -- delivering a complete memory of a repository that does not
@@ -941,20 +941,20 @@ and refuses by default, with --allow-missing-workspace as the explicit override
 ## Task 5: The card — derived at birth, agent-updatable
 
 **Files:**
-- Modify: `lib/homi.py` — new `_derive_card`, `_do_describe`; `_do_claim`; `op()`; `cli_call`
-- Modify: `lib/homi.sh` — add `describe` to the verb list
-- Test: `scripts/test-homi-card.sh` (new)
+- Modify: `lib/com8.py` — new `_derive_card`, `_do_describe`; `_do_claim`; `op()`; `cli_call`
+- Modify: `lib/com8.sh` — add `describe` to the verb list
+- Test: `scripts/test-com8-card.sh` (new)
 
 **Interfaces:**
 - Produces:
-  - `Homi._derive_card(name, cwd) -> dict` → `{"what", "ask_me_for", "derived": True, "updated": float}`
-  - `Homi._do_describe(name, what=None, ask_me_for=None) -> dict`
+  - `Com8._derive_card(name, cwd) -> dict` → `{"what", "ask_me_for", "derived": True, "updated": float}`
+  - `Com8._do_describe(name, what=None, ask_me_for=None) -> dict`
   - `agents_list` entries gain `"card"`
 - Consumes: workspace (Task 2).
 
 - [ ] **Step 1: Write the failing test**
 
-Create `scripts/test-homi-card.sh`:
+Create `scripts/test-com8-card.sh`:
 
 ```bash
 #!/usr/bin/env bash
@@ -963,24 +963,24 @@ Create `scripts/test-homi-card.sh`:
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMM="$HERE/bin/communicate"
-T="$(mktemp -d /tmp/homi-card.XXXXXX)"
-export COMM_STATE="$T/state" HOMI_SOCK_DIR="$T/socks" HOMI_SESSIONS_DIR="$T/sess"
-export HOMI_SELF=cardhost HOMI_TICK=1
-mkdir -p "$HOMI_SESSIONS_DIR"
+T="$(mktemp -d /tmp/com8-card.XXXXXX)"
+export COMM_STATE="$T/state" COM8_SOCK_DIR="$T/socks" COM8_SESSIONS_DIR="$T/sess"
+export COM8_SELF=cardhost COM8_TICK=1
+mkdir -p "$COM8_SESSIONS_DIR"
 pass=0; fail=0
 ok(){ pass=$((pass+1)); printf 'ok   %s\n' "$*"; }
 bad(){ fail=$((fail+1)); printf 'FAIL %s\n' "$*"; }
-cleanup(){ "$COMM" homi stop >/dev/null 2>&1||true; rm -rf "$T"; }
+cleanup(){ "$COMM" com8 stop >/dev/null 2>&1||true; rm -rf "$T"; }
 trap cleanup EXIT
-ID="$COMM_STATE/homi/identities.json"
+ID="$COMM_STATE/com8/identities.json"
 
 PROJ="$T/physlean"; mkdir -p "$PROJ"
 printf '# PhysLean\n\nA Lean 4 formalisation of physics.\n' > "$PROJ/AGENTS.md"
 
-"$COMM" homi start >/dev/null 2>&1
+"$COMM" com8 start >/dev/null 2>&1
 
 echo "== a card is derived from the workspace, with no extra step"
-"$COMM" homi claim prover --cwd "$PROJ" >/dev/null 2>&1
+"$COMM" com8 claim prover --cwd "$PROJ" >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "card derived at claim (marked derived:true)" || bad "card derivation"
 import json,sys
 c=json.load(open(sys.argv[1]))["prover"]["card"]
@@ -989,7 +989,7 @@ assert "PhysLean" in c["what"], c
 PY
 
 echo "== describe overrides it and marks it authored"
-"$COMM" homi describe prover --what "proof automation over PhysLean" \
+"$COMM" com8 describe prover --what "proof automation over PhysLean" \
         --ask-me-for "tactic suggestions, proof state" >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "describe overrides and clears derived flag" || bad "describe override"
 import json,sys
@@ -1000,7 +1000,7 @@ assert c["derived"] is False, c
 PY
 
 echo "== a claim with no workspace still gets a card (never absent)"
-"$COMM" homi claim bare >/dev/null 2>&1
+"$COMM" com8 claim bare >/dev/null 2>&1
 python3 - "$ID" <<'PY' && ok "cardless claim still carries a card stub" || bad "card stub"
 import json,sys
 c=json.load(open(sys.argv[1]))["bare"]["card"]
@@ -1008,7 +1008,7 @@ assert c is not None and "what" in c, c
 PY
 
 echo "== the roster shows the card"
-"$COMM" homi agents --json 2>/dev/null | python3 -c '
+"$COMM" com8 agents --json 2>/dev/null | python3 -c '
 import json,sys
 d=json.load(sys.stdin)
 a={x["name"]:x for x in d["agents"]}
@@ -1016,27 +1016,27 @@ assert a["prover"]["card"]["what"]=="proof automation over PhysLean", a["prover"
 ' && ok "agents_list carries the card" || bad "roster card"
 
 echo "== describe refuses an unknown identity"
-"$COMM" homi describe ghost --what "x" >/dev/null 2>&1 && bad "describe accepted a ghost" || ok "describe refuses unknown identity"
+"$COMM" com8 describe ghost --what "x" >/dev/null 2>&1 && bad "describe accepted a ghost" || ok "describe refuses unknown identity"
 
-"$COMM" homi stop >/dev/null 2>&1
+"$COMM" com8 stop >/dev/null 2>&1
 echo; echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]
 ```
 
 ```bash
-chmod +x scripts/test-homi-card.sh
+chmod +x scripts/test-com8-card.sh
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-card.sh 2>&1 | tail -3
+./scripts/test-com8-card.sh 2>&1 | tail -3
 ```
 Expected: failures — `card` is null and `describe` does not exist.
 
 - [ ] **Step 3: Implement derivation and describe**
 
-Add to the `Homi` class, above `_do_claim`:
+Add to the `Com8` class, above `_do_claim`:
 
 ```python
     _CARD_DOC_NAMES = ("AGENTS.md", "CLAUDE.md", "README.md")
@@ -1072,7 +1072,7 @@ Add to the `Homi` class, above `_do_claim`:
                     continue
             if not what:
                 what = "works in %s" % os.path.basename(cwd.rstrip("/"))
-        return {"what": what or "no description yet — set one with `homi describe`",
+        return {"what": what or "no description yet — set one with `com8 describe`",
                 "ask_me_for": "", "derived": True, "updated": time.time()}
 
     def _do_describe(self, name, what=None, ask_me_for=None):
@@ -1129,7 +1129,7 @@ CLI handler in `cli_call`:
         names = [a for a in args if not a.startswith("--")
                  and a not in (what, askfor)]
         if not names or (what is None and askfor is None):
-            sys.stderr.write("usage: communicate homi describe <name> "
+            sys.stderr.write("usage: communicate com8 describe <name> "
                              "[--what TEXT] [--ask-me-for TEXT]\n")
             return 1
         r = _call({"op": "describe", "name": names[0], "what": what,
@@ -1141,25 +1141,25 @@ CLI handler in `cli_call`:
         return 1
 ```
 
-Add `describe` to `lib/homi.sh`'s pass-through verb list and usage string.
+Add `describe` to `lib/com8.sh`'s pass-through verb list and usage string.
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-card.sh 2>&1 | tail -3
+./scripts/test-com8-card.sh 2>&1 | tail -3
 ```
 Expected: `pass=5 fail=0`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/homi.py lib/homi.sh scripts/test-homi-card.sh
-git -c commit.gpgsign=false commit -m "feat(homi): the capability card -- derived at birth, authored on demand
+git add lib/com8.py lib/com8.sh scripts/test-com8-card.sh
+git -c commit.gpgsign=false commit -m "feat(com8): the capability card -- derived at birth, authored on demand
 
 Every claim now derives a card (what this is) from AGENTS.md/CLAUDE.md/README.md
 in the workspace, or the directory name. Derivation is the design: every
 hand-curated registry in both repos died, and every derived one survived.
-homi describe lets an agent or a human author it, which clears the derived flag.
+com8 describe lets an agent or a human author it, which clears the derived flag.
 agents_list carries it, so a peer knows WHOM to message before it knows how."
 ```
 
@@ -1170,9 +1170,9 @@ agents_list carries it, so a peer knows WHOM to message before it knows how."
 `seat` is the one roster field never measured. After a reboot the tmux server is gone and every `seat` in the roster is a confident lie — a direct violation of invariant #2.
 
 **Files:**
-- Modify: `lib/homi_seat.py` — add `measure()`
-- Modify: `lib/homi.py` — `build_status` (~line 2104), `_do_agents` (~line 969)
-- Test: `scripts/test-homi-seat.sh` (append)
+- Modify: `lib/com8_seat.py` — add `measure()`
+- Modify: `lib/com8.py` — `build_status` (~line 2104), `_do_agents` (~line 969)
+- Test: `scripts/test-com8-seat.sh` (append)
 
 **Interfaces:**
 - Produces: `SeatDriver.measure(seat) -> dict` → `{"driver": "tmux", "handle": str, "state": str, "measured_at": float}`; roster `surface` field.
@@ -1180,24 +1180,24 @@ agents_list carries it, so a peer knows WHOM to message before it knows how."
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `scripts/test-homi-seat.sh` before its final `echo`:
+Append to `scripts/test-com8-seat.sh` before its final `echo`:
 
 ```bash
 echo "== the surface is measured, never asserted"
-"$COMM" homi claim surf >/dev/null 2>&1
-S2="$("$COMM" homi seat spawn 'bash --norc --noprofile' 2>/dev/null)"
-"$COMM" homi seat bind "$S2" surf >/dev/null 2>&1
+"$COMM" com8 claim surf >/dev/null 2>&1
+S2="$("$COMM" com8 seat spawn 'bash --norc --noprofile' 2>/dev/null)"
+"$COMM" com8 seat bind "$S2" surf >/dev/null 2>&1
 sleep 1
-"$COMM" homi agents --json 2>/dev/null | python3 -c '
+"$COMM" com8 agents --json 2>/dev/null | python3 -c '
 import json,sys
 a={x["name"]:x for x in json.load(sys.stdin)["agents"]}
 s=a["surf"]["surface"]
 assert s and s["driver"]=="tmux" and s["state"] in ("idle","busy","booting"), s
 ' && ok "a live seat reports a measured surface" || bad "surface measurement"
 
-"$COMM" homi seat kill "$S2" >/dev/null 2>&1
+"$COMM" com8 seat kill "$S2" >/dev/null 2>&1
 sleep 1
-"$COMM" homi agents --json 2>/dev/null | python3 -c '
+"$COMM" com8 agents --json 2>/dev/null | python3 -c '
 import json,sys
 a={x["name"]:x for x in json.load(sys.stdin)["agents"]}
 s=a["surf"]["surface"]
@@ -1208,13 +1208,13 @@ assert s["state"]=="dead", s
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-seat.sh 2>&1 | grep -E 'surface|pass='
+./scripts/test-com8-seat.sh 2>&1 | grep -E 'surface|pass='
 ```
 Expected: `FAIL surface measurement`.
 
 - [ ] **Step 3: Implement measure()**
 
-Add to `SeatDriver` in `lib/homi_seat.py`, after `state()`:
+Add to `SeatDriver` in `lib/com8_seat.py`, after `state()`:
 
 ```python
     def measure(self, seat):
@@ -1232,7 +1232,7 @@ Add to `SeatDriver` in `lib/homi_seat.py`, after `state()`:
                 "measured_at": time.time()}
 ```
 
-In `lib/homi.py`'s `build_status`, replace the raw `"seat": seat` emission with a measured surface (do this in both the boxed early-return block and the main local block):
+In `lib/com8.py`'s `build_status`, replace the raw `"seat": seat` emission with a measured surface (do this in both the boxed early-return block and the main local block):
 
 ```python
                 "seat": seat,
@@ -1262,7 +1262,7 @@ and use `self._measure_surface(seat)` at both sites plus in `_do_agents`:
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-./scripts/test-homi-seat.sh 2>&1 | tail -3
+./scripts/test-com8-seat.sh 2>&1 | tail -3
 ```
 Expected: `pass=12 fail=0`.
 
@@ -1270,11 +1270,11 @@ Expected: `pass=12 fail=0`.
 
 ```bash
 T=$(mktemp -d); mkdir -p "$T/sess" "$T/bin"
-PATH="$T/bin:/usr/bin:/bin" COMM_STATE="$T/s" HOMI_SOCK_DIR="$T/k" \
-  HOMI_SESSIONS_DIR="$T/sess" HOMI_SELF=notmux HOMI_TICK=1 \
-  bash -c 'bin/communicate homi start >/dev/null 2>&1; sleep 1;
-           bin/communicate homi claim x >/dev/null 2>&1;
-           bin/communicate homi agents; bin/communicate homi stop >/dev/null 2>&1'
+PATH="$T/bin:/usr/bin:/bin" COMM_STATE="$T/s" COM8_SOCK_DIR="$T/k" \
+  COM8_SESSIONS_DIR="$T/sess" COM8_SELF=notmux COM8_TICK=1 \
+  bash -c 'bin/communicate com8 start >/dev/null 2>&1; sleep 1;
+           bin/communicate com8 claim x >/dev/null 2>&1;
+           bin/communicate com8 agents; bin/communicate com8 stop >/dev/null 2>&1'
 rm -rf "$T"
 ```
 Expected: the roster prints; no traceback.
@@ -1282,8 +1282,8 @@ Expected: the roster prints; no traceback.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add lib/homi_seat.py lib/homi.py scripts/test-homi-seat.sh
-git -c commit.gpgsign=false commit -m "fix(homi): the surface axis is measured, not asserted
+git add lib/com8_seat.py lib/com8.py scripts/test-com8-seat.sh
+git -c commit.gpgsign=false commit -m "fix(com8): the surface axis is measured, not asserted
 
 seat was the one roster field never measured -- after a reboot the tmux server
 is gone and every stored pane id was advertised as fact, violating the founding
@@ -1299,9 +1299,9 @@ dead. Measurement failures degrade to state:unknown rather than breaking status.
 The user's note: *"since all of this would be agent driven/created, these kinds of instructions for how to populate this identity json would also have to be in the plugin/tools/skills."* Correct — a field agents are expected to write must be taught at the point of use.
 
 **Files:**
-- Modify: `packages/homi/src/server.ts` — `INSTRUCTIONS`, new tools appended
-- Modify: `packages/homi/test/mcp-smoke.mjs`
-- Test: `scripts/test-homi-mcp.sh` (runs the smoke)
+- Modify: `packages/com8/src/server.ts` — `INSTRUCTIONS`, new tools appended
+- Modify: `packages/com8/test/mcp-smoke.mjs`
+- Test: `scripts/test-com8-mcp.sh` (runs the smoke)
 
 **Interfaces:**
 - Consumes: daemon ops `describe` (Task 5), `restart` (Task 3), workspace/card fields.
@@ -1309,7 +1309,7 @@ The user's note: *"since all of this would be agent driven/created, these kinds 
 
 - [ ] **Step 1: Write the failing test**
 
-In `packages/homi/test/mcp-smoke.mjs`, after the existing instructions assertion, add:
+In `packages/com8/test/mcp-smoke.mjs`, after the existing instructions assertion, add:
 
 ```js
 // The card is agent-authored, so the orientation must teach it.
@@ -1327,13 +1327,13 @@ else bad("missing describe/restart: " + names2.join(","));
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-./scripts/test-homi-mcp.sh 2>&1 | tail -5
+./scripts/test-com8-mcp.sh 2>&1 | tail -5
 ```
 Expected: `FAIL instructions omit card/workspace guidance`.
 
 - [ ] **Step 3: Extend the instructions**
 
-In `packages/homi/src/server.ts`, insert into `INSTRUCTIONS` before the final "Not exposed here" paragraph:
+In `packages/com8/src/server.ts`, insert into `INSTRUCTIONS` before the final "Not exposed here" paragraph:
 
 ```
 YOUR IDENTITY HAS FOUR PARTS, and you can fill two of them in:
@@ -1398,16 +1398,16 @@ with `worktree: z.boolean().optional()` added to its schema.
 - [ ] **Step 5: Rebuild and run the test**
 
 ```bash
-( cd packages/homi && npm run build ) && ./scripts/test-homi-mcp.sh 2>&1 | tail -6
+( cd packages/com8 && npm run build ) && ./scripts/test-com8-mcp.sh 2>&1 | tail -6
 ```
 Expected: `pass=9 fail=0`.
 
 - [ ] **Step 6: Run the entire suite**
 
 ```bash
-python3 scripts/test-homi-seat-unit.py && \
+python3 scripts/test-com8-seat-unit.py && \
 for t in core ask link seat seat-link spawn mcp fleet move boxed workspace card; do
-  printf '%-11s ' "$t:"; ./scripts/test-homi-$t.sh 2>&1 | tail -1
+  printf '%-11s ' "$t:"; ./scripts/test-com8-$t.sh 2>&1 | tail -1
 done
 ```
 Expected: every line `fail=0`.
@@ -1415,8 +1415,8 @@ Expected: every line `fail=0`.
 - [ ] **Step 7: Commit and push**
 
 ```bash
-git add packages/homi/src/server.ts packages/homi/test/mcp-smoke.mjs
-git -c commit.gpgsign=false commit -m "feat(homi/mcp): teach the four axes -- describe + restart tools, extended orientation
+git add packages/com8/src/server.ts packages/com8/test/mcp-smoke.mjs
+git -c commit.gpgsign=false commit -m "feat(com8/mcp): teach the four axes -- describe + restart tools, extended orientation
 
 A field agents are expected to write must be taught where they work. The
 orientation now explains that an identity has four parts, that the agent can
@@ -1433,10 +1433,10 @@ git -c credential.helper='!gh auth git-credential' push origin main
 
 **2. Placeholder scan.** No TBDs. Every code step carries real code; every test step carries a real assertion and an expected result.
 
-**3. Type consistency.** `workspace` is `{path, ref, branch, worktree}` in `homi_workspace.describe`, in `_do_claim`, in `_do_premove`'s return, and in `_move_run`'s check. `card` is `{what, ask_me_for, derived, updated}` in `_derive_card`, `_do_describe`, `_do_agents`, and the MCP `describe` tool. `surface` is `{driver, handle, state, measured_at}` in `SeatDriver.measure`, `_measure_surface`, `build_status`, and `_do_agents`. `supervision` is `{cmd, cli, cwd, spawned_at}` in `_do_spawn`, `_do_restart`, and both persistence sites.
+**3. Type consistency.** `workspace` is `{path, ref, branch, worktree}` in `com8_workspace.describe`, in `_do_claim`, in `_do_premove`'s return, and in `_move_run`'s check. `card` is `{what, ask_me_for, derived, updated}` in `_derive_card`, `_do_describe`, `_do_agents`, and the MCP `describe` tool. `surface` is `{driver, handle, state, measured_at}` in `SeatDriver.measure`, `_measure_surface`, `build_status`, and `_do_agents`. `supervision` is `{cmd, cli, cwd, spawned_at}` in `_do_spawn`, `_do_restart`, and both persistence sites.
 
 **Known gaps, deliberately deferred to a later plan** (not silent omissions):
 - The **socket-driven surface driver** (nvim msgpack-RPC / Lean proof state). Task 6 makes `surface` a measured record with a `driver` field, which is the seam a second driver plugs into — but no second driver is built here.
 - **Cards travelling per-grant** across fleets. The card exists and is local; attaching it to `grant` is fleet work.
 - **The plugin** (hooks + skills). Task 7 teaches through the MCP instructions, which is what `claude mcp add` can deliver; hooks and skills need the plugin package.
-- **`homi restart` on boxed identities** — the supervision record is stored, but restarting a container is out of scope here.
+- **`com8 restart` on boxed identities** — the supervision record is stored, but restarting a container is out of scope here.

@@ -1,11 +1,11 @@
-# Qualifying an extracted HOMI release
+# Qualifying an extracted COM8 release
 
 Copy `scripts/qualify-installed.py` and the release archive to the target machine.
 Extract the archive; no repository checkout, Python packages, model credentials,
 or fixture tree are required. The machine needs Node, Python 3.9+, and Bash 4+.
 
 ```sh
-python3 qualify-installed.py /path/to/homi-0.3.0 > qualification.json
+python3 qualify-installed.py /path/to/com8-0.3.0 > qualification.json
 ```
 
 The exit status is zero when the exercised checks pass. JSON separates passing

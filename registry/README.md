@@ -27,5 +27,5 @@ aspirationally — a stale card misleads a peer deciding whom to message.
 ## Tooling
 
 Cards are derived into the identity record automatically, at claim time
-(`homi claim`/`homi spawn`) — never a separate remembered step; this folder
+(`com8 claim`/`com8 spawn`) — never a separate remembered step; this folder
 holds the hand-written cards you deliberately choose to write and share.

@@ -12,41 +12,41 @@
 
 ## Global Constraints
 
-- **No homi**: package/plugin never vendor `lib/homi.py`, `lib/homi.sh`, `lib/homi_seat.py`, never import `packages/homi`; packaged `communicate homi` prints a not-bundled notice.
+- **No com8**: package/plugin never vendor `lib/com8.py`, `lib/com8.sh`, `lib/com8_seat.py`, never import `packages/com8`; packaged `communicate com8` prints a not-bundled notice.
 - Node `>=20`, `"type": "module"`, deps exactly `@modelcontextprotocol/sdk ^1.30.0` + `zod ^3.25.0`, **no build step** (ship `src/` as-is).
 - Version `0.1.0` everywhere (strict semver — Codex validates).
 - SKILL.md frontmatter: `name` + `description` ONLY; dir name == `name`.
 - No hooks anywhere (Codex manifest `hooks` key is contested — ship none).
 - `~/.claude/settings.json`: read-modify-write with timestamped backup; never touch `known_marketplaces.json`/`installed_plugins.json`. Never hand-edit `~/.codex/config.toml` — use `codex` CLI or print lines.
 - Platform: macOS/Linux; requirements bash, python3, ssh — stated, not hidden.
-- Every commit carries the three co-author trailers (Claude, Codex, Homi).
+- Every commit carries the three co-author trailers (Claude, Codex, Com8).
 
 ---
 
-### Task 1: Make homi libs optional in the CLI
+### Task 1: Make com8 libs optional in the CLI
 
 **Files:**
-- Modify: `bin/communicate` (source block ~lines 50-60; `homi` dispatch arm)
+- Modify: `bin/communicate` (source block ~lines 50-60; `com8` dispatch arm)
 
 **Interfaces:**
-- Produces: a `bin/communicate` that runs identically when `lib/homi.sh` exists, and degrades `communicate homi …` to exit 1 + notice when it does not. Vendored trees (Task 5) rely on this.
+- Produces: a `bin/communicate` that runs identically when `lib/com8.sh` exists, and degrades `communicate com8 …` to exit 1 + notice when it does not. Vendored trees (Task 5) rely on this.
 
-- [ ] **Step 1: Write the failing test** (inline, throwaway): copy repo to `/tmp/cq-nohomi`, delete `lib/homi*.{sh,py}` there, run `COMM_HOME=/tmp/cq-nohomi /tmp/cq-nohomi/bin/communicate agents`; expect today: hard failure at `source lib/homi.sh`.
-- [ ] **Step 2: Edit `bin/communicate`**: change the unconditional `source "$COMM_HOME/lib/homi.sh"` to
+- [ ] **Step 1: Write the failing test** (inline, throwaway): copy repo to `/tmp/cq-nocom8`, delete `lib/com8*.{sh,py}` there, run `COMM_HOME=/tmp/cq-nocom8 /tmp/cq-nocom8/bin/communicate agents`; expect today: hard failure at `source lib/com8.sh`.
+- [ ] **Step 2: Edit `bin/communicate`**: change the unconditional `source "$COMM_HOME/lib/com8.sh"` to
 ```bash
-# homi plane is optional in packaged installs (@aadarwal/communicate ships without it)
-[ -f "$COMM_HOME/lib/homi.sh" ] && . "$COMM_HOME/lib/homi.sh"
+# com8 plane is optional in packaged installs (@aadarwal/communicate ships without it)
+[ -f "$COMM_HOME/lib/com8.sh" ] && . "$COMM_HOME/lib/com8.sh"
 ```
 and guard the dispatch arm:
 ```bash
-homi)
-  command -v homi_cmd >/dev/null 2>&1 || type homi_cmd >/dev/null 2>&1 || \
-    die "homi plane not bundled in this install — clone github.com/aadarwal/communicate for the full CLI"
-  homi_cmd "$@";;
+com8)
+  command -v com8_cmd >/dev/null 2>&1 || type com8_cmd >/dev/null 2>&1 || \
+    die "com8 plane not bundled in this install — clone github.com/aadarwal/communicate for the full CLI"
+  com8_cmd "$@";;
 ```
 (match the actual function name used by the existing arm — read it first; keep behavior identical when present).
-- [ ] **Step 3: Re-run Step 1 probe** — `agents` works homi-less; `homi status` dies with the notice; full-repo `communicate agents` unchanged.
-- [ ] **Step 4: `bash -n bin/communicate` and commit** `feat(bin): homi libs optional so packaged installs run without the homi plane`.
+- [ ] **Step 3: Re-run Step 1 probe** — `agents` works com8-less; `com8 status` dies with the notice; full-repo `communicate agents` unchanged.
+- [ ] **Step 4: `bash -n bin/communicate` and commit** `feat(bin): com8 libs optional so packaged installs run without the com8 plane`.
 
 ### Task 2: Plugin + marketplace manifests (4 JSON files)
 
@@ -127,8 +127,8 @@ homi)
 **Interfaces:**
 - Produces: skill names == dir names; every description opens with what it is then "Use when …" trigger phrases; bodies reference the `communicate` CLI exactly as shipped (Task 4 shim guarantees PATH in Claude; bodies carry the Codex fallback path `~/.local/share/communicate/current/vendor/bin/communicate`).
 
-- [ ] **Step 1: Author `skills/communicate/SKILL.md`** (core). Frontmatter name `communicate`; description: router orientation + triggers ("use when asked to talk to / message / reach / list / coordinate with another agent or session, Claude or Codex, on this or another machine"). Body MUST cover, with exact commands: the bus model (sidecar `name → socket`); `communicate agents` and native ListAgents; `communicate route <name> "<msg>"` / `communicate send <name|socket> [--as NAME] "<msg>"`; prefer native SendMessage from inside Claude (attested mode ⇒ fewer holds); the LANE TABLE (target Claude session → route/SendMessage; existing Codex app/TUI session → `codex queue` (async, reply stays there); fresh headless Codex answer → `codex ask` (sync); Codex as a ListAgents peer → `codex peer`); reply addressing (`from` is the reply address; reply to the `from` of a cross-session message); the inbound gate (mode-parity default, `crossSessionInbound: accept|hold|refuse`, held mail expires ~5 min); safety (transport is your ssh; only bridge to trusted ends); pointer to `references/wire-protocol.md`; one line: durable mailboxes/identity live in the homi plane, not bundled here.
-- [ ] **Step 2: Author `skills/communicate-identity/SKILL.md`**. Triggers: rename a session/agent, name yourself, become addressable, join the bus. Body: a name IS the sidecar entry (`~/.claude/sessions/<pid>.json`); `/rename <name>` is the whole namespace — rename yourself with `/rename`; renaming another live session = drive `/rename` in its UI (communicate does not fake it over the socket — a socket-delivered "/rename" is just text); dormant transcripts: append a `custom-title` record (concept + that `homi retitle` in the full repo automates it); JOIN THE BUS mechanically = (1) numeric-filename sidecar whose `pid` is a live pid, (2) answer the socket within ~250 ms probe, (3) speak newline-JSON user frames — then ListAgents lists you and route/SendMessage reach you; collisions: newest `startedAt` wins deterministically.
+- [ ] **Step 1: Author `skills/communicate/SKILL.md`** (core). Frontmatter name `communicate`; description: router orientation + triggers ("use when asked to talk to / message / reach / list / coordinate with another agent or session, Claude or Codex, on this or another machine"). Body MUST cover, with exact commands: the bus model (sidecar `name → socket`); `communicate agents` and native ListAgents; `communicate route <name> "<msg>"` / `communicate send <name|socket> [--as NAME] "<msg>"`; prefer native SendMessage from inside Claude (attested mode ⇒ fewer holds); the LANE TABLE (target Claude session → route/SendMessage; existing Codex app/TUI session → `codex queue` (async, reply stays there); fresh headless Codex answer → `codex ask` (sync); Codex as a ListAgents peer → `codex peer`); reply addressing (`from` is the reply address; reply to the `from` of a cross-session message); the inbound gate (mode-parity default, `crossSessionInbound: accept|hold|refuse`, held mail expires ~5 min); safety (transport is your ssh; only bridge to trusted ends); pointer to `references/wire-protocol.md`; one line: durable mailboxes/identity live in the com8 plane, not bundled here.
+- [ ] **Step 2: Author `skills/communicate-identity/SKILL.md`**. Triggers: rename a session/agent, name yourself, become addressable, join the bus. Body: a name IS the sidecar entry (`~/.claude/sessions/<pid>.json`); `/rename <name>` is the whole namespace — rename yourself with `/rename`; renaming another live session = drive `/rename` in its UI (communicate does not fake it over the socket — a socket-delivered "/rename" is just text); dormant transcripts: append a `custom-title` record (concept + that `com8 retitle` in the full repo automates it); JOIN THE BUS mechanically = (1) numeric-filename sidecar whose `pid` is a live pid, (2) answer the socket within ~250 ms probe, (3) speak newline-JSON user frames — then ListAgents lists you and route/SendMessage reach you; collisions: newest `startedAt` wins deterministically.
 - [ ] **Step 3: Author `skills/communicate-codex/SKILL.md`**. Triggers: message/ask/drive a Codex agent or session. Body: the three lanes in depth; `codex queue <device> <session-name|uuid> "<msg>"` — Codex ≥ 0.151, async, addressed by native name from `~/.codex/session_index.jsonl`, success = enqueued, reply stays in the session (verify via its rollout file `~/.codex/sessions/YYYY/MM/DD/rollout-*<thread>.jsonl`); `codex ask <device> [--dir D] [--thread N] [--new] [--auto] [--model M] "<q>"` — sync `codex exec --json`, continuity cached per (device,thread), read-only sandbox default, `--auto` = workspace-write; `codex peer <device> [name]` / `unpeer` — socket adapter, own thread, appears in ListAgents; `codex probe|forget`.
 - [ ] **Step 4: Author `skills/communicate-fleet/SKILL.md`**. Triggers: reach an agent on another device/machine, bridge, list remote sessions. Body: `link <device>` (substrate check: tailscale + ssh + codex + sidecar count); `ls [device]`; `claude bridge <device> [name|pid|newest]` — MUST run inside a Claude session (needs `$CLAUDE_CODE_MESSAGING_SOCKET` as return address), mirrors sockets over `ssh -L/-R` so the remote session appears native (`claude*` in agents); `claude unbridge <device|all>`; `status`; `down` (tears down everything communicate started); trust model: a forwarded socket is exactly as reachable as the ssh login carrying it.
 - [ ] **Step 5: Author `skills/communicate-wake/SKILL.md`**. Triggers: wake/nudge/poll an agent on a schedule or event. Body: a message IS a wake (inbound resumes an idle session); `wake <name> --every SEC [--message MSG] [--times N]`; `wake <name> --on-pr owner/repo [--catchup]` (needs authenticated `gh`); `wake ls` / `wake stop <name|all>`; when to prefer native `SendMessage … notify_when_idle` (inside Claude, one-shot) vs wake (recurring/event).
@@ -181,7 +181,7 @@ echo "communicate: no backing install found (run: npx -y @aadarwal/communicate s
 - Create: `packages/communicate/package.json`, `packages/communicate/scripts/vendor.mjs`, `packages/communicate/.gitignore` (`vendor/`, `node_modules/`, `*.tgz`), `packages/communicate/README.md`
 
 **Interfaces:**
-- Produces: `npm run vendor` builds `packages/communicate/vendor/{bin,lib,plugins,.agents,registry,VERSION}` with NO `homi*` files; `prepack` runs it. Tasks 6–8 exec `vendor/bin/communicate` and copy `vendor/` at setup time.
+- Produces: `npm run vendor` builds `packages/communicate/vendor/{bin,lib,plugins,.agents,registry,VERSION}` with NO `com8*` files; `prepack` runs it. Tasks 6–8 exec `vendor/bin/communicate` and copy `vendor/` at setup time.
 
 - [ ] **Step 1: `package.json`**:
 ```json
@@ -201,10 +201,10 @@ echo "communicate: no backing install found (run: npx -y @aadarwal/communicate s
 }
 ```
 (`files: ["vendor"]` is safe because vendor.mjs is the allowlist — it only ever copies what Step 2 names.)
-- [ ] **Step 2: `scripts/vendor.mjs`** — node ESM; from repo root (`../../` of the script): rm -rf + recreate `vendor/`; copy `bin/communicate` → `vendor/bin/`; copy `lib/*.sh` EXCEPT `homi.sh` and `lib/cc_peer.py` (assert: no file matching `/homi/` lands; throw if one would); copy `plugins/` → `vendor/plugins/`; copy `.agents/` → `vendor/.agents/`; copy `registry/` → `vendor/registry/`; write `vendor/VERSION` = package.json version + git short sha; chmod 755 the executables.
-- [ ] **Step 3: Run + verify** — `node scripts/vendor.mjs`; assert `vendor/lib/homi.sh` absent, `vendor/lib/codex.sh` present, `COMM_HOME=$PWD/vendor vendor/bin/communicate agents` prints the table and `vendor/bin/communicate homi status` prints the not-bundled notice (proves Task 1 in the packaged shape).
-- [ ] **Step 4: README.md** — install one-liner (`npx -y @aadarwal/communicate setup`), what setup writes (exact keys/paths), requirements (bash, python3, ssh; macOS/Linux), uninstall, pointer to repo for the homi plane.
-- [ ] **Step 5: Commit** `feat(pkg): @aadarwal/communicate scaffold + homi-free vendor step`.
+- [ ] **Step 2: `scripts/vendor.mjs`** — node ESM; from repo root (`../../` of the script): rm -rf + recreate `vendor/`; copy `bin/communicate` → `vendor/bin/`; copy `lib/*.sh` EXCEPT `com8.sh` and `lib/cc_peer.py` (assert: no file matching `/com8/` lands; throw if one would); copy `plugins/` → `vendor/plugins/`; copy `.agents/` → `vendor/.agents/`; copy `registry/` → `vendor/registry/`; write `vendor/VERSION` = package.json version + git short sha; chmod 755 the executables.
+- [ ] **Step 3: Run + verify** — `node scripts/vendor.mjs`; assert `vendor/lib/com8.sh` absent, `vendor/lib/codex.sh` present, `COMM_HOME=$PWD/vendor vendor/bin/communicate agents` prints the table and `vendor/bin/communicate com8 status` prints the not-bundled notice (proves Task 1 in the packaged shape).
+- [ ] **Step 4: README.md** — install one-liner (`npx -y @aadarwal/communicate setup`), what setup writes (exact keys/paths), requirements (bash, python3, ssh; macOS/Linux), uninstall, pointer to repo for the com8 plane.
+- [ ] **Step 5: Commit** `feat(pkg): @aadarwal/communicate scaffold + com8-free vendor step`.
 
 ### Task 6: CLI dispatcher `src/cli.mjs`
 
@@ -327,7 +327,7 @@ export async function runServe() {
 **Interfaces:**
 - Produces: repo briefing single-sourced; Codex reads AGENTS.md natively, Claude reads CLAUDE.md → `@AGENTS.md`.
 
-- [ ] **Step 1: Write `AGENTS.md`** (~60 lines): what this repo is (agent router; name → socket); the three planes and where homi's boundary is; dev commands (`scripts/test-*.sh`; `npm --prefix packages/communicate run vendor|test`); THE OPERATING GUIDE FOR AGENTS IN THIS REPO — see who's here (`communicate agents`), talk (`route`, native SendMessage), codex lanes incl. queue, rename = `/rename`, join-the-bus mechanics one-paragraph, PATH fallback line for non-Claude harnesses (`~/.local/share/communicate/current/vendor/bin/communicate`); style rules (bash: shellcheck-clean, die() on misuse; python: stdlib only; no secrets in repo).
+- [ ] **Step 1: Write `AGENTS.md`** (~60 lines): what this repo is (agent router; name → socket); the three planes and where com8's boundary is; dev commands (`scripts/test-*.sh`; `npm --prefix packages/communicate run vendor|test`); THE OPERATING GUIDE FOR AGENTS IN THIS REPO — see who's here (`communicate agents`), talk (`route`, native SendMessage), codex lanes incl. queue, rename = `/rename`, join-the-bus mechanics one-paragraph, PATH fallback line for non-Claude harnesses (`~/.local/share/communicate/current/vendor/bin/communicate`); style rules (bash: shellcheck-clean, die() on misuse; python: stdlib only; no secrets in repo).
 - [ ] **Step 2: Write `CLAUDE.md`**:
 ```markdown
 # CLAUDE.md
@@ -351,7 +351,7 @@ Codex read the same instructions and neither can drift.
 - [ ] **Step 1: Write `scripts/test-communicate-dist.sh`** (set -uo pipefail; each check prints ok/FAIL, exit nonzero on any FAIL):
   1. jq validity of the 4 manifests; SKILL.md frontmatter lint (exactly name+description; dir==name) via a python one-liner;
   2. Codex validator if present: `python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/communicate` (skip+warn if absent);
-  3. `npm --prefix packages/communicate run vendor` then assert no `vendor/lib/homi*`;
+  3. `npm --prefix packages/communicate run vendor` then assert no `vendor/lib/com8*`;
   4. `npm pack` → install tarball into `$(mktemp -d)` via `npm install --prefix`; run `<tmp>/node_modules/.bin/communicate version` and `… agents`;
   5. `HOME=$(mktemp -d) <tmp>/node_modules/.bin/communicate setup --dry-run` prints plan, writes nothing;
   6. `node packages/communicate/test/mcp-smoke.mjs`; `node packages/communicate/test/setup-smoke.mjs`; `scripts/test-codex-queue.sh`.

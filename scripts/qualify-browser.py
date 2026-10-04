@@ -27,7 +27,7 @@ def main():
     args = parser.parse_args()
     if not importlib.util.find_spec("playwright"):
         parser.error("Playwright is unavailable; install the documented test dependency first")
-    spec = importlib.util.spec_from_file_location("homi_artifact_check", HERE / "qualify-provider.py")
+    spec = importlib.util.spec_from_file_location("com8_artifact_check", HERE / "qualify-provider.py")
     gate = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(gate)
     runtime = args.runtime.resolve(strict=True)
@@ -37,7 +37,7 @@ def main():
     report = {"status": "pass", "source": manifest["source"], "version": manifest["version"],
               "runtime": str(runtime), "scope": "artifact assets; isolated API fixtures; headless Chromium",
               "real_agent_dispatch": False, "checks": []}
-    with tempfile.TemporaryDirectory(prefix="homi-artifact-ui-") as directory:
+    with tempfile.TemporaryDirectory(prefix="com8-artifact-ui-") as directory:
         root = Path(directory)
         (root / "scripts").mkdir()
         (root / "lib").symlink_to(runtime / "vendor/lib", target_is_directory=True)

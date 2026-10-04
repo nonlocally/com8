@@ -13,14 +13,14 @@ set -uo pipefail
 # A runner or interactive shell can set XDG/profile roots outside these homes.
 # Fixture schedules must never inherit them or source a user's private overlay.
 while IFS= read -r name; do
-  case "$name" in HOMI_*|XDG_*) unset "$name" ;; esac
+  case "$name" in COM8_*|XDG_*) unset "$name" ;; esac
 done < <(compgen -e)
 unset TMUX TMUX_PANE BASH_ENV ENV
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MOD="$HERE/profiles/runtime/modules/snapshots"
-SNAP="$MOD/homi-snapshot"
+SNAP="$MOD/com8-snapshot"
 SCHED="$MOD/schedule.py"
-T="$(mktemp -d /tmp/homi-snap.XXXXXX)"
+T="$(mktemp -d /tmp/com8-snap.XXXXXX)"
 pass=0; fail=0
 ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$*"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s\n' "$*"; }
@@ -31,7 +31,7 @@ trap cleanup EXIT
 FAKEHOME="$T/home with spaces"; mkdir -p "$FAKEHOME"
 export HOME="$FAKEHOME"
 FAKEBIN="$T/bin"; mkdir -p "$FAKEBIN"
-VOL="$T/vol"; ARCH="$VOL/homi-snapshots"; mkdir -p "$VOL"
+VOL="$T/vol"; ARCH="$VOL/com8-snapshots"; mkdir -p "$VOL"
 LOGF="$T/calls.log"
 LAUNCHD="$T/launchd"; mkdir -p "$LAUNCHD"     # the fake domain: one file per loaded label, holding its path
 cat > "$FAKEBIN/mount" <<EOF
@@ -113,14 +113,14 @@ export PATH="$FAKEBIN:$PATH"
 # The CLI against a fixture tree. $1 = sessions dir; archive at $ARCH on $VOL.
 _cli() { # <sess_dir> [args...]
   local sess="$1"; shift
-  HOME="$FAKEHOME" HOMI_SNAPSHOT_DIR="$sess" HOMI_SNAPSHOT_LOG="$sess/../snapshots.log" \
-    HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" "$@" 2>&1
+  HOME="$FAKEHOME" COM8_SNAPSHOT_DIR="$sess" COM8_SNAPSHOT_LOG="$sess/../snapshots.log" \
+    COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" "$@" 2>&1
 }
 # A helper from the sourced script, in a subshell (it sets -u/pipefail).
 _call() { # <sess_dir> <fn> [args...]
   local sess="$1"; shift
-  ( set +u; export HOME="$FAKEHOME" HOMI_SNAPSHOT_DIR="$sess" HOMI_SNAPSHOT_LOG="$sess/../snapshots.log" \
-      HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH"
+  ( set +u; export HOME="$FAKEHOME" COM8_SNAPSHOT_DIR="$sess" COM8_SNAPSHOT_LOG="$sess/../snapshots.log" \
+      COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH"
     source "$SNAP" >/dev/null 2>&1
     "$@" )
 }
@@ -142,18 +142,18 @@ export -f _mode
 mounted()   { touch "$VOL/.mounted"; }
 # The fake snapshotter every section may use.
 cat > "$T/fake-fns" <<'EOF'
-# Like the real tss: saves under $HOMI_PROFILE_STATE/sessions with umask 077,
+# Like the real tss: saves under $COM8_PROFILE_STATE/sessions with umask 077,
 # and (for the suite) records the mode of the run lock while it exists.
-tss() ( umask 077; local d="${HOMI_PROFILE_STATE}/sessions/$1"; mkdir -p "$d"
+tss() ( umask 077; local d="${COM8_PROFILE_STATE}/sessions/$1"; mkdir -p "$d"
         printf 'saved\tnow\nsessions\t2\nwindows\t3\npanes\t5\nagents\t1\n' > "$d/meta.tsv"; printf 'w\n' > "$d/layout.tsv"
-        [ -z "${FAKE_TSS_LOCKMODE:-}" ] || _mode "${HOMI_PROFILE_STATE}/sessions/.${1%.partial}.lock" > "$FAKE_TSS_LOCKMODE" 2>/dev/null || true )
+        [ -z "${FAKE_TSS_LOCKMODE:-}" ] || _mode "${COM8_PROFILE_STATE}/sessions/.${1%.partial}.lock" > "$FAKE_TSS_LOCKMODE" 2>/dev/null || true )
 EOF
 unmounted() { rm -f "$VOL/.mounted"; }
 
 echo "== module files"
-[ -x "$SNAP" ] && ok "homi-snapshot is executable" || bad "homi-snapshot executable present at $SNAP"
+[ -x "$SNAP" ] && ok "com8-snapshot is executable" || bad "com8-snapshot executable present at $SNAP"
 [ -f "$SCHED" ] && ok "schedule.py present" || bad "schedule.py present"
-if bash -n "$SNAP" 2>/dev/null; then ok "homi-snapshot parses"; else bad "homi-snapshot parses"; fi
+if bash -n "$SNAP" 2>/dev/null; then ok "com8-snapshot parses"; else bad "com8-snapshot parses"; fi
 grep -q 'sys.dont_write_bytecode = True' "$SCHED" && ok "schedule.py never writes bytecode into the payload" || bad "dont_write_bytecode missing"
 
 echo "== ordering is chronological across both naming schemes"
@@ -224,7 +224,7 @@ S8="$T/s8/sessions"; mkdir -p "$S8"; rm -rf "$ARCH"; mkdir -p "$ARCH"; mounted
 _mkfix "$S8" snap-2026-08-26-0300 archived; _mkfix "$S8" snap-2026-08-26-0900 archived; _mkfix "$S8" snap-2026-08-26-1500
 _cfg() { # <archive> <sessions> [args...]: the CLI with an explicit archive/sessions pair
   local arch="$1" sess="$2"; shift 2
-  HOME="$FAKEHOME" HOMI_SNAPSHOT_DIR="$sess" HOMI_SNAPSHOT_LOG="$T/s8/snapshots.log" HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$arch" bash "$SNAP" "$@" 2>&1
+  HOME="$FAKEHOME" COM8_SNAPSHOT_DIR="$sess" COM8_SNAPSHOT_LOG="$T/s8/snapshots.log" COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$arch" bash "$SNAP" "$@" 2>&1
 }
 out="$(_cfg "$S8" "$S8" prune 0)"
 [ -d "$S8/snap-2026-08-26-0300" ] && [ -d "$S8/snap-2026-08-26-0900" ] && printf '%s' "$out" | grep -qi "refus" && ok "archive == sessions dir: prune deletes nothing and says the archive is refused" || bad "same-dir archive (out: $out)"
@@ -282,8 +282,8 @@ out="$(_cli "$S10" restore 2026-08-31-0300)"; rc=$?
 
 echo "== new state, logs, locks, manifests and archive copies are private under a permissive umask; nothing existing is re-moded"
 FRESH="$T/fresh-home"; mkdir -p "$FRESH"; rm -rf "$ARCH"; mounted     # the script, not the suite, creates the archive dir
-STATE="$FRESH/.local/state/homi/workstation"
-( umask 022; HOME="$FRESH" HOMI_SNAPSHOT_FNS="$T/fake-fns" FAKE_TSS_LOCKMODE="$T/lockmode" HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" run snap-2026-09-02-0300 > "$T/fresh-run.out" 2>&1 )
+STATE="$FRESH/.local/state/com8/workstation"
+( umask 022; HOME="$FRESH" COM8_SNAPSHOT_FNS="$T/fake-fns" FAKE_TSS_LOCKMODE="$T/lockmode" COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" run snap-2026-09-02-0300 > "$T/fresh-run.out" 2>&1 )
 [ "$(_mode "$STATE")" = 700 ] && [ "$(_mode "$STATE/sessions")" = 700 ] && ok "fresh state parents and the sessions dir are 0700 under umask 022" || bad "state dirs: $(_mode "$STATE" 2>/dev/null) $(_mode "$STATE/sessions" 2>/dev/null)"
 [ "$(_mode "$STATE/snapshots.log")" = 600 ] && ok "the new log is 0600" || bad "log mode: $(_mode "$STATE/snapshots.log" 2>/dev/null)"
 [ "$(cat "$T/lockmode" 2>/dev/null)" = 700 ] && ok "the run lock is 0700 while it exists" || bad "lock mode: $(cat "$T/lockmode" 2>/dev/null)"
@@ -291,17 +291,17 @@ SNAPD="$STATE/sessions/snap-2026-09-02-0300"
 [ "$(_mode "$SNAPD")" = 700 ] && [ "$(_mode "$SNAPD/.manifest.sha256")" = 600 ] && [ "$(_mode "$SNAPD/.archived")" = 600 ] && ok "the snapshot stays 0700 and its manifest and marker are 0600" || bad "snapshot modes: $(_mode "$SNAPD" 2>/dev/null) $(_mode "$SNAPD/.manifest.sha256" 2>/dev/null) $(_mode "$SNAPD/.archived" 2>/dev/null) (run: $(tr '\n' '|' < "$T/fresh-run.out"))"
 [ "$(_mode "$ARCH")" = 700 ] && [ "$(_mode "$ARCH/snap-2026-09-02-0300")" = 700 ] && [ "$(_mode "$ARCH/snap-2026-09-02-0300/.manifest.sha256")" = 600 ] && ok "the new archive dir is 0700 and the archived copy keeps its private modes" || bad "archive modes: $(_mode "$ARCH" 2>/dev/null) $(_mode "$ARCH/snap-2026-09-02-0300" 2>/dev/null)"
 rm -rf "$SNAPD"
-( umask 022; HOME="$FRESH" HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" restore 2026-09-02-0300 >/dev/null 2>&1 )
+( umask 022; HOME="$FRESH" COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" restore 2026-09-02-0300 >/dev/null 2>&1 )
 [ "$(_mode "$SNAPD")" = 700 ] && [ "$(_mode "$SNAPD/meta.tsv")" = 600 ] && [ "$(_mode "$SNAPD/.archived")" = 600 ] && ok "a restored snapshot keeps the archive copy's private modes" || bad "restored modes: $(_mode "$SNAPD" 2>/dev/null) $(_mode "$SNAPD/meta.tsv" 2>/dev/null) $(_mode "$SNAPD/.archived" 2>/dev/null)"
 chmod 755 "$ARCH/snap-2026-09-02-0300"; rm -rf "$SNAPD"
-( umask 022; HOME="$FRESH" HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" restore 2026-09-02-0300 >/dev/null 2>&1 )
+( umask 022; HOME="$FRESH" COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" restore 2026-09-02-0300 >/dev/null 2>&1 )
 [ "$(_mode "$SNAPD")" = 755 ] && ok "…and an archive copy that was never private is restored as it is, not claimed private" || bad "imported mode not retained: $(_mode "$SNAPD" 2>/dev/null)"
 chmod 700 "$ARCH/snap-2026-09-02-0300"
-PRE="$T/pre-home"; mkdir -p "$PRE/.local/state/homi/workstation/sessions"; chmod 755 "$PRE/.local/state/homi/workstation" "$PRE/.local/state/homi/workstation/sessions"
-printf 'earlier\n' > "$PRE/.local/state/homi/workstation/snapshots.log"; chmod 644 "$PRE/.local/state/homi/workstation/snapshots.log"
-( umask 022; HOME="$PRE" HOMI_SNAPSHOT_FNS="$T/fake-fns" HOMI_SNAPSHOT_VOL="$VOL" HOMI_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" run snap-2026-09-02-0900 >/dev/null 2>&1 )
-[ "$(_mode "$PRE/.local/state/homi/workstation/sessions")" = 755 ] && [ "$(_mode "$PRE/.local/state/homi/workstation/snapshots.log")" = 644 ] && ok "pre-existing directories and a pre-existing log keep their modes (never re-moded)" || bad "existing data re-moded: $(_mode "$PRE/.local/state/homi/workstation/sessions") $(_mode "$PRE/.local/state/homi/workstation/snapshots.log")"
-got="$( umask 022; export HOME="$FRESH" HOMI_SNAPSHOT_LOG="$T/umask-probe.log"; source "$SNAP" >/dev/null 2>&1; _logline OK probe >/dev/null; umask )"
+PRE="$T/pre-home"; mkdir -p "$PRE/.local/state/com8/workstation/sessions"; chmod 755 "$PRE/.local/state/com8/workstation" "$PRE/.local/state/com8/workstation/sessions"
+printf 'earlier\n' > "$PRE/.local/state/com8/workstation/snapshots.log"; chmod 644 "$PRE/.local/state/com8/workstation/snapshots.log"
+( umask 022; HOME="$PRE" COM8_SNAPSHOT_FNS="$T/fake-fns" COM8_SNAPSHOT_VOL="$VOL" COM8_SNAPSHOT_ARCHIVE="$ARCH" bash "$SNAP" run snap-2026-09-02-0900 >/dev/null 2>&1 )
+[ "$(_mode "$PRE/.local/state/com8/workstation/sessions")" = 755 ] && [ "$(_mode "$PRE/.local/state/com8/workstation/snapshots.log")" = 644 ] && ok "pre-existing directories and a pre-existing log keep their modes (never re-moded)" || bad "existing data re-moded: $(_mode "$PRE/.local/state/com8/workstation/sessions") $(_mode "$PRE/.local/state/com8/workstation/snapshots.log")"
+got="$( umask 022; export HOME="$FRESH" COM8_SNAPSHOT_LOG="$T/umask-probe.log"; source "$SNAP" >/dev/null 2>&1; _logline OK probe >/dev/null; umask )"
 [ "$got" = 0022 ] && ok "sourcing the module and logging leaves the invoking shell's umask at 0022" || bad "invoking umask changed to $got"
 [ "$(_mode "$T/umask-probe.log")" = 600 ] && ok "…while the log it created is still 0600" || bad "probe log mode: $(_mode "$T/umask-probe.log" 2>/dev/null)"
 
@@ -322,23 +322,23 @@ printf '%s' "$out" | grep -q '^\* snap-2026-08-23-0300' && ok "list marks archiv
 out="$(_cli "$S4" status)"
 printf '%s' "$out" | grep -q "every 6h at 03:00, 09:00, 15:00, 21:00" && ok "status states the cadence" || bad "cadence text (out: $out)"
 printf '%s' "$out" | grep -q "keep newest 56 snapshots" && ok "KEEP defaults to 56 (14 days at 4/day)" || bad "keep default (out: $out)"
-out="$(HOMI_SNAPSHOT_KEEP=8 _cli "$S4" status)"
-printf '%s' "$out" | grep -q "keep newest 8 snapshots" && ok "HOMI_SNAPSHOT_KEEP overrides" || bad "keep override (out: $out)"
-printf '%s' "$out" | grep -Eq '^label: +(com\.communicate\.homi\.snapshots\.[0-9a-f]{8}|communicate-homi-snapshots-[0-9a-f]{8}\.timer)$' && ok "status names the scoped native HOMI schedule label" || bad "label (out: $out)"
+out="$(COM8_SNAPSHOT_KEEP=8 _cli "$S4" status)"
+printf '%s' "$out" | grep -q "keep newest 8 snapshots" && ok "COM8_SNAPSHOT_KEEP overrides" || bad "keep override (out: $out)"
+printf '%s' "$out" | grep -Eq '^label: +(com\.communicate\.com8\.snapshots\.[0-9a-f]{8}|communicate-com8-snapshots-[0-9a-f]{8}\.timer)$' && ok "status names the scoped native COM8 schedule label" || bad "label (out: $out)"
 printf '%s' "$out" | grep -q "loaded:    no" && ok "status reports the (scoped) job not loaded" || bad "loaded line (out: $out)"
 out="$(_cli "$S4" bogus)"; rc=$?
 [ $rc -eq 2 ] && ok "unknown command exits 2" || bad "unknown command rc=$rc"
 
 echo "== an unattended run: fake snapshotter, no tmux server needed"
 S7="$T/s7/sessions"; mkdir -p "$S7"
-out="$(HOMI_SNAPSHOT_FNS="$T/fake-fns" _cli "$S7" run snap-2026-09-01-0300)"
+out="$(COM8_SNAPSHOT_FNS="$T/fake-fns" _cli "$S7" run snap-2026-09-01-0300)"
 [ -f "$S7/snap-2026-09-01-0300/meta.tsv" ] && ok "run takes the named snapshot" || bad "run snapshot (out: $out)"
 [ ! -e "$S7/snap-2026-09-01-0300.partial" ] && ok "…promoted atomically from its .partial" || bad "partial left behind"
 grep -q 'OK     sessions=2 windows=3 panes=5 agents=1  -> snap-2026-09-01-0300' "$T/s7/snapshots.log" && ok "…and logged one aligned OK line" || bad "log line (log: $(cat "$T/s7/snapshots.log" 2>/dev/null))"
-out="$(HOMI_SNAPSHOT_FNS="$T/fake-fns" HOMI_SNAPSHOT_VOL= HOMI_SNAPSHOT_ARCHIVE= HOME="$FAKEHOME" HOMI_SNAPSHOT_DIR="$S7" HOMI_SNAPSHOT_LOG="$T/s7/snapshots.log" bash "$SNAP" run snap-2026-09-01-0900 2>&1)"
+out="$(COM8_SNAPSHOT_FNS="$T/fake-fns" COM8_SNAPSHOT_VOL= COM8_SNAPSHOT_ARCHIVE= HOME="$FAKEHOME" COM8_SNAPSHOT_DIR="$S7" COM8_SNAPSHOT_LOG="$T/s7/snapshots.log" bash "$SNAP" run snap-2026-09-01-0900 2>&1)"
 printf '%s' "$out" | grep -q "no archive volume configured" && ok "with no archive configured the run says so and keeps everything" || bad "no-archive message (out: $out)"
 [ -d "$S7/snap-2026-09-01-0300" ] && ok "…nothing pruned without an archive" || bad "pruned without archive"
-out="$(HOMI_SNAPSHOT_FNS="$T/fake-fns" _cli "$S7" run 'bad name/../x')"; rc=$?
+out="$(COM8_SNAPSHOT_FNS="$T/fake-fns" _cli "$S7" run 'bad name/../x')"; rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "unsafe" && ok "an unsafe snapshot name is refused" || bad "unsafe name (rc=$rc out: $out)"
 name="snap-$(date '+%Y-%m-%d-%H%M')"
 printf '%s' "$name" | grep -Eq '^snap-[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}$' && ok "the default name matches snap-YYYY-MM-DD-HHMM" || bad "default name shape"
@@ -359,19 +359,19 @@ calls() { grep -c . "$LOGF" 2>/dev/null || echo 0; }
 
 echo "-- labels: default only for the actual account home with standard roots; stable scoped labels elsewhere"
 out="$(env -u XDG_CONFIG_HOME -u XDG_STATE_HOME python3 "$SCHED" preview --home "$ACCOUNT_HOME" --runtime "$HERE/profiles/runtime" --platform darwin 2>&1)"
-printf '%s' "$out" | jq_ 'assert d["read_only"]; assert d["label"] == "com.communicate.homi.snapshots", d["label"]; assert d["scope"] == "default"' 2>/dev/null && ok "the account home with standard roots keeps the compatible default label (read-only preview)" || bad "default label for the account home (out: $out)"
+printf '%s' "$out" | jq_ 'assert d["read_only"]; assert d["label"] == "com.communicate.com8.snapshots", d["label"]; assert d["scope"] == "default"' 2>/dev/null && ok "the account home with standard roots keeps the compatible default label (read-only preview)" || bad "default label for the account home (out: $out)"
 LA="$(sched "$HOME_A" preview | jq_ 'print(d["label"])')"
-case "$LA" in com.communicate.homi.snapshots.*) ok "an isolated home gets a scoped label ($LA)";; *) bad "scoped label (got: $LA)";; esac
+case "$LA" in com.communicate.com8.snapshots.*) ok "an isolated home gets a scoped label ($LA)";; *) bad "scoped label (got: $LA)";; esac
 [ "$(sched "$HOME_A" preview | jq_ 'print(d["label"])')" = "$LA" ] && ok "…which is stable across runs" || bad "label not stable"
 LB="$(sched "$HOME_B" preview | jq_ 'print(d["label"])')"
 [ "$LB" != "$LA" ] && ok "…and different for a different home" || bad "two homes share a label"
 out="$(XDG_STATE_HOME="$T/xdg-state" python3 "$SCHED" preview --home "$ACCOUNT_HOME" --runtime "$HERE/profiles/runtime" --platform darwin 2>&1)"
-printf '%s' "$out" | jq_ 'assert d["scope"] == "scoped" and d["label"] != "com.communicate.homi.snapshots"' 2>/dev/null && ok "a nonstandard state root scopes even the account home" || bad "XDG scope (out: $out)"
+printf '%s' "$out" | jq_ 'assert d["scope"] == "scoped" and d["label"] != "com.communicate.com8.snapshots"' 2>/dev/null && ok "a nonstandard state root scopes even the account home" || bad "XDG scope (out: $out)"
 [ ! -s "$LOGF" ] && ok "preview called no service manager" || bad "preview called the manager"
 out="$(HOME="$HOME_A" python3 "$SCHED" preview --runtime "$HERE/profiles/runtime" --platform darwin 2>&1)"
 printf '%s' "$out" | jq_ "assert d['label'] == '$LA' and d['scope'] == 'scoped'" 2>/dev/null && ok "with no --home the selection follows \$HOME (the wrapper's case) and is scoped there" || bad "\$HOME default (out: $out)"
 out="$(env -u HOME -u XDG_CONFIG_HOME -u XDG_STATE_HOME python3 "$SCHED" preview --runtime "$HERE/profiles/runtime" --platform darwin 2>&1)"
-printf '%s' "$out" | jq_ 'assert d["label"] == "com.communicate.homi.snapshots" and d["scope"] == "default"' 2>/dev/null && ok "with no HOME at all the account home is selected (read-only preview)" || bad "no-HOME default (out: $out)"
+printf '%s' "$out" | jq_ 'assert d["label"] == "com.communicate.com8.snapshots" and d["scope"] == "default"' 2>/dev/null && ok "with no HOME at all the account home is selected (read-only preview)" || bad "no-HOME default (out: $out)"
 
 echo "-- install/uninstall across two homes leave each other alone"
 out="$(sched "$HOME_A" install)"; rc=$?
@@ -380,10 +380,10 @@ PA="$(plist_of "$HOME_A")"
 hours="$(python3 -c 'import plistlib,sys; print(" ".join(str(e["Hour"]) for e in plistlib.load(open(sys.argv[1], "rb"))["StartCalendarInterval"]))' "$PA" 2>/dev/null)"
 [ "$hours" = "3 9 15 21" ] && ok "…StartCalendarInterval fires at 03/09/15/21" || bad "plist hours (got: $hours)"
 grep -q 'KeepAlive\|RunAtLoad\|StartInterval' "$PA" && bad "plist is a daemon or drifting timer" || ok "…one-shot job: no KeepAlive/RunAtLoad/StartInterval"
-[ "$(_mode "$HOME_A/Library/Logs")" = 700 ] && [ "$(_mode "$HOME_A/Library/Logs/homi-snapshot.out.log")" = 600 ] && [ "$(_mode "$HOME_A/Library/Logs/homi-snapshot.err.log")" = 600 ] && ok "…a fresh launchd log dir is 0700 with its two log files pre-created 0600" || bad "log dir/file modes: $(_mode "$HOME_A/Library/Logs" 2>/dev/null) $(_mode "$HOME_A/Library/Logs/homi-snapshot.out.log" 2>/dev/null)"
-WA="$HOME_A/.local/bin/homi-snapshot"
+[ "$(_mode "$HOME_A/Library/Logs")" = 700 ] && [ "$(_mode "$HOME_A/Library/Logs/com8-snapshot.out.log")" = 600 ] && [ "$(_mode "$HOME_A/Library/Logs/com8-snapshot.err.log")" = 600 ] && ok "…a fresh launchd log dir is 0700 with its two log files pre-created 0600" || bad "log dir/file modes: $(_mode "$HOME_A/Library/Logs" 2>/dev/null) $(_mode "$HOME_A/Library/Logs/com8-snapshot.out.log" 2>/dev/null)"
+WA="$HOME_A/.local/bin/com8-snapshot"
 [ -x "$WA" ] && grep -q "$WA" "$PA" && ok "…the job runs A's owned wrapper" || bad "wrapper/ProgramArguments"
-python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert e[sys.argv[2]]['owner']=='snapshots-schedule' and e[sys.argv[3]]['owner']=='snapshots-schedule'" "$HOME_A/.local/state/homi/profiles/ownership.json" "$PA" "$WA" 2>/dev/null && ok "…both files are ledger entries tagged as schedule-owned" || bad "ledger tags"
+python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert e[sys.argv[2]]['owner']=='snapshots-schedule' and e[sys.argv[3]]['owner']=='snapshots-schedule'" "$HOME_A/.local/state/com8/profiles/ownership.json" "$PA" "$WA" 2>/dev/null && ok "…both files are ledger entries tagged as schedule-owned" || bad "ledger tags"
 out="$(sched "$HOME_B" install)"; rc=$?
 [ $rc -eq 0 ] && [ -e "$LAUNCHD/$LB" ] && [ -e "$LAUNCHD/$LA" ] && ok "B installs beside A in the same domain" || bad "install B (rc=$rc out: $out)"
 n="$(calls)"; out="$(sched "$HOME_A" install)"; rc=$?
@@ -407,34 +407,34 @@ out="$(python3 "$SCHED" install --home "$HOME_A" --runtime "$T/runtime2" --platf
 printf '%s\n' "$PA" > "$LAUNCHD/$LA"
 
 echo "-- a failed reactivation restores the previous files AND the previous loaded job"
-out="$(sched "$HOME_E" install)"; PE="$(plist_of "$HOME_E")"; LE="$(label_of "$HOME_E")"; WE="$HOME_E/.local/bin/homi-snapshot"
+out="$(sched "$HOME_E" install)"; PE="$(plist_of "$HOME_E")"; LE="$(label_of "$HOME_E")"; WE="$HOME_E/.local/bin/com8-snapshot"
 [ -e "$LAUNCHD/$LE" ] && ok "E installed and loaded" || bad "install E (out: $out)"
 v1="$(cat "$WE")"; touch "$T/bootstrap-fails-once"; n="$(calls)"
 out="$(python3 "$SCHED" install --home "$HOME_E" --runtime "$T/runtime2" --platform darwin --manager "$FAKEBIN/launchctl" 2>&1)"; rc=$?
 [ $rc -ne 0 ] && ok "the update whose bootstrap fails exits nonzero" || bad "failed update rc=$rc"
 [ "$(cat "$WE")" = "$v1" ] && ok "…the wrapper is back to its previous bytes" || bad "wrapper not restored"
-python3 -c "import hashlib,json,sys; e=json.load(open(sys.argv[1]))['entries'][sys.argv[2]]; assert e['installed_hash']==hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()" "$HOME_E/.local/state/homi/profiles/ownership.json" "$WE" 2>/dev/null && ok "…and the ledger hash matches the restored file" || bad "ledger hash after restore"
+python3 -c "import hashlib,json,sys; e=json.load(open(sys.argv[1]))['entries'][sys.argv[2]]; assert e['installed_hash']==hashlib.sha256(open(sys.argv[2],'rb').read()).hexdigest()" "$HOME_E/.local/state/com8/profiles/ownership.json" "$WE" 2>/dev/null && ok "…and the ledger hash matches the restored file" || bad "ledger hash after restore"
 [ "$(cat "$LAUNCHD/$LE" 2>/dev/null)" = "$PE" ] && ok "…and the previous job is loaded again from our file" || bad "previous activation not restored"
 grep -c 'bootstrap' <(tail -n +$((n+1)) "$LOGF") | grep -q '^2$' && ok "…one failed bootstrap, one restoring bootstrap" || bad "bootstrap sequence: $(tail -n +$((n+1)) "$LOGF" | tr '\n' ';')"
 printf '%s' "$out" | grep -qi 'previous' && ok "…and the error says the previous schedule was put back" || bad "error text (out: $out)"
 
 echo "-- a wrapper the profile installed is shared: used, never retagged, never removed by the schedule"
-mkdir -p "$HOME_F/.local/bin" "$HOME_F/.local/state/homi/profiles"
-WF="$HOME_F/.local/bin/homi-snapshot"
-sched "$HOME_F" preview | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(f["content"] for f in d["files"] if f["path"].endswith("/homi-snapshot")), end="")' > "$WF"; chmod 755 "$WF"
-python3 - "$HOME_F/.local/state/homi/profiles/ownership.json" "$WF" <<'PY'
+mkdir -p "$HOME_F/.local/bin" "$HOME_F/.local/state/com8/profiles"
+WF="$HOME_F/.local/bin/com8-snapshot"
+sched "$HOME_F" preview | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(f["content"] for f in d["files"] if f["path"].endswith("/com8-snapshot")), end="")' > "$WF"; chmod 755 "$WF"
+python3 - "$HOME_F/.local/state/com8/profiles/ownership.json" "$WF" <<'PY'
 import hashlib, json, sys
 p, w = sys.argv[1:3]
 json.dump({"schema": 1, "entries": {w: {"kind": "file", "original": {"kind": "absent"},
           "installed_hash": hashlib.sha256(open(w, "rb").read()).hexdigest(), "block": None}}}, open(p, "w"), indent=2)
 PY
 out="$(sched "$HOME_F" install)"; rc=$?
-[ $rc -eq 0 ] && printf '%s' "$out" | jq_ 'assert any(f["action"] == "shared" and f["path"].endswith("/homi-snapshot") for f in d["files"])' 2>/dev/null && ok "install uses the profile-owned wrapper as shared" || bad "shared wrapper install (rc=$rc out: $out)"
-python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries'][sys.argv[2]]; assert 'owner' not in e" "$HOME_F/.local/state/homi/profiles/ownership.json" "$WF" 2>/dev/null && ok "…without retagging its ledger entry" || bad "wrapper entry retagged"
+[ $rc -eq 0 ] && printf '%s' "$out" | jq_ 'assert any(f["action"] == "shared" and f["path"].endswith("/com8-snapshot") for f in d["files"])' 2>/dev/null && ok "install uses the profile-owned wrapper as shared" || bad "shared wrapper install (rc=$rc out: $out)"
+python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries'][sys.argv[2]]; assert 'owner' not in e" "$HOME_F/.local/state/com8/profiles/ownership.json" "$WF" 2>/dev/null && ok "…without retagging its ledger entry" || bad "wrapper entry retagged"
 out="$(sched "$HOME_F" uninstall)"; rc=$?
 PF="$(plist_of "$HOME_F")"
 [ $rc -eq 0 ] && [ ! -e "$PF" ] && [ -x "$WF" ] && ok "uninstall removes the schedule's plist and keeps the profile's wrapper" || bad "shared wrapper uninstall (rc=$rc out: $out)"
-python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert sys.argv[2] in e and 'owner' not in e[sys.argv[2]]" "$HOME_F/.local/state/homi/profiles/ownership.json" "$WF" 2>/dev/null && ok "…with its ledger metadata intact" || bad "wrapper ledger metadata lost"
+python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert sys.argv[2] in e and 'owner' not in e[sys.argv[2]]" "$HOME_F/.local/state/com8/profiles/ownership.json" "$WF" 2>/dev/null && ok "…with its ledger metadata intact" || bad "wrapper ledger metadata lost"
 
 echo "-- ownership rules and platform boundaries"
 printf 'user edit\n' >> "$WA"
@@ -453,8 +453,8 @@ rm -f "$PA"
 touch "$T/bootstrap-fails"; n="$(calls)"
 out="$(sched "$HOME_G" install)"; rc=$?
 PG="$HOME_G/Library/LaunchAgents/$(sched "$HOME_G" preview | jq_ 'print(d["label"])').plist"
-[ $rc -ne 0 ] && [ ! -e "$PG" ] && [ ! -e "$HOME_G/.local/bin/homi-snapshot" ] && ok "a first install whose load fails leaves no files behind" || bad "failed first load left files (rc=$rc out: $out)"
-python3 -c "import json,sys,os; p=sys.argv[1]; d=json.load(open(p)) if os.path.exists(p) else {'entries':{}}; assert not d['entries']" "$HOME_G/.local/state/homi/profiles/ownership.json" 2>/dev/null && ok "…and no ledger entries" || bad "failed load left ledger entries"
+[ $rc -ne 0 ] && [ ! -e "$PG" ] && [ ! -e "$HOME_G/.local/bin/com8-snapshot" ] && ok "a first install whose load fails leaves no files behind" || bad "failed first load left files (rc=$rc out: $out)"
+python3 -c "import json,sys,os; p=sys.argv[1]; d=json.load(open(p)) if os.path.exists(p) else {'entries':{}}; assert not d['entries']" "$HOME_G/.local/state/com8/profiles/ownership.json" 2>/dev/null && ok "…and no ledger entries" || bad "failed load left ledger entries"
 rm -f "$T/bootstrap-fails"
 NON_NATIVE="$(python3 -c 'import sys; print("darwin" if sys.platform == "linux" else "linux")')"
 out="$(python3 "$SCHED" install --home "$HOME_G" --runtime "$HERE/profiles/runtime" --platform "$NON_NATIVE" 2>&1)"; rc=$?
@@ -481,16 +481,16 @@ assert all(f["path"].startswith(sys.argv[2] + "/systemd/user/") for f in d["file
 out="$(XDG_STATE_HOME="relative/state" sched "$HOME_A" preview)"; rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | grep -q "absolute" && ok "a relative XDG root is refused rather than baked" || bad "relative XDG accepted (rc=$rc out: $out)"
 out="$(HOME="$HOME_A" bash "$SNAP" schedule preview --runtime "$HERE/profiles/runtime" --platform darwin 2>&1)"
-printf '%s' "$out" | jq_ "assert d['label'] == '$LA'" 2>/dev/null && ok "the homi-snapshot schedule dispatch keeps the invocation HOME's scope" || bad "dispatch scope (out: $out)"
+printf '%s' "$out" | jq_ "assert d['label'] == '$LA'" 2>/dev/null && ok "the com8-snapshot schedule dispatch keeps the invocation HOME's scope" || bad "dispatch scope (out: $out)"
 
 echo "== an unload the manager refuses keeps every file and entry, and a retry finishes the job"
-out="$(sched "$HOME_H" install)"; LH="$(label_of "$HOME_H")"; PH="$(plist_of "$HOME_H")"; WH="$HOME_H/.local/bin/homi-snapshot"
+out="$(sched "$HOME_H" install)"; LH="$(label_of "$HOME_H")"; PH="$(plist_of "$HOME_H")"; WH="$HOME_H/.local/bin/com8-snapshot"
 [ -e "$LAUNCHD/$LH" ] && ok "H installed and loaded" || bad "install H (out: $out)"
 touch "$T/bootout-fails"; n="$(calls)"
 out="$(sched "$HOME_H" uninstall)"; rc=$?
 [ $rc -ne 0 ] && printf '%s' "$out" | jq_ 'assert d["ok"] is False and d["unloaded"] is False' 2>/dev/null && ok "a refused bootout makes uninstall answer ok:false, unloaded:false" || bad "refused bootout result (rc=$rc out: $out)"
 [ -f "$PH" ] && [ -x "$WH" ] && ok "…every file is still there" || bad "files removed despite the loaded job"
-python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert e[sys.argv[2]]['owner']=='snapshots-schedule' and e[sys.argv[3]]['owner']=='snapshots-schedule'" "$HOME_H/.local/state/homi/profiles/ownership.json" "$PH" "$WH" 2>/dev/null && ok "…and the ledger still owns them" || bad "ledger entries dropped despite the loaded job"
+python3 -c "import json,sys; e=json.load(open(sys.argv[1]))['entries']; assert e[sys.argv[2]]['owner']=='snapshots-schedule' and e[sys.argv[3]]['owner']=='snapshots-schedule'" "$HOME_H/.local/state/com8/profiles/ownership.json" "$PH" "$WH" 2>/dev/null && ok "…and the ledger still owns them" || bad "ledger entries dropped despite the loaded job"
 [ -e "$LAUNCHD/$LH" ] && ok "…while the job is still loaded (as the manager says)" || bad "manager state inconsistent"
 rm -f "$T/bootout-fails"
 out="$(sched "$HOME_H" uninstall)"; rc=$?
@@ -515,11 +515,11 @@ UL="$(lsched preview | jq_ 'print(d["unit"])').timer"
 lstate() { cat "$SYSTEMD/$UL" 2>/dev/null | tr '\n' ' '; }
 out="$(lsched install)"; rc=$?
 [ $rc -eq 0 ] && [ "$(lstate)" = "enabled=1 active=1 " ] && ok "Linux install enables and starts the timer" || bad "linux install (rc=$rc state: $(lstate) out: $out)"
-TL="$HOME_L/.config/systemd/user/$UL"; SL="${TL%.timer}.service"; v1="$(cat "$HOME_L/.local/bin/homi-snapshot")"
+TL="$HOME_L/.config/systemd/user/$UL"; SL="${TL%.timer}.service"; v1="$(cat "$HOME_L/.local/bin/com8-snapshot")"
 grep -q "Environment=\"HOME=$HOME_L\"" "$SL" && ok "…the installed service carries the selected HOME" || bad "service HOME missing: $(grep Environment "$SL" | tr '\n' ' ')"
 printf 'enabled=1 active=0\n' > "$SYSTEMD/$UL"; touch "$T/systemd-enable-fails-once"
 out="$(HOME="$HOME_L" python3 "$SCHED" install --home "$HOME_L" --runtime "$T/runtime2" --platform linux --manager "$FAKEBIN/systemctl" 2>&1)"; rc=$?
-[ $rc -ne 0 ] && [ "$(cat "$HOME_L/.local/bin/homi-snapshot")" = "$v1" ] && ok "a failed Linux update restores the previous files" || bad "linux failed update (rc=$rc out: $out)"
+[ $rc -ne 0 ] && [ "$(cat "$HOME_L/.local/bin/com8-snapshot")" = "$v1" ] && ok "a failed Linux update restores the previous files" || bad "linux failed update (rc=$rc out: $out)"
 [ "$(lstate)" = "enabled=1 active=0 " ] && ok "…and an enabled-but-inactive timer is enabled and inactive again, not started" || bad "enabled-inactive collapsed to: $(lstate)"
 printf 'enabled=0 active=1\n' > "$SYSTEMD/$UL"; touch "$T/systemd-enable-fails-once"
 out="$(HOME="$HOME_L" python3 "$SCHED" install --home "$HOME_L" --runtime "$T/runtime2" --platform linux --manager "$FAKEBIN/systemctl" 2>&1)"; rc=$?

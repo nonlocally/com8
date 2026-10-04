@@ -22,7 +22,7 @@ sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
 import model_connections as models
-import homi
+import com8
 
 
 class Models(unittest.TestCase):
@@ -39,7 +39,7 @@ class Models(unittest.TestCase):
         self.key.chmod(0o600)
         self.environment = patch.dict(os.environ, {
             "HOME": str(self.home), "PATH": str(self.bin) + os.pathsep + os.environ["PATH"],
-            "HOMI_MODEL_CONFIG": str(self.config), "HOMI_PYTHON": sys.executable,
+            "COM8_MODEL_CONFIG": str(self.config), "COM8_PYTHON": sys.executable,
             "RECORD": str(self.home / "record.json"),
         }, clear=True)
         self.environment.start()
@@ -68,7 +68,7 @@ else:
  profile=pathlib.Path(args[args.index('--settings')+1])
  settings=json.loads(profile.read_text())
 result={'argv':args,'settings':settings,'mode':profile.stat().st_mode & 511,
- 'token_present':os.environ.get('HOMI_MODEL_API_KEY') == 'nlm_fixture-secret-never-in-argv',
+ 'token_present':os.environ.get('COM8_MODEL_API_KEY') == 'nlm_fixture-secret-never-in-argv',
  'old_auth_absent':all(k not in os.environ for k in ['OPENAI_API_KEY','OPENAI_BASE_URL','CLAUDE_CODE_OAUTH_TOKEN','ANU_ACCOUNT','ANU_PROVIDER','ANU_LAUNCH_NONCE','CODEX_THREAD_ID']),
  'plugins_present':(pathlib.Path(os.environ.get('CODEX_HOME',os.environ.get('CLAUDE_CONFIG_DIR')))/'plugin-sentinel').exists()}
 pathlib.Path(os.environ['RECORD']).write_text(json.dumps(result))
@@ -151,7 +151,7 @@ raise SystemExit(CODE)
         with self.assertRaises(models.ConnectionError): models.endpoint('http://localhost/v1', True)
 
     def test_stdin_and_unknown_argument_errors_are_redacted(self):
-        command = [str(ROOT/'bin/homi'),'model','add','stdin','--base-url','https://models.example/v1','--model','glm','--key-stdin','--json']
+        command = [str(ROOT/'bin/com8'),'model','add','stdin','--base-url','https://models.example/v1','--model','glm','--key-stdin','--json']
         result = subprocess.run(command, input=b'nlm_stdin-secret', capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn(b'nlm_stdin-secret', result.stdout + result.stderr)
@@ -159,7 +159,7 @@ raise SystemExit(CODE)
         result = subprocess.run(command + ['--api-key','nlm_argument-secret'], input=b'', capture_output=True)
         self.assertEqual(result.returncode, 1)
         self.assertNotIn(b'nlm_argument-secret', result.stdout + result.stderr)
-        result = subprocess.run([str(ROOT/'bin/homi'),'model','add','large','--base-url','https://models.example/v1','--model','glm','--key-stdin','--json'], input=b's'*8193, capture_output=True)
+        result = subprocess.run([str(ROOT/'bin/com8'),'model','add','large','--base-url','https://models.example/v1','--model','glm','--key-stdin','--json'], input=b's'*8193, capture_output=True)
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.config/'large').exists())
 
@@ -178,18 +178,18 @@ raise SystemExit(CODE)
         self.assertNotIn('nlm_fixture',json.dumps(result['argv']))
         self.assertTrue(result['token_present'] and result['old_auth_absent'] and result['plugins_present'])
         self.assertEqual(result['settings']['model'],'glm')
-        self.assertEqual(result['settings']['model_providers']['homi_connection']['wire_api'],'responses')
-        self.assertFalse(result['settings']['model_providers']['homi_connection']['requires_openai_auth'])
+        self.assertEqual(result['settings']['model_providers']['com8_connection']['wire_api'],'responses')
+        self.assertFalse(result['settings']['model_providers']['com8_connection']['requires_openai_auth'])
         self.assertEqual(result['settings']['model_context_window'],32768)
         self.assertEqual(result['settings']['web_search'],'disabled')
         self.assertFalse(result['settings']['shell_environment_policy']['ignore_default_excludes'])
-        self.assertEqual(result['settings']['shell_environment_policy']['set']['HOMI_MODEL_API_KEY'],'')
+        self.assertEqual(result['settings']['shell_environment_policy']['set']['COM8_MODEL_API_KEY'],'')
         self.assertNotIn('filters', result['settings']['shell_environment_policy'])
         self.assertNotIn('exclude', result['settings']['shell_environment_policy'])
         self.assertEqual(result['mode'],0o600)
         self.assertEqual((home/'config.toml').read_text(),'model = "existing"\n')
         self.assertEqual((home/'auth.json').read_text(),'existing-auth')
-        self.assertEqual(list(home.glob('homi-connection-*.config.toml')),[])
+        self.assertEqual(list(home.glob('com8-connection-*.config.toml')),[])
 
     def test_claude_private_settings_pin_routes_and_preserve_plugin(self):
         self.add(); self.fake_client('claude')
@@ -207,7 +207,7 @@ raise SystemExit(CODE)
         self.assertEqual(result['settings']['env']['ANTHROPIC_API_KEY'],'')
         self.assertEqual(result['settings']['crossSessionInbound'],'accept')
         self.assertEqual((home/'settings.json').read_bytes(),before)
-        self.assertEqual(list(home.glob('.homi-connection-*.json')),[])
+        self.assertEqual(list(home.glob('.com8-connection-*.json')),[])
 
     def test_claude_overrides_settings_routes_and_alternate_auth_sources(self):
         self.add(); self.fake_client('claude')
@@ -240,7 +240,7 @@ raise SystemExit(CODE)
     def test_external_edit_retained_and_nonzero_client_exit_propagates(self):
         self.add(); self.fake_client('codex',code=7,edit=True)
         self.assertEqual(models.run('openweb','codex',[]),7)
-        paths=list((self.home/'.codex').glob('homi-connection-*.config.toml'))
+        paths=list((self.home/'.codex').glob('com8-connection-*.config.toml'))
         self.assertEqual(len(paths),1)
         self.assertEqual(paths[0].read_text(),'user-edit')
 
@@ -250,7 +250,7 @@ raise SystemExit(CODE)
             models.run('openweb','codex',[])
         for cli, args in [('codex',['-m','paid-model']),('codex',['--config=model_provider="openai"']),('claude',['--settings','override.json']),('claude',['--fallback-model=x'])]:
             with self.assertRaises(models.ConnectionError): models.run('openweb',cli,args)
-        self.assertEqual(list((self.home/'.codex').glob('homi-connection-*')),[])
+        self.assertEqual(list((self.home/'.codex').glob('com8-connection-*')),[])
 
     def test_launch_uses_one_verified_endpoint_credential_pair(self):
         self.add(); self.fake_client('codex')
@@ -261,7 +261,7 @@ raise SystemExit(CODE)
         with patch.object(models, 'load', side_effect=[first, rotated]):
             self.assertEqual(models.run('openweb', 'codex', []), 0)
         result = json.loads((self.home/'record.json').read_text())
-        self.assertEqual(result['settings']['model_providers']['homi_connection']['base_url'],
+        self.assertEqual(result['settings']['model_providers']['com8_connection']['base_url'],
                          'https://models.example/v1')
         self.assertTrue(result['token_present'])
 
@@ -276,8 +276,8 @@ raise SystemExit(CODE)
             for cli, args in cases:
                 with self.subTest(cli=cli, args=args), self.assertRaises(models.ConnectionError):
                     models.run('openweb', cli, args)
-        self.assertEqual(list((self.home/'.codex').glob('homi-connection-*')), [])
-        self.assertEqual(list((self.home/'.claude').glob('.homi-connection-*')), [])
+        self.assertEqual(list((self.home/'.codex').glob('com8-connection-*')), [])
+        self.assertEqual(list((self.home/'.claude').glob('.com8-connection-*')), [])
 
     def test_failed_process_creation_removes_only_owned_launch_file(self):
         self.add(); self.fake_client('claude')
@@ -285,20 +285,20 @@ raise SystemExit(CODE)
         with patch.object(models.subprocess, 'Popen', side_effect=OSError('fixture')) as launch:
             with self.assertRaises(OSError): models.run('openweb', 'claude', [])
         self.assertNotIn('CLAUDE_CODE_SIMPLE', launch.call_args.kwargs['env'])
-        self.assertEqual(list((self.home/'.claude').glob('.homi-connection-*')), [])
+        self.assertEqual(list((self.home/'.claude').glob('.com8-connection-*')), [])
         self.assertTrue((self.config/'openweb/credential').is_file())
 
     def test_spawn_validation_happens_before_daemon_or_claim(self):
-        with patch.object(homi,'_call',side_effect=AssertionError('must not contact daemon')):
+        with patch.object(com8,'_call',side_effect=AssertionError('must not contact daemon')):
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(homi.cli_call(['spawn','worker','--cli','codex','--model-connection','missing']),1)
-                self.assertEqual(homi.cli_call(['spawn','worker','--cli','codex','--model-connection']),1)
-                self.assertEqual(homi.cli_call(['spawn','worker','--cli','codex','--model-connection','--json']),1)
+                self.assertEqual(com8.cli_call(['spawn','worker','--cli','codex','--model-connection','missing']),1)
+                self.assertEqual(com8.cli_call(['spawn','worker','--cli','codex','--model-connection']),1)
+                self.assertEqual(com8.cli_call(['spawn','worker','--cli','codex','--model-connection','--json']),1)
         self.add()
         captured=[]
-        with patch.object(homi,'_call',side_effect=lambda request,**kw: captured.append(request) or {'ok':True,'name':'worker','seat':'%1'}):
+        with patch.object(com8,'_call',side_effect=lambda request,**kw: captured.append(request) or {'ok':True,'name':'worker','seat':'%1'}):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(homi.cli_call(['spawn','worker','--cli','claude','--model-connection','openweb']),0)
+                self.assertEqual(com8.cli_call(['spawn','worker','--cli','claude','--model-connection','openweb']),0)
         self.assertEqual(len(captured),1)
         self.assertTrue(captured[0]['adopt'])
         self.assertIn('--accept-inbound',captured[0]['cmd'])
@@ -312,7 +312,7 @@ raise SystemExit(CODE)
         with self.assertRaisesRegex(models.ConnectionError,'0.156.0'):
             models.run('openweb','codex',[])
         self.assertFalse((self.home/'record.json').exists())
-        self.assertEqual(list((self.home/'.codex').glob('homi-connection-*')),[])
+        self.assertEqual(list((self.home/'.codex').glob('com8-connection-*')),[])
 
     def test_codex_resume_receives_selected_model_and_private_profile(self):
         self.add(); self.fake_client('codex')
@@ -320,12 +320,12 @@ raise SystemExit(CODE)
         result=json.loads((self.home/'record.json').read_text())
         self.assertEqual(result['argv'][-2:],['resume','fixture-thread'])
         self.assertEqual(result['argv'][result['argv'].index('--model')+1],'glm')
-        self.assertEqual(result['settings']['model_provider'],'homi_connection')
-        self.assertEqual(list((self.home/'.codex').glob('homi-connection-*')),[])
+        self.assertEqual(result['settings']['model_provider'],'com8_connection')
+        self.assertEqual(list((self.home/'.codex').glob('com8-connection-*')),[])
 
     def test_legacy_communicate_model_dispatch(self):
         self.add()
-        result=subprocess.run([str(ROOT/'bin/communicate'),'homi','model','list','--json'],capture_output=True)
+        result=subprocess.run([str(ROOT/'bin/communicate'),'com8','model','list','--json'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(json.loads(result.stdout)['connections'][0]['model'],'glm')
 
@@ -333,9 +333,9 @@ raise SystemExit(CODE)
         self.add()
         os.environ['TMUX_PANE']='%51'
         with patch.object(models.shutil,'which',return_value='/fixture/tmux'), patch.object(models.subprocess,'run',return_value=argparse.Namespace(returncode=0,stdout=b'account-name')) as call:
-            with self.assertRaisesRegex(models.ConnectionError,'fresh HOMI seat'): models.run('openweb','codex',[])
+            with self.assertRaisesRegex(models.ConnectionError,'fresh COM8 seat'): models.run('openweb','codex',[])
         self.assertEqual(call.call_args.args[0][1:3],['show-options','-pqv'])
-        self.assertEqual(list((self.home/'.codex').glob('homi-connection-*')),[])
+        self.assertEqual(list((self.home/'.codex').glob('com8-connection-*')),[])
 
     def test_doctor_catalog_only_and_no_redirect_token_forwarding(self):
         received=[]

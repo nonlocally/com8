@@ -33,4 +33,4 @@ if __name__ == "__main__":
         print(json.dumps(settings(*sys.argv[1:]), separators=(",", ":")))
     except (ValueError, OSError, TypeError):
         # A settings object can carry private values; do not echo its contents.
-        sys.exit("homi-account: cannot merge managed hooks into Claude --settings")
+        sys.exit("com8-account: cannot merge managed hooks into Claude --settings")

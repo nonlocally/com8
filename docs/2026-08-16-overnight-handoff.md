@@ -1,13 +1,13 @@
-# Overnight handoff — the homi fabric, v2 complete
+# Overnight handoff — the com8 fabric, v2 complete
 
 *2026-08-16, overnight session. Everything below is committed on `fabric-v2`
 (pushed), tested (**171/171 across 11 suites**), live-proven on real hardware
 where noted, and hardened against an adversarial code review. Nothing in
-`~/HOMI` was touched or deleted.*
+`~/COM8` was touched or deleted.*
 
 ## What exists now, in one paragraph
 
-One per-device daemon (**homi**, python stdlib, `lib/homi.py`) gives every agent
+One per-device daemon (**com8**, python stdlib, `lib/com8.py`) gives every agent
 a durable name, a durable mailbox, and measured liveness; carries mail across
 your devices over acked/deduped/backoff'd ssh links; drives interactive
 terminal surfaces (**seats**) locally and across devices; **creates** agents
@@ -15,42 +15,42 @@ terminal surfaces (**seats**) locally and across devices; **creates** agents
 address alive mid-move (`move`), **contains** them in air-gapped VMs that
 remain first-class peers (`claim --boxed`), and **federates** with another
 operator's fleet under deny-by-default capability grants. Two faces, one
-kernel: the CLI (`communicate homi …`) is the complete definition; the npm
-package (`packages/homi`, `@aadarwal/homi`) projects it as ~18 MCP tools for
+kernel: the CLI (`communicate com8 …`) is the complete definition; the npm
+package (`packages/com8`, `@aadarwal/com8`) projects it as ~18 MCP tools for
 any MCP-speaking agent (claude, codex, …) with zero fabric logic in Node.
 
 ## Try it in 2 minutes (both real daemons are already up + linked)
 
 ```sh
-communicate homi agents                          # the roster, measured
-communicate homi spawn helper --cli claude --cwd ~/src/aadarwal/communicate
-communicate homi ask helper "say hi in one word" --from you --timeout 120
-communicate homi seat spawn 'bash' --device aadarshs-mac-air-2   # a far seat
-communicate homi move helper aadarshs-mac-air-2  # relocate the agent-being
+communicate com8 agents                          # the roster, measured
+communicate com8 spawn helper --cli claude --cwd ~/src/aadarwal/communicate
+communicate com8 ask helper "say hi in one word" --from you --timeout 120
+communicate com8 seat spawn 'bash' --device aadarshs-mac-air-2   # a far seat
+communicate com8 move helper aadarshs-mac-air-2  # relocate the agent-being
 ```
 
 ## The night's build order (each step committed + tested before the next)
 
 | Step | What | Proof |
 |---|---|---|
-| A1 | `ask` (return token `asker@device~corr`, blocking; natural-reply fallback) + `group` + `notify` (durable human lane + `HOMI_NOTIFY_CMD`) | 10/10 |
+| A1 | `ask` (return token `asker@device~corr`, blocking; natural-reply fallback) + `group` + `notify` (durable human lane + `COM8_NOTIFY_CMD`) | 10/10 |
 | A2 | Seat plane: clean-room tmux driver — classifier (dead>approval>busy>booting>idle), deliver-and-verify send, secret-redacting read, fail-closed respond | 10/10 real tmux |
 | A3 | Cross-device seats: `{kind:"seat"}` envelopes, result-in-ack, **`--allow-seats` per link** (upgrade/revoke in place) | 9/9 two daemons |
 | A4 | `spawn` / `fan` / `consult` — the fabric creates agents (no anu dependency) | 10/10 |
-| Dist | `@aadarwal/homi` npm pkg: thin MCP server + vendored daemon; `npx homi setup/doctor/serve`; daemon grew `agents`/`inbox`/`wait` (long-poll) ops | 5/5 via a real MCP client; **not published** (deferred to you) |
+| Dist | `@aadarwal/com8` npm pkg: thin MCP server + vendored daemon; `npx com8 setup/doctor/serve`; daemon grew `agents`/`inbox`/`wait` (long-poll) ops | 5/5 via a real MCP client; **not published** (deferred to you) |
 | Fleet | `federate invite/accept` cards, forward-only key install, deny-by-default `grant`s, fleet-qualified proxies, control token, boundary token-rewrite, full cross-fleet ask→reply | 17/17 |
-| Move | `homi move` — the user-requested agent transfer (see below) | 17/17 + live |
-| Boxed | `claim --boxed` + outbox drain + `bin/homi-boxed-init` shim | 14/14 + live air-gapped VM |
+| Move | `com8 move` — the user-requested agent transfer (see below) | 17/17 + live |
+| Boxed | `claim --boxed` + outbox drain + `bin/com8-boxed-init` shim | 14/14 + live air-gapped VM |
 | Dogfood | Everything live on mini-2 ↔ air-2; 5 frictions found & fixed | see below |
 
 ## The agent-transfer feature you asked for (mid-night message)
 
 I read old `beam` critically first. It got right: identity travels *inside* the
 transcript (custom-title record), `$HOME` translation, honest fork warnings.
-It missed everything homi exists for: no mailbox, no claim, and **the address
+It missed everything com8 exists for: no mailbox, no claim, and **the address
 died at the origin** — mail kept landing in the old inbox.
 
-`homi move <name> <device>` moves the agent-being = **three JSON artifacts**
+`com8 move <name> <device>` moves the agent-being = **three JSON artifacts**
 (your instinct was exactly right): transcript (rsync), mailbox
 (`inbox.jsonl` + cursor), identity claim. The order keeps the address alive:
 
@@ -83,7 +83,7 @@ the far inbox; the transcript resumed-able by `claude --resume <sid>` there.
   test residue. air-2 is a laptop and sleeps; when it went offline overnight
   the mini-2 daemon stayed up untouched (decoupled failure domains, exactly as
   designed) — air-2's launchd daemon resumes on wake and the links reconnect,
-  draining any queued mail. If `homi status` on air-2 is unreachable in the
+  draining any queued mail. If `com8 status` on air-2 is unreachable in the
   morning, wake the laptop; nothing needs restarting.
 
 ## Frictions dogfood found (all fixed + committed)
@@ -147,11 +147,11 @@ noted here so they're not lost):
 
 ## Deferred to you (deliberately)
 
-1. **`npm publish`** of `@aadarwal/homi` (+ `mcp-publisher` registry push) —
+1. **`npm publish`** of `@aadarwal/com8` (+ `mcp-publisher` registry push) —
    built + tarball-verified locally; publishing is outward-facing.
-2. **`~/HOMI` retirement** — you said you'd drive deletion in the morning.
+2. **`~/COM8` retirement** — you said you'd drive deletion in the morning.
    The harvest triage (what to keep/reject and why) is in
-   `docs/studies/2026-08-16-harvest-old-homi.md`.
+   `docs/studies/2026-08-16-harvest-old-com8.md`.
 3. **Cross-fleet live test with a real second operator** — the machinery is
    tested between two local daemons; the human half (the collaborator's side) needs a
    willing peer.
@@ -161,10 +161,10 @@ noted here so they're not lost):
 
 ## Where everything is
 
-- `lib/homi.py` (~2600 lines, the daemon) · `lib/homi_seat.py` (seat driver) ·
-  `bin/homi-boxed-init` (in-box shim) · `packages/homi/` (npm+MCP)
-- Tests: `scripts/test-homi-{core,ask,link,seat,seat-link,spawn,mcp,fleet,move,boxed}.sh`
+- `lib/com8.py` (~2600 lines, the daemon) · `lib/com8_seat.py` (seat driver) ·
+  `bin/com8-boxed-init` (in-box shim) · `packages/com8/` (npm+MCP)
+- Tests: `scripts/test-com8-{core,ask,link,seat,seat-link,spawn,mcp,fleet,move,boxed}.sh`
 - Studies (tonight's research, all live-verified): `docs/studies/2026-08-16-
-  {harvest-old-homi,sandbox-boxed-peer,distribution-mcp,crossfleet-onboarding}.md`
+  {harvest-old-com8,sandbox-boxed-peer,distribution-mcp,crossfleet-onboarding}.md`
 - Specs: `docs/superpowers/specs/2026-08-15-agent-fabric-design.md` (v1),
   `2026-08-16-fabric-v2-seats-and-plugin-design.md` (v2)

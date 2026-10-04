@@ -1,0 +1,52 @@
+{
+  "name": "@aadarwal/com8",
+  "version": "0.6.0",
+  "description": "com8 \u2014 durable agent identity, mailboxes, and store-and-forward messaging for AI agents, as an MCP server. Two faces (CLI + MCP), one kernel.",
+  "type": "module",
+  "mcpName": "io.github.aadarwal/com8",
+  "bin": {
+    "com8": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "vendor",
+    "LICENSE",
+    "templates",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "vendor": "node scripts/vendor.mjs",
+    "build": "node scripts/vendor.mjs && tsc",
+    "test": "node test/plist-unit.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "agents",
+    "messaging",
+    "mailbox",
+    "identity",
+    "claude",
+    "codex"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nonlocally/com8.git",
+    "directory": "packages/com8"
+  }
+}

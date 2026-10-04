@@ -9,17 +9,17 @@ them. Items the @handles work fixes on its way are marked [handles].
 
 ## Verified bugs
 
-- **[handles] Installer split-brain state root.** `packages/homi/src/cli.ts:62`
+- **[handles] Installer split-brain state root.** `packages/com8/src/cli.ts:62`
   writes `COMM_STATE = dirname(dirname(stateRoot()))` into the launchd plist —
-  strips both `homi` AND `communicate`, so the launchd daemon binds
-  `~/.local/state/homi/` while every client looks in
-  `~/.local/state/communicate/homi/`. Result: a persistent daemon nobody talks
+  strips both `com8` AND `communicate`, so the launchd daemon binds
+  `~/.local/state/com8/` while every client looks in
+  `~/.local/state/communicate/com8/`. Result: a persistent daemon nobody talks
   to plus a second autostarted daemon in the right place (singleton lock is
   per-state-root); `doctor` reports ok because it reaches the second.
   `StandardErrorPath` in the same plist uses the correct root, so logs and
   state diverge.
 - **[handles] npm plist has no PATH.** `cli.ts` bakes only `COMM_STATE` +
-  `HOMI_SELF`; the repo plist deliberately sets PATH (`lib/homi.sh:118`).
+  `COM8_SELF`; the repo plist deliberately sets PATH (`lib/com8.sh:118`).
   Under launchd's default PATH, bare `tmux`/`claude`/`codex` are invisible →
   seat/spawn/fan/consult all fail on a package-installed daemon.
 - **[handles] No daemon version anywhere.** `build_status` returns no version;
@@ -28,7 +28,7 @@ them. Items the @handles work fixes on its way are marked [handles].
   — `identities.json`, rewritten the same day, lacked the axes fields the
   checked-out code persists.
 - **[handles] Fingerprint pinning is theater.** `key_fp` flows from the card
-  (`lib/homi.py:2863`), is persisted (`:1738`), and has **no consumer**;
+  (`lib/com8.py:2863`), is persisted (`:1738`), and has **no consumer**;
   `federate accept` displays the card's self-declared `fingerprint` field
   rather than computing one from the pubkey it actually installs; `_ssh_cmd`
   (`:1898-1908`) sets no `StrictHostKeyChecking`/known-hosts pinning. "The
@@ -37,14 +37,14 @@ them. Items the @handles work fixes on its way are marked [handles].
   `peer_inbound_dir/<MY fleet name>.sock` (`:2859`) while my inbound socket
   for them is named by MY petname for them (`link_in_sock :1727`). Mail flows
   only if each side's freely-chosen petname equals the other side's
-  `HOMI_FLEET`. Mismatch = silent queue-forever.
+  `COM8_FLEET`. Mismatch = silent queue-forever.
 - **[handles] `federate accept` never prints the counter-card** (design said
   it would): the loop stays open unless the human knows to run `invite` back;
   a one-way link dead-letters B→A mail.
 - **[handles] Fleet name is env-derived inside the daemon.**
-  `os.environ.get("HOMI_FLEET", getpass_user())` at `:1846`/`:1819`, never
+  `os.environ.get("COM8_FLEET", getpass_user())` at `:1846`/`:1819`, never
   persisted (`fleet.json` designed, never built), and neither launchd nor
-  systemd unit passes `HOMI_FLEET` — exporting it in your shell does not
+  systemd unit passes `COM8_FLEET` — exporting it in your shell does not
   change the card the daemon hands a collaborator; you silently federate as
   `$USER`.
 - **Boxed sockets unlinked at shutdown.** `shutdown()` (`:2663-2686`) unlinks
@@ -69,7 +69,7 @@ them. Items the @handles work fixes on its way are marked [handles].
   `name@fleet` (`:2153`) but `_do_inbox`/`_do_wait` reject `@` names
   (`:1024`, `:1033`) — the daemon creates identities it cannot be asked about.
 - **[handles] sun_path unguarded.** The ≈104-byte AF_UNIX limit is a verified
-  design fact with a designed fallback (`/tmp/homi-$UID`), and no guard
+  design fact with a designed fallback (`/tmp/com8-$UID`), and no guard
   exists at any `bind()`.
 
 ## Security posture notes
@@ -113,12 +113,12 @@ them. Items the @handles work fixes on its way are marked [handles].
 - **No depth/budget/quota anywhere** in the fabric; the MCP server registered
   at user scope means agents spawned by agents inherit the tools — recursion
   is unbounded by construction.
-- `class Homi` ≈2,530 lines, 8 locks, hand-documented lock orderings; mail,
+- `class Com8` ≈2,530 lines, 8 locks, hand-documented lock orderings; mail,
   links/federation, and spawn/move are the natural next module extractions
   (workspace/seat extractions set the pattern).
 
 - **Reboot-reattach is designed but not exercised** (flagged by the
-  collaborator in #8, 2026-08-19): `test-homi-persist.sh` proves KeepAlive
+  collaborator in #8, 2026-08-19): `test-com8-persist.sh` proves KeepAlive
   kill-respawn — a strict subset of reboot (cold launchd, cleared /tmp, all
   sockets gone are not in the kill path) — and is the MANUAL suite outside
   the automated count. Close with one measured before/after at the next
@@ -136,26 +136,26 @@ them. Items the @handles work fixes on its way are marked [handles].
 - **`aliases` has no writer.** Declared (`:1289`), persisted (`:370`),
   move-carried (`:1645`), written by nothing — the registry-law failure mode
   the field's own comment warns about. Populate it or delete it.
-- **Multi-fleet-per-person unmodelled** (work vs personal): one `HOMI_FLEET`
+- **Multi-fleet-per-person unmodelled** (work vs personal): one `COM8_FLEET`
   per device; petname-keyed grants would mean two disjoint grant sets.
 - **npm face prefers the stabilized daemon over the vendored one**
   (`kernel.ts:45-57`): an `npx` upgrade keeps running the old daemon
   indefinitely; no version check between the two. The repo plist hardcodes
-  the checkout path (`lib/homi.sh:112-114`); both installers share the
+  the checkout path (`lib/com8.sh:112-114`); both installers share the
   launchd label and can silently fight.
 
 ## Faces / periphery
 
 - **openwebui**: `setup.sh` does not create the admin account or register the
   tool/model its README and spec describe; `dispatch_tool.py` hardcodes the
-  repo path in a valve; every webui user shares one homi identity
+  repo path in a valve; every webui user shares one com8 identity
   (`caller_name` valve); the old webui secret key remains in git history —
   rotate before the repo goes public.
 - **Legacy surfaces await their own migration**: `lib/router.sh`,
   `lib/peer.sh`, `lib/wake.sh`, `lib/claude.sh`, `lib/codex.sh` still do
-  what homi does not; kept deliberately, but they carry the pre-homi flaws
+  what com8 does not; kept deliberately, but they carry the pre-com8 flaws
   (bare-string identity, no delivery semantics).
-- **HOMI-engine is one disk copy from lost** (`~/src/QPG-MIT/HOMI-engine`,
+- **COM8-engine is one disk copy from lost** (`~/src/QPG-MIT/COM8-engine`,
   no longer on GitHub) — the repo where identity-as-registry-object was
   first stated. Preservation hazard already recorded in the v1 spec; still
   outstanding.

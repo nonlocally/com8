@@ -15,7 +15,7 @@ envelope carries forward unchanged.
 The talk page's second tab. Tapping an agent on the board and opening
 `session` shows the agent's actual live Claude session — the operator's
 words and the agent's prose as chat bubbles, tool calls as one-line
-receipts (`$ restart the daemon…`, `✎ homi.py`), compactions as honest
+receipts (`$ restart the daemon…`, `✎ com8.py`), compactions as honest
 dividers — rendered read-only from the transcript on disk, in the same
 skin, with the mail composer persistent underneath. It answers the thing
 the mail thread deliberately does not: *what has this agent been doing
@@ -31,7 +31,7 @@ the two honest halves it conflated.
    registry exactly as `_deliver_pending` finds it — name match, pid
    alive, socket present, and on collision the daemon's own chooser
    semantics (probe-live wins, then interactive, then newest; the parity
-   test uses `Homi._choose_session` as its oracle). The tab must show
+   test uses `Com8._choose_session` as its oracle). The tab must show
    the same session mail reaches, or it lies.
 3. **Transcript by session-id glob, never cwd munging.** A session's cwd
    drifts (worktree switches); its id doesn't. The id is validated and
@@ -73,14 +73,14 @@ the two honest halves it conflated.
 - **Markdown rendering** of assistant prose beyond fenced code: the chat
   helper's fence-to-mono is reused; full markdown is skin risk for
   little gain on a phone.
-- **cc_peer/codex-backed agents**: their sidecars are homi plants, not
+- **cc_peer/codex-backed agents**: their sidecars are com8 plants, not
   Claude sessions — `live:false` is the honest answer today.
 - **Streaming/SSE**: same verdict as talk v1 (iOS kills EventSource);
   the 2.5 s poll with an `after` cursor is the proven shape.
 
 ## Verification
 
-`scripts/test-homi-transcript.sh` — 25 checks: resolution (collision,
+`scripts/test-com8-transcript.sh` — 25 checks: resolution (collision,
 dead pid, probe parity against the daemon's chooser with an accepting
 listener), parsing (exact turn sequence, attribution, embedded-reminder
 stripping), pathological inputs under time bounds, malformed-record

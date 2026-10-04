@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""The explicit, reversible, owned schedule for HOMI snapshots.
+"""The explicit, reversible, owned schedule for COM8 snapshots.
 
-    homi-snapshot schedule preview|install|uninstall|status
+    com8-snapshot schedule preview|install|uninstall|status
         [--platform darwin|linux] [--home PATH] [--runtime PATH] [--manager PATH] [--brief]
 
 Profile installation never installs a schedule. This command does, on request:
 it writes a one-shot launchd agent (macOS) or a systemd user timer (Linux) that
-runs `homi-snapshot run` at 03:00, 09:00, 15:00 and 21:00, plus the stable
-wrapper ~/.local/bin/homi-snapshot, and loads the job through the service
+runs `com8-snapshot run` at 03:00, 09:00, 15:00 and 21:00, plus the stable
+wrapper ~/.local/bin/com8-snapshot, and loads the job through the service
 manager. Ownership boundaries:
 
 - The label is the compatible default only for the actual account home (from
@@ -37,7 +37,7 @@ manager. Ownership boundaries:
   never removed here; only a wrapper this schedule created is removed.
 
 Every file is owned through the profile ledger (profiles/manage.py: the same
-ownership.json, lock, conflict rules and atomic writes), so `homi profile
+ownership.json, lock, conflict rules and atomic writes), so `com8 profile
 status` lists them and nothing unowned is ever replaced. Output is JSON.
 Nothing here reads or moves snapshots.
 """
@@ -57,8 +57,8 @@ import time
 
 sys.dont_write_bytecode = True   # the profile installer is imported from an immutable payload
 
-BASE_LABEL = "com.communicate.homi.snapshots"
-BASE_UNIT = "communicate-homi-snapshots"
+BASE_LABEL = "com.communicate.com8.snapshots"
+BASE_UNIT = "communicate-com8-snapshots"
 HOURS = [3, 9, 15, 21]
 OWNER = "snapshots-schedule"
 HERE = Path(__file__).resolve().parent
@@ -93,19 +93,19 @@ def validated_path(name, value):
 
 def load_manage(explicit=None):
     """The profile installer, imported for its ownership machinery: beside this
-    module in a source tree or payload, the installed HOMI release's copy, or
+    module in a source tree or payload, the installed COM8 release's copy, or
     an explicit path. Never a second installer, and never bytecode beside it."""
-    candidates = [Path(p) for p in [explicit, os.environ.get("HOMI_PROFILES_MANAGE")] if p]
+    candidates = [Path(p) for p in [explicit, os.environ.get("COM8_PROFILES_MANAGE")] if p]
     candidates.append(HERE.parents[2] / "manage.py")
     data = Path(os.environ.get("COMMUNICATE_DATA") or Path.home() / ".local/share/communicate")
     candidates.append(data / "current/vendor/profiles/manage.py")
     for path in candidates:
         if path.is_file():
-            spec = importlib.util.spec_from_file_location("homi_profiles_manage", path)
+            spec = importlib.util.spec_from_file_location("com8_profiles_manage", path)
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             return module
-    raise Conflict("profile installer (profiles/manage.py) not found; run from a HOMI release or pass --manage PATH")
+    raise Conflict("profile installer (profiles/manage.py) not found; run from a COM8 release or pass --manage PATH")
 
 
 def quote_unit(value):
@@ -209,7 +209,7 @@ class Schedule:
         self.platform = platform
         self.manager = Manager(platform, manager)
         self._runtime = Path(runtime).resolve() if runtime else None
-        self.wrapper = self.home / ".local/bin/homi-snapshot"
+        self.wrapper = self.home / ".local/bin/com8-snapshot"
         self.log_dir = self.home / "Library/Logs"
         self.env_home = validated_path("HOME", str(self.home))
         self.xdg = {name: validated_path(name, os.environ.get(name)) for name in XDG_ROOTS if os.environ.get(name)}
@@ -236,25 +236,25 @@ class Schedule:
     def runtime(self):
         if self._runtime is None:
             payload = self.profile.record.get("payload")
-            if payload and (Path(payload) / "runtime/modules/snapshots/homi-snapshot").is_file():
+            if payload and (Path(payload) / "runtime/modules/snapshots/com8-snapshot").is_file():
                 self._runtime = Path(payload) / "runtime"
             else:
                 raise Conflict("no installed workstation profile carries the snapshot module; install the profile "
-                               "first (homi profile install --terminal) or pass --runtime PATH")
+                               "first (com8 profile install --terminal) or pass --runtime PATH")
         return self._runtime
 
     def wrapper_text(self):
         active = self.profile.config / "active.sh"
         return ("#!/usr/bin/env bash\n"
-                "# HOMI snapshots. Owned by the profile ledger (homi-snapshot schedule install); do not edit.\n"
+                "# COM8 snapshots. Owned by the profile ledger (com8-snapshot schedule install); do not edit.\n"
                 'if [ "${BASH_VERSINFO[0]:-0}" -lt 4 ]; then\n'
                 "  for b in /opt/homebrew/bin/bash /usr/local/bin/bash; do\n"
                 '    [ ! -x "$b" ] || exec "$b" "$0" "$@"\n'
                 "  done\n"
-                '  echo "HOMI snapshots need Bash 4+" >&2; exit 1\n'
+                '  echo "COM8 snapshots need Bash 4+" >&2; exit 1\n'
                 "fi\n"
                 f"[ ! -f {self.manage.quote(active)} ] || . {self.manage.quote(active)}\n"
-                f'exec "${{HOMI_PROFILE_RUNTIME:-{self.runtime}}}/modules/snapshots/homi-snapshot" "$@"\n')
+                f'exec "${{COM8_PROFILE_RUNTIME:-{self.runtime}}}/modules/snapshots/com8-snapshot" "$@"\n')
 
     def unit_paths(self):
         if self.platform == "darwin":
@@ -292,18 +292,18 @@ class Schedule:
                 # A one-shot backup, not a daemon: no KeepAlive, no RunAtLoad.
                 "StartCalendarInterval": [{"Hour": h, "Minute": 0} for h in HOURS],
                 "ProcessType": "Background",
-                "StandardOutPath": str(self.log_dir / "homi-snapshot.out.log"),
-                "StandardErrorPath": str(self.log_dir / "homi-snapshot.err.log"),
+                "StandardOutPath": str(self.log_dir / "com8-snapshot.out.log"),
+                "StandardErrorPath": str(self.log_dir / "com8-snapshot.err.log"),
             }
             files[out["job"]] = (plistlib.dumps(plist, sort_keys=False).decode(), 0o644)
         else:
             lines = "".join(f"Environment={quote_unit(k + '=' + v)}\n" for k, v in env.items())
             files[out["service"]] = (
-                "[Unit]\nDescription=HOMI workspace snapshot\n\n[Service]\nType=oneshot\n"
+                "[Unit]\nDescription=COM8 workspace snapshot\n\n[Service]\nType=oneshot\n"
                 f"ExecStart={quote_unit(self.wrapper)} run\n" + lines, 0o644)
             hours = ",".join("%02d" % h for h in HOURS)
             files[out["timer"]] = (
-                "[Unit]\nDescription=HOMI workspace snapshot every 6 hours\n\n[Timer]\n"
+                "[Unit]\nDescription=COM8 workspace snapshot every 6 hours\n\n[Timer]\n"
                 f"OnCalendar=*-*-* {hours}:00:00\nPersistent=true\nUnit={self.unit}.service\n\n"
                 "[Install]\nWantedBy=timers.target\n", 0o644)
         return files
@@ -377,7 +377,7 @@ class Schedule:
         for directory in (self.log_dir.parent, self.log_dir):
             if not directory.exists():
                 directory.mkdir(mode=0o700)
-        for name in ("homi-snapshot.out.log", "homi-snapshot.err.log"):
+        for name in ("com8-snapshot.out.log", "com8-snapshot.err.log"):
             path = self.log_dir / name
             if not path.exists():
                 os.close(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600))
@@ -499,7 +499,7 @@ class Schedule:
         return {"ok": True, "action": "updated" if previously_loaded else "installed", **self.describe(),
                 "loaded": True, "restarted": previously_loaded, "files": self.files_report(rows),
                 "note": "no snapshot was taken now; the first runs at the next 03/09/15/21 firing "
-                        "(homi-snapshot run takes one immediately)"}
+                        "(com8-snapshot run takes one immediately)"}
 
     def uninstall(self):
         with self.profile.lock():

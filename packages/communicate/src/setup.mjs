@@ -38,7 +38,7 @@ function parseFlags(argv) {
     else if (a === "--no-clients") f.noClients = true;
     else if (a.startsWith("--service-inherit=")) {
       const name = a.slice("--service-inherit=".length);
-      if (!["PATH", "HOMI_SOCK_DIR", "HOMI_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "HOMI_TMUX_SOCKET"].includes(name))
+      if (!["PATH", "COM8_SOCK_DIR", "COM8_SESSIONS_DIR", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "COM8_TMUX_SOCKET"].includes(name))
         throw new Error(`unsupported service environment variable: ${name}`);
       f.serviceInherit.push(name);
     }
@@ -56,7 +56,7 @@ function parseFlags(argv) {
 
 function stabilize(dry) {
   const manifestPath = path.join(pkgDir, "vendor/release.json");
-  if (!existsSync(manifestPath)) throw new Error("Release manifest missing; build or reinstall the HOMI artifact");
+  if (!existsSync(manifestPath)) throw new Error("Release manifest missing; build or reinstall the COM8 artifact");
   const manifest = readJson(manifestPath);
   if (manifest.version !== pkg.version) throw new Error("Package version and release manifest disagree");
   const manifestHash = hash(readFileSync(manifestPath)).slice(0, 12);
@@ -92,7 +92,7 @@ function stabilize(dry) {
   rmSync(tmp, { recursive: true, force: true });
   mkdirSync(tmp, { recursive: true });
   for (const item of ["vendor", "src", "package.json", "LICENSE"]) cpSync(path.join(pkgDir, item), path.join(tmp, item), { recursive: true });
-  for (const file of ["cli.mjs", "homi.mjs"]) chmodSync(path.join(tmp, "src", file), 0o755);
+  for (const file of ["cli.mjs", "com8.mjs"]) chmodSync(path.join(tmp, "src", file), 0o755);
   if (hasDeps) copyRuntimeDependencies(pkgDir, tmp);
   // The release's plugin launcher is relative to its bundled Node source.
   // Keep it immutable so repeat setup verifies the same release hashes.
@@ -128,7 +128,7 @@ function claudePlugin() {
   try { rows = result.status === 0 ? JSON.parse(result.stdout) : null; } catch {}
   if (!Array.isArray(rows)) throw new Error("Could not inspect Claude user-scope installed plugin state; no client changes made");
   if (rows.some((row) => row.id === PLUGIN_ID && row.scope !== "user"))
-    throw new Error("Another Claude scope uses the HOMI plugin marketplace; preserve/manage that scope before replacing its shared registration");
+    throw new Error("Another Claude scope uses the COM8 plugin marketplace; preserve/manage that scope before replacing its shared registration");
   const matches = rows.filter((row) => row.id === PLUGIN_ID && row.scope === "user");
   if (matches.length > 1 || (matches.length && typeof matches[0].enabled !== "boolean"))
     throw new Error("Claude user-scope installed/enabled state is ambiguous; no client changes made");
@@ -140,7 +140,7 @@ function snapshotClaude() {
   if (!executable("claude")) return { settings, available: false };
   const state = claudePlugin();
   if (state.installed && !settings.extraKnownMarketplaces?.[MARKET_ID])
-    throw new Error("Installed Claude HOMI plugin has no restorable user marketplace; preserve its registration before setup");
+    throw new Error("Installed Claude COM8 plugin has no restorable user marketplace; preserve its registration before setup");
   const restoreMarket = structuredClone(settings.extraKnownMarketplaces?.[MARKET_ID]);
   const source = restoreMarket?.source?.path;
   const mutable = path.resolve(currentLink());
@@ -167,7 +167,7 @@ function checkClaudeOwnership(record, snapshot) {
 function claudeInstall(dry, integration) {
   const marketRoot = integration ? path.join(integration.root, "plugins") : path.join(currentLink(), "vendor", "plugins");
   log(`Claude configuration: ${path.dirname(settingsPath())}${process.env.CLAUDE_CONFIG_DIR ? " (CLAUDE_CONFIG_DIR)" : ""}`);
-  if (!executable("claude")) { log("Claude CLI unavailable; rerun homi setup --claude after installing it."); return false; }
+  if (!executable("claude")) { log("Claude CLI unavailable; rerun com8 setup --claude after installing it."); return false; }
   const s = readSettings();
   s.extraKnownMarketplaces = { ...(s.extraKnownMarketplaces || {}), [MARKET_ID]: { source: { source: "directory", path: marketRoot } } };
   s.enabledPlugins = { ...(s.enabledPlugins || {}), [PLUGIN_ID]: true };
@@ -199,7 +199,7 @@ function claudeInstall(dry, integration) {
   if (!matches() && !(run(["plugin", "uninstall", PLUGIN_ID, "--scope", "user"])
       && run(["plugin", "install", PLUGIN_ID, "--scope", "user"]) && matches()))
     throw new Error(`Claude plugin version verification failed; run claude plugin update ${PLUGIN_ID} --scope user.`);
-  log("Claude plugin installed/refreshed via CLI. Restart Claude Code to load HOMI's skills, commands, CLI, and MCP tools.");
+  log("Claude plugin installed/refreshed via CLI. Restart Claude Code to load COM8's skills, commands, CLI, and MCP tools.");
   return true;
 }
 
@@ -227,7 +227,7 @@ function claudeUninstall(dry, record = {}) {
       throw new Error(`Claude registry restoration failed: ${failures.join("; ")}${compensation.length ? "; current registration recovery needs attention: " + compensation.join("; ") : "; current registration restored"}`);
     }
   }
-  writeSettings(s, dry, "remove owned HOMI plugin settings (restore previous values)");
+  writeSettings(s, dry, "remove owned COM8 plugin settings (restore previous values)");
   return true;
 }
 
@@ -264,8 +264,8 @@ async function snapshotCodex({ preflight = true } = {}) {
   mkdirSync(codexHome(), { recursive: true, mode: 0o700 });
   const market = codexMarketplace(true), plugin = codexPlugin();
   if (market && market.marketplaceSource?.sourceType !== "local")
-    throw new Error("Codex HOMI marketplace is not a verified local source; preserve/export it before switching installations");
-  if (plugin.installed && !market) throw new Error("Installed Codex HOMI plugin has no restorable marketplace; no client changes made");
+    throw new Error("Codex COM8 marketplace is not a verified local source; preserve/export it before switching installations");
+  if (plugin.installed && !market) throw new Error("Installed Codex COM8 plugin has no restorable marketplace; no client changes made");
   return { market, ...plugin, settings: await readCodexSettings({ preflight }) };
 }
 
@@ -466,7 +466,7 @@ export async function runSetup(argv) {
       writeJson(ledgerPath(), saved);
       if (f.purge) {
         if (f.selective || Object.keys(saved.clients).length || saved.service || Object.keys(saved.links).length || saved.integrations.length)
-          throw new Error("Cannot purge while integrations remain; inspect ownership changes with homi doctor");
+          throw new Error("Cannot purge while integrations remain; inspect ownership changes with com8 doctor");
         const runtime = path.resolve(stateRoot());
         const registered = inspectClients ? [readSettings().extraKnownMarketplaces?.[MARKET_ID]?.source?.path,
           codexMarketplace()?.root].filter(Boolean).map((entry) => path.resolve(entry)) : [];
@@ -513,7 +513,7 @@ export async function runSetup(argv) {
     const bins = path.join(dataRoot(), "bin");
     assertManagedPath(bins);
     const linksBefore = new Map();
-    for (const [name, entry] of [["homi", "homi.mjs"], ["communicate", "cli.mjs"]]) {
+    for (const [name, entry] of [["com8", "com8.mjs"], ["communicate", "cli.mjs"]]) {
       const file = path.join(bins, name), target = `../current/src/${entry}`;
       let existing = null;
       try { existing = readlinkSync(file); }
@@ -561,9 +561,9 @@ export async function runSetup(argv) {
       }
       writeJson(ledgerPath(), next);
       log(`current -> ${dest}`);
-      log(`CLI: ${path.join(bins, "homi")} (add ${bins} to PATH if needed)`);
-      log(serviceChanged ? "durable daemon service installed" : "daemon service unchanged; use homi start or homi setup --service when needed");
-      log("done — run the installed homi doctor; local operation needs no hosted invitation.");
+      log(`CLI: ${path.join(bins, "com8")} (add ${bins} to PATH if needed)`);
+      log(serviceChanged ? "durable daemon service installed" : "daemon service unchanged; use com8 start or com8 setup --service when needed");
+      log("done — run the installed com8 doctor; local operation needs no hosted invitation.");
     } catch (error) {
       switchCurrent(previous);
       for (const [file, target] of linksBefore) {
@@ -590,16 +590,16 @@ export async function runSetup(argv) {
 }
 
 export async function runRollback(argv = []) {
-  if (argv.some((a) => a !== "--dry-run")) throw new Error("usage: homi rollback [--dry-run]");
+  if (argv.some((a) => a !== "--dry-run")) throw new Error("usage: com8 rollback [--dry-run]");
   const saved = readJson(ledgerPath());
   if (!saved.previous) throw new Error("No retained previous release to roll back to");
   const combined = existsSync(path.join(saved.previous, "vendor/release.json"));
   const priorPackage = readJson(path.join(saved.previous, "package.json"));
   const legacy = !combined && priorPackage.name === "@aadarwal/communicate" && /^0\.[12]\.\d+(?:[+-].*)?$/.test(priorPackage.version || "") &&
     ["src/cli.mjs", "vendor/bin/communicate", "vendor/plugins/communicate/.claude-plugin/plugin.json"].every((name) => existsSync(path.join(saved.previous, name)));
-  if (!combined && !legacy) throw new Error("Previous installation is not a recognized retained HOMI or legacy Communicate payload; no changes made");
+  if (!combined && !legacy) throw new Error("Previous installation is not a recognized retained COM8 or legacy Communicate payload; no changes made");
   // A historical communicate-only package never shipped the durable daemon.
-  // Do not replace its service's code pointer with a directory lacking homi.py.
+  // Do not replace its service's code pointer with a directory lacking com8.py.
   if (legacy && saved.service) throw new Error("Legacy rollback requires restoring or removing the managed daemon service first; the old package has no durable kernel. No pointer or client changes made. Keep the retained new archive for lifecycle commands.");
   if (argv.includes("--dry-run")) { log(`[dry-run] would restore ${saved.previous}; identities and mail stay at ${stateRoot()}`); return; }
   await withInstallLock(async () => {
@@ -635,7 +635,7 @@ export async function runRollback(argv = []) {
       }
       writeJson(ledgerPath(), saved);
       log(`rolled back to ${saved.current}; runtime state preserved`);
-      if (legacy) log(`legacy Communicate ${priorPackage.version} restored; it has no combined homi entry point. Use the retained new archive's bin/homi for doctor, update, rollback or uninstall.`);
+      if (legacy) log(`legacy Communicate ${priorPackage.version} restored; it has no combined com8 entry point. Use the retained new archive's bin/com8 for doctor, update, rollback or uninstall.`);
     } catch (error) {
       switchCurrent(from);
       const failures = claudeChanged ? restoreClaude(claudeBefore) : [];
@@ -677,7 +677,7 @@ export async function runDoctor() {
   rows.push(["Codex configuration", codexHome()]);
   const legacyPointer = path.join(dataRoot(), "repo-path");
   if (existsSync(legacyPointer)) rows.push(["legacy checkout pointer", readFileSync(legacyPointer, "utf8").trim()]);
-  for (const command of ["homi", "communicate"]) {
+  for (const command of ["com8", "communicate"]) {
     const resolved = executable(command);
     rows.push([`${command} on PATH`, resolved ? `${resolved} -> ${realpathSync(resolved)}` : "not on PATH"]);
   }
@@ -685,7 +685,7 @@ export async function runDoctor() {
     const manifest = readJson(path.join(cur, "vendor/release.json"));
     rows.push(["source commit", `${manifest.source?.commit || "unknown"}${manifest.source?.dirty ? " (modified checkout)" : ""}`]);
     rows.push(["installed MCP", path.join(cur, "src/cli.mjs")]);
-    rows.push(["installed daemon", path.join(cur, "vendor/lib/homi.py")]);
+    rows.push(["installed daemon", path.join(cur, "vendor/lib/com8.py")]);
   }
   const s = readSettings();
   rows.push(["claude marketplace", s.extraKnownMarketplaces?.[MARKET_ID]?.source?.path || "not registered"]);
@@ -708,14 +708,14 @@ export async function runDoctor() {
   if (daemon?.self?.source_commit) rows.push(["daemon loaded commit", daemon.self.source_commit]);
   if (daemon?.self?.user?.handle) rows.push(["user claimed", `@${daemon.self.user.handle}`]);
   if (payloadOk && daemon?.ok) {
-    const kernel = path.join(cur, "vendor/lib/homi.py");
+    const kernel = path.join(cur, "vendor/lib/com8.py");
     if (existsSync(kernel)) {
       const expected = realpathSync(kernel);
-      rows.push(["daemon release parity", daemon.self.source_file === expected ? "current" : "different/unreported source; restart explicitly with homi setup --service"]);
+      rows.push(["daemon release parity", daemon.self.source_file === expected ? "current" : "different/unreported source; restart explicitly with com8 setup --service"]);
     } else rows.push(["daemon release parity", "legacy communication payload has no durable kernel"]);
   }
-  const orphan = path.join(process.env.XDG_STATE_HOME || path.join(home(), ".local/state"), "homi");
-  if (path.resolve(orphan) !== path.join(path.resolve(stateRoot()), "homi") && existsSync(path.join(orphan, "mail"))) {
+  const orphan = path.join(process.env.XDG_STATE_HOME || path.join(home(), ".local/state"), "com8");
+  if (path.resolve(orphan) !== path.join(path.resolve(stateRoot()), "com8") && existsSync(path.join(orphan, "mail"))) {
     rows.push(["orphaned legacy state", `${orphan} contains mail; inspect before migration or removal`]);
     process.exitCode = 1;
   }

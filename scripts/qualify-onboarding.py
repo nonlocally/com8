@@ -57,11 +57,11 @@ def main():
     env.update(HOME=str(home), SHELL="/bin/zsh", TERM="dumb", CI="1",
                COMMUNICATE_DATA=str(home / "data"), COMM_STATE=str(home / "state"),
                CODEX_HOME=str(home / ".codex"), CLAUDE_CONFIG_DIR=str(home / ".claude"),
-               HOMI_SOCK_DIR=str(home / "sockets"), HOMI_SESSIONS_DIR=str(home / "sessions"),
+               COM8_SOCK_DIR=str(home / "sockets"), COM8_SESSIONS_DIR=str(home / "sessions"),
                HOMEBREW_NO_AUTO_UPDATE="1", HOMEBREW_NO_ANALYTICS="1",
                HOMEBREW_NO_INSTALL_UPGRADE="1", HOMEBREW_NO_INSTALL_CLEANUP="1",
                HOMEBREW_NO_AUTOREMOVE="1")
-    entry = runtime / "bin/homi"
+    entry = runtime / "bin/com8"
     calls = 0
 
     def run(argv, *, check=True, timeout=120, command_env=None):
@@ -141,7 +141,7 @@ def main():
 
     def no_config_writes():
         return not any((home / relative).exists() for relative in
-                       ("data", "state", ".config/homi", ".claude", ".codex", ".zshrc", ".bashrc", ".local/bin"))
+                       ("data", "state", ".config/com8", ".claude", ".codex", ".zshrc", ".bashrc", ".local/bin"))
 
     def installed_packages():
         return {kind: run([brew, "list", "--" + kind, "--versions"]).stdout.splitlines()
@@ -175,13 +175,13 @@ def main():
         ledger = json.loads((home / "data/install.json").read_text())
         require(set(ledger["clients"]) == {"claude", "codex"}, "both client integrations must be owned")
         require(not ledger.get("service"), "setup installed a service without selection")
-        require((home / ".config/homi/profiles/active.sh").is_file(), "terminal/mesh profile missing")
-        require((home / ".local/bin/homi-agent").is_file(), "agent launcher missing")
+        require((home / ".config/com8/profiles/active.sh").is_file(), "terminal/mesh profile missing")
+        require((home / ".local/bin/com8-agent").is_file(), "agent launcher missing")
         commands = home / ".local/bin"
         for shortcut in ("cx", "cxx", "cxc", "cdx", "cdxx", "cdxxs", "al", "alw", "t"):
             require((commands / shortcut).is_file(), "shell-independent shortcut missing: " + shortcut)
-        require(not (commands / "homi-shell").exists(), "setup replaced the interactive shell")
-        profile = home / ".config/homi/profiles"
+        require(not (commands / "com8-shell").exists(), "setup replaced the interactive shell")
+        profile = home / ".config/com8/profiles"
         require("default-shell" not in (profile / "tmux.conf").read_text(), "profile forces tmux shell")
         require("command =" not in (profile / "ghostty.conf").read_text(), "profile forces Ghostty shell")
         # Exercise the installed launchers from a fresh zsh with a GUI-like
@@ -192,7 +192,7 @@ def main():
         adapter.chmod(0o700)
         literal = "literal 'quotes' $HOME `not-a-command`\nsecond line"
         shell_env = dict(env, PATH="/usr/bin:/bin", ZDOTDIR=str(home),
-                         HOMI_ACCOUNT_LAUNCHER=str(adapter))
+                         COM8_ACCOUNT_LAUNCHER=str(adapter))
         shell = run(["/bin/zsh", "-i", "-c",
                      '[[ -n $ZSH_VERSION ]] || exit 1; command -v cxx cdxx; '
                      'cxx "$1"; cdxx "$1"; printf "shell=%s\\n" "$SHELL"',
@@ -206,11 +206,11 @@ def main():
             run([client, "--version"])
         claude = json.loads(run(["claude", "plugin", "list", "--json"]).stdout)
         require(any(p.get("id") == "communicate@communicate" and p.get("enabled") for p in claude),
-                "Claude cannot see enabled HOMI plugin")
+                "Claude cannot see enabled COM8 plugin")
         codex = json.loads(run(["codex", "plugin", "list", "--marketplace", "communicate", "--json"]).stdout)
         require(any(p.get("pluginId") == "communicate@communicate" and p.get("installed") and
                     p.get("enabled") for p in codex["installed"]),
-                "Codex cannot see enabled HOMI plugin")
+                "Codex cannot see enabled COM8 plugin")
         report["checks"].append("real missing dependencies and both provider CLIs installed; plugins enabled without login")
         run([entry, "setup", *choices, "--yes"], timeout=240)
         require(installed == installed_packages(), "repeat setup changed third-party versions")
@@ -222,7 +222,7 @@ def main():
         report["checks"].append("ordinary update cannot acquire setup-only dependency side effects")
         run([entry, "profile", "uninstall"])
         run([entry, "uninstall"])
-        require(installed == installed_packages(), "HOMI uninstall removed user software")
+        require(installed == installed_packages(), "COM8 uninstall removed user software")
         report["checks"].append("uninstall preserves third-party software")
         verify_payload()
         report["checks"].append("release payload remains immutable")

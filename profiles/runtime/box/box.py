@@ -21,7 +21,7 @@ class BoxError(Exception):
 
 
 def setting(name, default):
-    return os.environ.get("HOMI_BOX_" + name) or os.environ.get("ANU_BOX_" + name) or default
+    return os.environ.get("COM8_BOX_" + name) or os.environ.get("ANU_BOX_" + name) or default
 
 
 def host_path(value, must_exist=True):
@@ -45,10 +45,10 @@ def git(cwd, *args):
 
 
 def runtime():
-    configured = os.environ.get("HOMI_BOX_RUNTIME", "container")
+    configured = os.environ.get("COM8_BOX_RUNTIME", "container")
     found = shutil.which(configured)
     if not found:
-        raise BoxError("Apple/container CLI unavailable; install/configure it separately (HOMI_BOX_RUNTIME)")
+        raise BoxError("Apple/container CLI unavailable; install/configure it separately (COM8_BOX_RUNTIME)")
     return found
 
 
@@ -59,7 +59,7 @@ def check_runtime(tool):
 
 
 def image():
-    value = setting("IMAGE", "homi-agent")
+    value = setting("IMAGE", "com8-agent")
     if value.startswith("-") or any(c.isspace() for c in value):
         raise BoxError("invalid box image name")
     return value
@@ -88,36 +88,36 @@ def configuration(command):
             # checkout's source files. Absolute .git pointers keep working.
             mount(shared, purpose="shared-git")
 
-    state = host_path(os.environ.get("HOMI_BOX_STATE") or
-                      str(Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "homi/box"), False)
-    explicit_claude = os.environ.get("HOMI_BOX_CLAUDE_HOME")
+    state = host_path(os.environ.get("COM8_BOX_STATE") or
+                      str(Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "com8/box"), False)
+    explicit_claude = os.environ.get("COM8_BOX_CLAUDE_HOME")
     if not explicit_claude and (state / "claude").is_symlink():
         raise BoxError("default box Claude home is a symlink; configure the existing home explicitly")
     claude = host_path(explicit_claude or str(state / "claude"), bool(explicit_claude))
     if not explicit_claude:
         create.append(claude)
     mount(claude, "/root/.claude", purpose="claude-home")
-    if os.environ.get("HOMI_BOX_CODEX_HOME"):
-        mount(host_path(os.environ["HOMI_BOX_CODEX_HOME"]), "/root/.codex", purpose="codex-home")
+    if os.environ.get("COM8_BOX_CODEX_HOME"):
+        mount(host_path(os.environ["COM8_BOX_CODEX_HOME"]), "/root/.codex", purpose="codex-home")
 
     environment = {"TERM": os.environ.get("TERM", "xterm-256color")}
-    helper = os.environ.get("HOMI_BOX_PANE_BIN")
-    replies = os.environ.get("HOMI_BOX_PANE_DIR")
+    helper = os.environ.get("COM8_BOX_PANE_BIN")
+    replies = os.environ.get("COM8_BOX_PANE_DIR")
     if bool(helper) != bool(replies):
-        raise BoxError("configure HOMI_BOX_PANE_BIN and HOMI_BOX_PANE_DIR together")
+        raise BoxError("configure COM8_BOX_PANE_BIN and COM8_BOX_PANE_DIR together")
     if helper:
         helper = host_path(helper)
         if not os.access(helper / "pane", os.X_OK):
-            raise BoxError("HOMI_BOX_PANE_BIN must contain an executable pane helper")
+            raise BoxError("COM8_BOX_PANE_BIN must contain an executable pane helper")
         replies = host_path(replies)
-        mount(helper, "/opt/homi/pane", readonly=True, purpose="pane-helper")
+        mount(helper, "/opt/com8/pane", readonly=True, purpose="pane-helper")
         mount(replies, purpose="pane-replies")
-        environment.update(ANU_PANE_DIR=str(replies), HOMI_PANE_DIR=str(replies))
+        environment.update(ANU_PANE_DIR=str(replies), COM8_PANE_DIR=str(replies))
 
     # Name-only flags keep secrets out of argv and the plan. An explicit
     # subscription token takes precedence over an ambient Anthropic API key.
     names = ["CLAUDE_CODE_OAUTH_TOKEN"] if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") else ["ANTHROPIC_API_KEY"]
-    names += ["OPENAI_API_KEY", "HOMI_ACCOUNT", "ANU_ACCOUNT"]
+    names += ["OPENAI_API_KEY", "COM8_ACCOUNT", "ANU_ACCOUNT"]
     for name in names:
         if os.environ.get(name):
             environment[name] = os.environ[name]
@@ -154,11 +154,11 @@ def run(command, preview=False):
     check_runtime(tool)
     checked = subprocess.run([tool, "image", "inspect", plan["image"]], capture_output=True, timeout=15)
     if checked.returncode:
-        raise BoxError("box image is missing; run `homi-box build` explicitly or configure HOMI_BOX_IMAGE")
+        raise BoxError("box image is missing; run `com8-box build` explicitly or configure COM8_BOX_IMAGE")
     for directory in plan["create_private_directories"]:
         private_directory(directory)
     slug = re.sub(r"[^a-zA-Z0-9_.-]+", "-", Path(plan["cwd"]).name).strip("-") or "root"
-    argv = [tool, "run", "--rm", "--name", "homi-box-" + slug + "-" + uuid.uuid4().hex[:8],
+    argv = [tool, "run", "--rm", "--name", "com8-box-" + slug + "-" + uuid.uuid4().hex[:8],
             "--cpus", plan["cpus"], "--memory", plan["memory"], "--workdir", plan["cwd"], "--interactive"]
     if sys.stdin.isatty() and sys.stdout.isatty():
         argv.append("--tty")
@@ -184,10 +184,10 @@ def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
     operation = args.pop(0) if args and args[0] in ["plan", "doctor", "build", "run", "help", "--help", "-h"] else "run"
     if operation in ["help", "--help", "-h"]:
-        print("homi-box [run] [--] COMMAND [ARGS...]   run in a disposable Apple/container VM\n"
-              "homi-box plan [--] COMMAND [ARGS...]    inspect mounts/env names without changes\n"
-              "homi-box doctor                        inspect existing runtime and image\n"
-              "homi-box build                         explicitly build the bundled agent image\n"
+        print("com8-box [run] [--] COMMAND [ARGS...]   run in a disposable Apple/container VM\n"
+              "com8-box plan [--] COMMAND [ARGS...]    inspect mounts/env names without changes\n"
+              "com8-box doctor                        inspect existing runtime and image\n"
+              "com8-box build                         explicitly build the bundled agent image\n"
               "No command defaults to bash. Runtime startup and installation are always separate.")
         return 0
     if args and args[0] == "--":
@@ -207,5 +207,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except (BoxError, OSError, subprocess.TimeoutExpired) as error:
-        print("homi-box: " + str(error), file=sys.stderr)
+        print("com8-box: " + str(error), file=sys.stderr)
         sys.exit(1)

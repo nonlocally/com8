@@ -2,7 +2,7 @@
 # Native routing fixtures without provider credentials, SSH, or shared sockets.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEST_ROOT="$(mktemp -d /tmp/homi-native.XXXXXX)"
+TEST_ROOT="$(mktemp -d /tmp/com8-native.XXXXXX)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 mkdir -p "$TEST_ROOT/home" "$TEST_ROOT/run" "$TEST_ROOT/bin" "$TEST_ROOT/codex"
 chmod 700 "$TEST_ROOT/run"
@@ -19,7 +19,7 @@ BLOCK
 done
 
 unset CLAUDE_CODE_MESSAGING_SOCKET CLAUDECODE CODEX_THREAD_ID CODEX_SESSION_ID
-unset COMM_CODEX_INDEX COMM_CODEX_PATH COMM_HOME HOMI_PACKAGE_CLI BASH_ENV ENV
+unset COMM_CODEX_INDEX COMM_CODEX_PATH COMM_HOME COM8_PACKAGE_CLI BASH_ENV ENV
 unset ANTHROPIC_API_KEY OPENAI_API_KEY
 for suite in cards roster-desc codex-queue ask; do
   env HOME="$TEST_ROOT/home" PATH="$TEST_ROOT/bin:$PATH" \

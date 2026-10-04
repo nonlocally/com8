@@ -1,7 +1,7 @@
-# Cross-fleet onboarding + permissions for homi — design (live-verified)
+# Cross-fleet onboarding + permissions for com8 — design (live-verified)
 
 Date: 2026-08-16 · Two people, two machines, two tailnets, two Unix users. Goal: someone downloads
-homi and uses it; two people inter-communicate across shared cluster access OR shared agent comms.
+com8 and uses it; two people inter-communicate across shared cluster access OR shared agent comms.
 Grounded in the recovered aadarwal↔collaborator scheme (communicate#4/#6/#7/#8, PixCell#87). Probes ran
 against a throwaway sshd on localhost + one read-only check of air-2; no real authorized_keys touched.
 
@@ -9,7 +9,7 @@ against a throwaway sshd on localhost + one read-only check of air-2; no real au
 1. `restrict,port-forwarding,command="/usr/bin/false"` refuses exec (exit 1) and PTY — therefore
    **BREAKS `_remote_home()`** (`ssh addr 'echo $HOME'` → empty). **Cross-fleet invitations MUST
    carry the remote inbound socket path; it cannot be probed.**
-2. The same key carries homi's exact envelope round-trip over a `-L` unix-socket forward (sent
+2. The same key carries com8's exact envelope round-trip over a `-L` unix-socket forward (sent
    `{"v":1,"kind":"m"}`, got `{"ok":true,"ack":...}`). `-R` socket forwards work too.
 3. **The forwarding grant is INDIVISIBLE on OpenSSH 10.2:** every attempt to allow socket
    forwarding while denying TCP (`permitopen`, `AllowTcpForwarding no`, `PermitOpen none`) ALSO
@@ -18,39 +18,39 @@ against a throwaway sshd on localhost + one read-only check of air-2; no real au
 4. `AllowStreamLocalForwarding local` alone keeps `-L` working (forbids `-R` litter, symmetric mode).
 5. Litter recovery verified both ways: client `StreamLocalBindUnlink=yes` rebinds local; sshd-side
    `StreamLocalBindUnlink yes` lets a `-R` redial rebind remote litter (the issue-#7 fix, live twice).
-6. `sun_path` ≈104 bytes: deep socket paths rejected. `homi init` must check length, fall back to
-   `/tmp/homi-$UID/in/`.
+6. `sun_path` ≈104 bytes: deep socket paths rejected. `com8 init` must check length, fall back to
+   `/tmp/com8-$UID/in/`.
 7. air-2 sshd has `Include /etc/ssh/sshd_config.d/*` — a drop-in config file works.
 
-## 1. `homi init` (download-and-use onboarding)
+## 1. `com8 init` (download-and-use onboarding)
 deps (python3, ssh≥8, tailscale optional) → state root 0700 + subdirs mail/in/links/out/seen/
-keys/grants/invites (check sun_path length; fall back to /tmp/homi-$UID) → device name (tailscale
+keys/grants/invites (check sun_path length; fall back to /tmp/com8-$UID) → device name (tailscale
 Self.DNSName short, else hostname) → **fleet name** (prompt, default OS username; fleet = operator's
 trust domain spanning all their devices; fleet.json) → **per-device fleet keypair**
-(`ssh-keygen -t ed25519 -N "" -f keys/fleet_ed25519 -C homi/<fleet>@<device>`, outbound dials only,
-never leaves the machine) → `homi install` (launchd/systemd) → **control.token** (32 bytes 0600;
-every control op on homi.sock must present it — a forward-only peer can dial your sockets but can't
+(`ssh-keygen -t ed25519 -N "" -f keys/fleet_ed25519 -C com8/<fleet>@<device>`, outbound dials only,
+never leaves the machine) → `com8 install` (launchd/systemd) → **control.token** (32 bytes 0600;
+every control op on com8.sock must present it — a forward-only peer can dial your sockets but can't
 read files) → `pm` front door (already _RESERVED; every fleet pingable at pm@<fleet>).
 
 ## 2. Two-fleet connect (no login shell / account / password crosses)
 What crosses: one pubkey + one JSON card each way, and one authorized_keys line appended BY THE
 OWNER of each machine.
-- **A: `homi federate invite peer`** → a **homi-card** (send via GitHub issue preferably — the
+- **A: `com8 federate invite peer`** → a **com8-card** (send via GitHub issue preferably — the
   auditable slow path that never went down):
-  `{"v":1,"kind":"homi-card","fleet":"aadarwal","addr":"aadarwal@air-2.tailXXXX.ts.net",
+  `{"v":1,"kind":"com8-card","fleet":"aadarwal","addr":"aadarwal@air-2.tailXXXX.ts.net",
    "tailscale_ip":"100.64.10.7","pubkey":"ssh-ed25519 …","fingerprint":"SHA256:…",
-   "inbound":"/Users/aadarwal/.local/state/communicate/homi/in/peer.sock"}`
+   "inbound":"/Users/aadarwal/.local/state/communicate/com8/in/peer.sock"}`
   (inbound = where A receives the collaborator's envelopes — in the card because the key can't echo $HOME).
-- **B: `homi federate accept aadarwal --card '…'`** → confirm fingerprint → append to
+- **B: `com8 federate accept aadarwal --card '…'`** → confirm fingerprint → append to
   `~/.ssh/authorized_keys`:
-  `restrict,port-forwarding,from="100.64.10.7",command="/usr/bin/false" ssh-ed25519 … homi-fleet:aadarwal`
+  `restrict,port-forwarding,from="100.64.10.7",command="/usr/bin/false" ssh-ed25519 … com8-fleet:aadarwal`
   (from= pins A's gateway IP, optional) → sshd drop-in iff asymmetric (`StreamLocalBindUnlink yes`)
-  → `homi link aadarwal --fleet --remote-in <card.inbound> --addr <card.addr>` (binds in/aadarwal.sock,
+  → `com8 link aadarwal --fleet --remote-in <card.inbound> --addr <card.addr>` (binds in/aadarwal.sock,
   writes grants/aadarwal.json = {"granted":[]} default-deny) → prints B's counter-card.
-- **A: `homi federate accept peer --card '…B'`** → mirror. Both dial OUTBOUND ONLY:
+- **A: `com8 federate accept peer --card '…B'`** → mirror. Both dial OUTBOUND ONLY:
   `ssh -N -o BatchMode=yes -o IdentitiesOnly=yes -i keys/fleet_ed25519 -o ExitOnForwardFailure=yes
    -o StreamLocalBindMask=0177 -o StreamLocalBindUnlink=yes
-   -L links/peer.sock:/home/<their-user>/.local/state/communicate/homi/in/aadarwal.sock
+   -L links/peer.sock:/home/<their-user>/.local/state/communicate/com8/in/aadarwal.sock
    <their-user>@<collaborator-host>.tailYYYY.ts.net`
   = `_ssh_cmd` with two deltas: `-i`+IdentitiesOnly (fleet key not default agent keys), and the
   remote path VERBATIM from the card (not `_remote_home()` composition).
@@ -66,8 +66,8 @@ OWNER of each machine.
 
 ## 3. Shared agent communication + grant model
 Addressing: `name@fleet` (@ illegal in claimed names → unambiguous; fleet petname is a link key).
-B controls who A may reach via `grants/<fleet>.json`: `homi grant aadarwal cluster-librarian` /
-`homi revoke`. Enforced in `_recv_envelope` when the arrival link is kind:"fleet":
+B controls who A may reach via `grants/<fleet>.json`: `com8 grant aadarwal cluster-librarian` /
+`com8 revoke`. Enforced in `_recv_envelope` when the arrival link is kind:"fleet":
 - `to` must be in the grant set (else ONE deliberately-ambiguous error `unknown or ungranted` — no
   enumeration of which names exist).
 - **No auto-claim** (the local-mail-never-bounces rule is a mailbox-creation oracle for foreigners;
@@ -77,16 +77,16 @@ B controls who A may reach via `grants/<fleet>.json`: `homi grant aadarwal clust
   fleet can't spoof (no channel lands on that socket). Foreign senders → proxy peers
   FLEET-QUALIFIED (`orchestrator@aadarwal`, never bare) → can't shadow/squat a local name.
 - Last gate: Claude's held-message approval for bypass-mode sessions; durable audit via inbox.
-Discovery: `homi roster peer` asks pm@peer, plants sidecars for granted names → ListAgents shows
+Discovery: `com8 roster peer` asks pm@peer, plants sidecars for granted names → ListAgents shows
 B's granted agents with zero access beyond mail.
 
 ## 4. Shared cluster access: grant capability, not credentials
 **cluster-librarian pattern:** B never makes an account for A; B publishes an AGENT whose
-capability IS the cluster. `homi claim cluster-librarian; homi grant aadarwal cluster-librarian`;
+capability IS the cluster. `com8 claim cluster-librarian; com8 grant aadarwal cluster-librarian`;
 registry/cluster-librarian.md is the files-as-API contract (policy: Slurm dispatch under B's own
 allocation, 2D→3D ladder, sbatch consent-gated by B's operator, results carry provenance). The
 librarian runs as B's Unix user with B's cluster creds (Engaging/Duo — never cross the boundary).
-A invokes: `homi send cluster-librarian@peer "REQUEST fdtd-sweep input_sha256=… budget≤2 GPU-h"` →
+A invokes: `com8 send cluster-librarian@peer "REQUEST fdtd-sweep input_sha256=… budget≤2 GPU-h"` →
 A's out/peer queue → forward-only tunnel → B's in/aadarwal.sock → grant check → durable store, ack,
 wake. If librarian asleep the request WAITS (what the rendezvous bridge couldn't do). Librarian
 wakes, applies policy, asks ITS OWN operator for node-hour consent (B approves spend not A),
@@ -102,14 +102,14 @@ capability, still no credential).
 L0 NETWORK  tailnet ACL A-gw→B-gw:22 only            revoke: unshare/ACL row
 L1 TRANSPORT restrict,port-forwarding,command=/usr/bin/false — no shell/exec/pty; CAN forward
              (TCP+unix, INDIVISIBLE) as B's uid       revoke: delete authorized_keys line
-L2 LINK     arrival-line attribution; dedup; ack      revoke: homi federate unlink
-L3 IDENTITY grants/<fleet>.json; no auto-claim; no enumeration   revoke: homi revoke
+L2 LINK     arrival-line attribution; dedup; ack      revoke: com8 federate unlink
+L3 IDENTITY grants/<fleet>.json; no auto-claim; no enumeration   revoke: com8 revoke
 L4 DELIVERY mailbox-first → store→wake; Claude held-message gate  revoke: don't approve
 L5 EXECUTION payload is text; capability only via receiving agent's own sandbox (codex read-only,
              box VM, consent-gated sbatch)            revoke: agent's config
 **Residual (honest):** L1's grant = "connect anywhere B's uid can" including B's other sockets +
 TCP egress — cannot be narrowed at ssh without breaking socket forwards. Mitigations: Claude holds
-foreign turns + drops session_id-mismatched frames; **homi.sock requires control.token (a
+foreign turns + drops session_id-mismatched frames; **com8.sock requires control.token (a
 forward-only peer can connect to sockets but can't read files)**; from= + one-host ACL. This is the
 boundary the collaborator accepted and twice declined to widen.
 
@@ -127,6 +127,6 @@ uniqueness = (suffix unique in your table) × (name unique in its fleet), both l
    `-i`+IdentitiesOnly, uses remote_in verbatim; `_ensure_ssh` skips `_remote_home()` when remote_in
    set (REQUIRED — verified fact 1).
 2. `_recv_envelope`: fleet links → grant check, no auto-claim, fleet-qualified proxies.
-3. Control ops on homi.sock require control.token.
-4. New verbs: `homi federate invite|accept|revoke|status`, `homi grant|revoke`, `homi roster`.
+3. Control ops on com8.sock require control.token.
+4. New verbs: `com8 federate invite|accept|revoke|status`, `com8 grant|revoke`, `com8 roster`.
 Queues/acks/dedup/store→wake/launchd all carry over unchanged.

@@ -113,7 +113,7 @@ tss() (
   # the save operation rather than changing the caller's interactive umask.
   umask 077
   local name="${1:-default}"
-  local dir="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/sessions/$name"
+  local dir="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/sessions/$name"
   command -v tmux >/dev/null || { echo "tss: tmux not found"; return 1; }
   # Older tmux versions require an attached client for `info`; snapshots also
   # need to work for a live server whose sessions are all detached.
@@ -216,17 +216,17 @@ tsr() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -n|--dry-run) _TSR_DRY=1 ;;
-      -l|--list) command ls -1 "${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/sessions" 2>/dev/null; return ;;
+      -l|--list) command ls -1 "${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/sessions" 2>/dev/null; return ;;
       *) name="$1" ;;
     esac; shift
   done
   name="${name:-default}"
   [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] && [[ "$name" != *..* ]] || { echo "tsr: invalid snapshot name" >&2; return 1; }
-  _TSR_DIR="${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/sessions/$name"
+  _TSR_DIR="${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/sessions/$name"
   command -v tmux >/dev/null || { echo "tsr: tmux not found"; return 1; }
   if [[ ! -f $_TSR_DIR/windows.tsv ]]; then
     echo "tsr: no saved state '$name'. Available:"
-    command ls -1 "${HOMI_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/homi/workstation}/sessions" 2>/dev/null | sed 's/^/  /'
+    command ls -1 "${COM8_PROFILE_STATE:-${XDG_STATE_HOME:-$HOME/.local/state}/com8/workstation}/sessions" 2>/dev/null | sed 's/^/  /'
     return 1
   fi
   [[ $_TSR_DRY == 0 ]] && tmux start-server 2>/dev/null   # clean, live server before building

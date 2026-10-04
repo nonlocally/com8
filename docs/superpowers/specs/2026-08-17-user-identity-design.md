@@ -1,4 +1,4 @@
-# The user layer — @handles for the homi fabric
+# The user layer — @handles for the com8 fabric
 
 Status: phases A–C implemented on this branch (init/user, pair, connect);
 the switchboard directory is DESIGNED HERE, DEFERRED deliberately.
@@ -39,28 +39,28 @@ petname is how you say it."
 ## What shipped (A–C)
 
 - **A — the person exists**: `user.json` `{v, handle, display?, created_at,
-  claimed_via}`, written ONLY by the claim ceremony (`homi init` /
+  claimed_via}`, written ONLY by the claim ceremony (`com8 init` /
   `user-set`); missing = loud degraded mode, never lazy regeneration (the
   split-brain-mints-a-second-person failure). `fleet_name()` precedence
   env > file > OS-user replaces both inline sites; the handle re-derives into
   every card/status/agents/whoami (registry law: re-asserted by real work).
-  `HOMI_VERSION` surfaced in status — a stale KeepAlive'd daemon is now
+  `COM8_VERSION` surfaced in status — a stale KeepAlive'd daemon is now
   measurable; npx setup gained the ceremony, a version gate, a measured
   self-test, and the two installer-bug fixes (split-brain `COMM_STATE`,
   missing `PATH`).
 - **B — own devices**: `ping` envelope kind (stateless; old-peer response
   defined: negative-ack = transport up, legacy peer), `link-check` (measured
-  RTT), `homi pair` (one-sided: probe → stage/upgrade far kernel from this
+  RTT), `com8 pair` (one-sided: probe → stage/upgrade far kernel from this
   install's own files → device names read from daemons, never typed → both
   links → handle sync → both round trips measured).
 - **C — other people**: signed card v2 (`ssh-keygen -Y` over canonical
   sig-less bytes; fingerprint RECOMPUTED from the card's key — the claimed
   string is refused on mismatch; v1 only behind `--allow-unsigned`),
-  `homi connect` (typed-handle cross-check, collision + re-key refusal,
+  `com8 connect` (typed-handle cross-check, collision + re-key refusal,
   petname == handle — which kills the petname-symmetry silent-queue bug by
   construction — honest "transport pending" + auto counter-code).
-  Hardening shipped with it: TTL'd return-path auto-grant (`HOMI_AUTOGRANT_
-  TTL`), grant fingerprint pin, per-user proxy cap (`HOMI_PROXY_CAP`, M-3),
+  Hardening shipped with it: TTL'd return-path auto-grant (`COM8_AUTOGRANT_
+  TTL`), grant fingerprint pin, per-user proxy cap (`COM8_PROXY_CAP`, M-3),
   qualified names in inbox/wait (P19), sun_path guard (P6).
 - Trust verbs (`init`, `pair`, `connect`, `grant`, `federate`, `link`) stay
   human-only CLI — never MCP tools (locked).

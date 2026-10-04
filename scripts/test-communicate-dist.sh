@@ -51,10 +51,10 @@ fi
 
 echo "3) vendor includes the communication kernel and excludes optional applications"
 ( cd "$PKG" && node scripts/vendor.mjs >/dev/null ) || fail "vendor.mjs errored"
-for core in bin/homi lib/homi.py lib/homi_seat.py lib/homi_adopt.py lib/homi_payload.py profiles/manage.py LICENSE release.json; do
+for core in bin/com8 lib/com8.py lib/com8_seat.py lib/com8_adopt.py lib/com8_payload.py profiles/manage.py LICENSE release.json; do
   [ -f "$PKG/vendor/$core" ] && ok "core payload: $core" || fail "core payload missing: $core"
 done
-for omitted in phone homi_board.py homi_talk.py homi_cockpit.py; do
+for omitted in phone com8_board.py com8_talk.py com8_cockpit.py; do
   [ ! -e "$PKG/vendor/lib/$omitted" ] && ok "optional application excluded: $omitted" || fail "optional application leaked: $omitted"
 done
 ls "$PKG/vendor/plugins" | grep -v "^\.claude-plugin$\|^communicate$" | grep -q . && fail "foreign plugin in vendor: $(ls "$PKG/vendor/plugins")" || ok "only the communicate plugin vendored"
@@ -69,15 +69,15 @@ TARBALL="$(cd "$PKG" && npm pack --silent 2>/dev/null | tail -1)"
 npm install --prefix "$TMP" --silent "$PKG/$TARBALL" >/dev/null 2>&1 || fail "npm install of tarball"
 BIN="$TMP/node_modules/.bin/communicate"
 "$BIN" version >/dev/null 2>&1 && ok "installed bin: version" || fail "installed bin: version"
-HOME="$TMP/home" COMM_STATE="$TMP/state" HOMI_SESSIONS_DIR="$TMP/sessions" "$BIN" agents >/dev/null 2>&1 && ok "installed bin: agents" || fail "installed bin: agents"
+HOME="$TMP/home" COMM_STATE="$TMP/state" COM8_SESSIONS_DIR="$TMP/sessions" "$BIN" agents >/dev/null 2>&1 && ok "installed bin: agents" || fail "installed bin: agents"
 COMM_MCP_TEST_ENTRY="$TMP/node_modules/@aadarwal/communicate/src/cli.mjs" node "$PKG/test/mcp-smoke.mjs" \
   && ok "packed artifact: full bus MCP flow" || fail "packed artifact: bus MCP flow"
 COMM_SETUP_TEST_ENTRY="$TMP/node_modules/@aadarwal/communicate/src/cli.mjs" node "$PKG/test/setup-smoke.mjs" \
   && ok "packed artifact: install with hoisted dependencies" || fail "packed artifact: stabilized installation"
 
-HOMI_MCP_TEST_ENTRY="$TMP/node_modules/@aadarwal/communicate/src/cli.mjs" HOMI_TEST_CLI="$TMP/node_modules/@aadarwal/communicate/vendor/bin/communicate" node "$ROOT/scripts/test-homi-mcp-interface.mjs" \
+COM8_MCP_TEST_ENTRY="$TMP/node_modules/@aadarwal/communicate/src/cli.mjs" COM8_TEST_CLI="$TMP/node_modules/@aadarwal/communicate/vendor/bin/communicate" node "$ROOT/scripts/test-com8-mcp-interface.mjs" \
   && ok "packed artifact: durable MCP and concurrent reply" || fail "packed artifact: durable MCP"
-"$TMP/node_modules/.bin/homi" version >/dev/null 2>&1 && ok "installed homi bin" || fail "installed homi bin"
+"$TMP/node_modules/.bin/com8" version >/dev/null 2>&1 && ok "installed com8 bin" || fail "installed com8 bin"
 
 echo "5) setup --dry-run from the installed artifact writes nothing"
 FH="$(mktemp -d)"

@@ -11,9 +11,9 @@ optional MCP face — with zero manual wiring.
 
 ## Non-goals (explicit)
 
-- **No homi.** The durable-mailbox plane (`communicate homi *`, `lib/homi.py`,
-  `packages/homi`) is not packaged, not depended on, and not taught. The npm
-  vendor list excludes `lib/homi*.py` and `lib/homi.sh`; `communicate homi`
+- **No com8.** The durable-mailbox plane (`communicate com8 *`, `lib/com8.py`,
+  `packages/com8`) is not packaged, not depended on, and not taught. The npm
+  vendor list excludes `lib/com8*.py` and `lib/com8.sh`; `communicate com8`
   in the packaged CLI prints a one-line "not bundled — see repo" notice.
   Unification is a later, separate goal.
 - No switchboard merge. No npm-registry publish (tarball built + verified;
@@ -27,9 +27,9 @@ optional MCP face — with zero manual wiring.
 
 ## 1. Repo-side prep
 
-- Make homi libs **optional at source time** in `bin/communicate`:
-  `[ -f "$COMM_HOME/lib/homi.sh" ] && source …`; the `homi` dispatch guards on
-  the function existing, else dies with "homi plane not bundled in this install;
+- Make com8 libs **optional at source time** in `bin/communicate`:
+  `[ -f "$COMM_HOME/lib/com8.sh" ] && source …`; the `com8` dispatch guards on
+  the function existing, else dies with "com8 plane not bundled in this install;
   clone the repo". Repo behavior unchanged (files present ⇒ identical).
 - Root `AGENTS.md`: single-sourced orientation (condensed from the core skill).
 - Root `CLAUDE.md`: 3-line stub that `@AGENTS.md`-imports it (proven pattern).
@@ -97,7 +97,7 @@ agent…"). Bodies teach with exact commands and the judgment layer:
   - anything else → `exec` the vendored bash CLI (`vendor/bin/communicate`).
 - `scripts/vendor.mjs` (prepack): copies `bin/communicate`, `lib/*.sh`,
   `lib/cc_peer.py`, `lib/directory.sh` deps, `plugins/` payload, `registry/`
-  → `vendor/`; **excludes `lib/homi*`**; stamps `vendor/VERSION`.
+  → `vendor/`; **excludes `lib/com8*`**; stamps `vendor/VERSION`.
 - `files`: `["src", "vendor/bin/*", "vendor/lib/*.sh", "vendor/lib/cc_peer.py",
   "vendor/plugins", "vendor/VERSION", "README.md"]` — tight allowlist, no leaks.
 
@@ -147,5 +147,5 @@ No `${*_PLUGIN_ROOT}` anywhere (the npx launcher sidesteps the dual-root hazard)
 
 ## Out of scope / later
 
-homi unification (single bus story), switchboard console, registry growth,
+com8 unification (single bus story), switchboard console, registry growth,
 Windows, npm publish, MCP coverage beyond the 7 core tools.

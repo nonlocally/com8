@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise an actual historical package's installer and migration into HOMI.
+"""Exercise an actual historical package's installer and migration into COM8.
 
 PREVIOUS must be an installed/extracted package with dependencies. Model client
 CLIs are stateful fixtures; their real-host contracts are qualified separately.
@@ -27,14 +27,14 @@ def main():
     node = shutil.which("node")
     if not node or not (previous / "src/cli.mjs").is_file():
         parser.error("Node and a historical Communicate package are required")
-    home = Path(tempfile.mkdtemp(prefix="homi-legacy-"))
+    home = Path(tempfile.mkdtemp(prefix="com8-legacy-"))
     data, state = home / "data", home / "state"
     env = {**os.environ, "HOME": str(home), "COMMUNICATE_DATA": str(data), "COMM_STATE": str(state),
            "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CODEX_HOME": str(home / ".codex"),
-           "HOMI_SELF": "legacy-fixture", "HOMI_SOCK_DIR": str(home / "sockets"),
-           "HOMI_SESSIONS_DIR": str(home / "sessions"), "COMM_BUS_PORT": "0",
+           "COM8_SELF": "legacy-fixture", "COM8_SOCK_DIR": str(home / "sockets"),
+           "COM8_SESSIONS_DIR": str(home / "sessions"), "COMM_BUS_PORT": "0",
            "PYTHONDONTWRITEBYTECODE": "1", "PATH": str(home / "bin") + os.pathsep + os.environ["PATH"]}
-    for key in ("HOMI_SOCK", "HOMI_DAEMON_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COMMUNICATE_HOME"):
+    for key in ("COM8_SOCK", "COM8_DAEMON_DIR", "CLAUDE_CODE_MESSAGING_SOCKET", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COMMUNICATE_HOME"):
         env.pop(key, None)
     (home / "bin").mkdir()
     fixture = r"""#!/usr/bin/env python3
@@ -105,7 +105,7 @@ save()
               "runtime_source": json.loads((runtime / "release.json").read_text())["source"],
               "client_scope": "stateful CLI/config-API contract fixtures; no model or real client discovery",
               "checks": [], "ok": False}
-    old_cli, new_cli = previous / "src/cli.mjs", runtime / "src/homi.mjs"
+    old_cli, new_cli = previous / "src/cli.mjs", runtime / "src/com8.mjs"
     def run(entry, *arguments, success=True):
         result = subprocess.run([node, str(entry), *arguments], env=env, text=True, capture_output=True, timeout=60)
         if (result.returncode == 0) != success:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Standalone shutdown fixtures: no Homebrew, HOMI, providers or managers."""
+"""Standalone shutdown fixtures: no Homebrew, COM8, providers or managers."""
 import errno
 import importlib.util
 from pathlib import Path
@@ -19,8 +19,8 @@ class ShutdownFixture:
     def __init__(self, root, *, socket_at=0.1, pidfile_at=0.2, process_at=0.35,
                  process="live", returncode=0, command_error=None):
         self.root = root
-        self.socket = root / "state/homi/homi.sock"
-        self.pidfile = root / "state/homi/daemon.pid"
+        self.socket = root / "state/com8/com8.sock"
+        self.pidfile = root / "state/com8/daemon.pid"
         self.socket.parent.mkdir(parents=True)
         self.socket.touch()
         self.pidfile.write_text("71234\n")
@@ -29,7 +29,7 @@ class ShutdownFixture:
         self.process, self.returncode, self.command_error = process, returncode, command_error
         self.commands, self.probes = [], []
         self.daemon = qualification.OwnedDaemon(
-            root, root / "data/bin/homi", {"COMM_STATE": str(root / "state")},
+            root, root / "data/bin/com8", {"COMM_STATE": str(root / "state")},
             command=self.command, probe=self.probe, clock=lambda: self.now,
             sleep=self.sleep, timeout=0.6)
 
@@ -60,7 +60,7 @@ class ShutdownFixture:
 
 class ShutdownTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory(prefix="homi-stop-test-")
+        self.temporary = tempfile.TemporaryDirectory(prefix="com8-stop-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name) / "owned"
 
@@ -77,7 +77,7 @@ class ShutdownTests(unittest.TestCase):
         self.assertTrue(daemon.stop(required=False))  # finally needs no second request
         self.assertEqual(len(fixture.commands), 1)
         argv, kwargs = fixture.commands[0]
-        self.assertEqual(argv, [str(self.root / "data/bin/homi"), "stop"])
+        self.assertEqual(argv, [str(self.root / "data/bin/com8"), "stop"])
         self.assertEqual(kwargs["env"]["COMM_STATE"], str(self.root / "state"))
 
     def test_nonzero_stop_is_accepted_only_after_independent_exit(self):

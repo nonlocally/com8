@@ -1,6 +1,6 @@
 ---
 name: communicate
-description: Find and message reachable Claude or Codex agents. Use for "ask the reviewer", "tell that agent", "who is available", or "register yourself on the bus"; choose the exact native session or registered bus and collect replies. For creating a persistent worker, use homi-core.
+description: Find and message reachable Claude or Codex agents. Use for "ask the reviewer", "tell that agent", "who is available", or "register yourself on the bus"; choose the exact native session or registered bus and collect replies. For creating a persistent worker, use com8-core.
 ---
 
 # communicate — the agent bus
@@ -8,19 +8,19 @@ description: Find and message reachable Claude or Codex agents. Use for "ask the
 Act on the user's communication request with the installed tools. Discover the
 intended target, send or ask through its supported route, and return the actual
 result; do not require the user to run the command examples themselves. For a
-request to create an agent and obtain its work, follow `homi-core` through
+request to create an agent and obtain its work, follow `com8-core` through
 daemon readiness, execution verification and reply collection.
 
-HOMI combines three existing paths: durable identities (`homi`, see
-`homi-core`), exact native sessions (`homi native`, compatible `communicate`),
-and explicit registered buses (`homi bus`, compatible `communicate bus`).
+COM8 combines three existing paths: durable identities (`com8`, see
+`com8-core`), exact native sessions (`com8 native`, compatible `communicate`),
+and explicit registered buses (`com8 bus`, compatible `communicate bus`).
 Choose the path that owns the requested target; do not substitute a new agent
 or silently switch namespaces to make a send appear successful.
 
 Before bus discovery, registration or opening the dashboard, inspect
 `communicate bus status --no-start --json` first. Use the configured hub. With
 none configured, follow the user's choice of local operation, their own hub,
-or HOMI's hosted hub at `https://bus.nonlocally.org`; clarify scope if the
+or COM8's hosted hub at `https://bus.nonlocally.org`; clarify scope if the
 intended bus is unclear. For an explicit hosted-hub request, inspect
 `communicate bus --hub https://bus.nonlocally.org status --no-start --json`
 and keep that hub on subsequent commands. If it reports `configured:false`,
@@ -145,6 +145,6 @@ The wire protocol itself (frame JSON, sidecar schema, liveness rules) is in
 hand-rolling a listener or planting sidecars.
 
 The bundled bus gateway supports scoped registration and invitations over
-HTTPS. The same installation also supplies durable HOMI identities, saved messages,
-device links and seats. See `homi-core` for those workflows; `communicate down`
+HTTPS. The same installation also supplies durable COM8 identities, saved messages,
+device links and seats. See `com8-core` for those workflows; `communicate down`
 does not stop the durable daemon or erase its messages.

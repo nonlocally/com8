@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# communicate — HOMI's compatible native/session, bus, and durable CLI.
+# communicate — COM8's compatible native/session, bus, and durable CLI.
 # Native remote adapters use SSH; registered buses and durable links retain
 # their own transports. Claude Code and Codex are the native agent adapters.
 #
@@ -35,13 +35,13 @@
 #                                                self-described capability; roster DESCRIPTION prefers it
 #   communicate setup-repo [--claude] [--codex] [--dry-run] [--uninstall]
 #                                                register THIS checkout as the Claude+Codex plugin
-#   communicate homi ...                         the fabric: durable identities, mailboxes,
+#   communicate com8 ...                         the fabric: durable identities, mailboxes,
 #                       seats, spawn, move, links, fleets, boxes. Verbs:
 #                       start|stop|status|agents  claim [--boxed]|release|adopt|retitle
 #                       send|ask|reply|wait|group|notify|inbox   seat {ls|spawn|send|read|state|wait|respond|bind|kill}
 #                       spawn|fan|consult   move <name> <device>   link|unlink [--allow-seats]
 #                       grant|ungrant|grants|card|federate {invite|accept|revoke|status}
-#   homi setup --service                         managed daemon persistence
+#   com8 setup --service                         managed daemon persistence
 #
 set -o pipefail
 # Resolve symlinks so `ln -s .../bin/communicate ~/.local/bin/` works: lib/
@@ -55,12 +55,12 @@ done
 COMM_HOME="$(cd "$(dirname "$_SELF")/.." && pwd)"
 export COMM_HOME
 # Reject retired persistence verbs before common.sh initializes runtime state.
-# The same refusals remain in homi_cmd for callers sourcing the native adapter.
-if [ "${1:-}" = homi ]; then
+# The same refusals remain in com8_cmd for callers sourcing the native adapter.
+if [ "${1:-}" = com8 ]; then
   case "${2:-}" in
     install|uninstall)
-      source "$COMM_HOME/lib/homi.sh"
-      "homi_$2" "${@:3}"
+      source "$COMM_HOME/lib/com8.sh"
+      "com8_$2" "${@:3}"
       exit $?;;
   esac
 fi
@@ -82,9 +82,9 @@ source "$COMM_HOME/lib/wake.sh"
 [ -f "$COMM_HOME/lib/ask.sh" ] && . "$COMM_HOME/lib/ask.sh"
 # shellcheck source=lib/setup_repo.sh
 [ -f "$COMM_HOME/lib/setup_repo.sh" ] && . "$COMM_HOME/lib/setup_repo.sh"
-# Older compatibility packages omitted the durable plane; combined HOMI releases include it.
-# shellcheck source=lib/homi.sh
-[ -f "$COMM_HOME/lib/homi.sh" ] && . "$COMM_HOME/lib/homi.sh"
+# Older compatibility packages omitted the durable plane; combined COM8 releases include it.
+# shellcheck source=lib/com8.sh
+[ -f "$COMM_HOME/lib/com8.sh" ] && . "$COMM_HOME/lib/com8.sh"
 
 # Print the whole leading comment header (stops at the first non-comment line),
 # so the usage text can grow without a hardcoded line range going stale.
@@ -190,9 +190,9 @@ main() {
     ask)     ask_cmd "$@";;
     card)    cards_cmd "$@";;
     setup-repo) setup_repo "$@";;
-    homi)    type homi_cmd >/dev/null 2>&1 || \
-                 die "durable HOMI is missing from this installation — install a verified release from https://github.com/nonlocally/HOMI/releases"
-             homi_cmd "$@";;
+    com8)    type com8_cmd >/dev/null 2>&1 || \
+                 die "durable COM8 is missing from this installation — install a verified release from https://github.com/nonlocally/com8/releases"
+             com8_cmd "$@";;
     # internal entrypoints (not for humans)
     __supervise-claude) _claude_supervise "$@";;
     __codex-peer-serve) _codex_peer_serve "$@";;

@@ -1,17 +1,17 @@
 {
   "name": "@aadarwal/communicate",
-  "version": "0.5.1",
-  "description": "HOMI: durable agents, terminal seats, and Claude/Codex communication through one CLI and plugin installation.",
+  "version": "0.6.0",
+  "description": "COM8: durable agents, terminal seats, and Claude/Codex communication through one CLI and plugin installation.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nonlocally/HOMI.git",
+    "url": "https://github.com/nonlocally/com8.git",
     "directory": "packages/communicate"
   },
   "bin": {
     "communicate": "src/cli.mjs",
-    "homi": "src/homi.mjs"
+    "com8": "src/com8.mjs"
   },
   "files": [
     "src",

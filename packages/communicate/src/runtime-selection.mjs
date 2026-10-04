@@ -16,7 +16,7 @@ export function selectedRuntime() {
   if (!installed.current) return path.resolve(pkgDir);
   const active = fs.realpathSync(path.join(data, "current"));
   if (active !== fs.realpathSync(installed.current) || !fs.existsSync(path.join(active, "package.json")))
-    throw new Error("Installed runtime pointer disagrees with its ownership record; inspect homi doctor before activation");
+    throw new Error("Installed runtime pointer disagrees with its ownership record; inspect com8 doctor before activation");
   return active;
 }
 
@@ -25,7 +25,7 @@ export function dispatchActive(entry, args) {
   if (active === fs.realpathSync(pkgDir)) return false;
   const target = path.join(active, "src", entry);
   if (!fs.existsSync(target))
-    throw new Error("The active legacy release has no HOMI CLI; use communicate for its native tools or run this archive's homi setup to upgrade");
+    throw new Error("The active legacy release has no COM8 CLI; use communicate for its native tools or run this archive's com8 setup to upgrade");
   const result = spawnSync(process.execPath, [target, ...args], { stdio: "inherit" });
   if (result.error) throw result.error;
   process.exitCode = result.status ?? 1;

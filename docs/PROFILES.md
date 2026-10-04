@@ -1,14 +1,14 @@
 # Optional workstation profiles
 
-HOMI works without a terminal profile. These profiles retain selected, proven
-Anu shell/tmux/Ghostty and mesh helpers. Guided `homi setup` can select them and
+COM8 works without a terminal profile. These profiles retain selected, proven
+Anu shell/tmux/Ghostty and mesh helpers. Guided `com8 setup` can select them and
 offer their missing dependencies; they are not required for core installation.
 They do not replace your editor, Git configuration, or model-client settings.
 Guided client setup also checks tmux for agent seats when no terminal profile is
 selected; installing that dependency alone does not apply these profiles.
 
-For a new workstation, run `homi setup` in a terminal, or preview an explicit
-selection with `homi setup --install-missing --no-clients --terminal --mesh --dry-run`.
+For a new workstation, run `com8 setup` in a terminal, or preview an explicit
+selection with `com8 setup --install-missing --no-clients --terminal --mesh --dry-run`.
 Replace `--dry-run` with `--yes` to apply it. Add `--claude` or `--codex` instead
 of `--no-clients` if you want those clients too. On macOS, `--ghostty` selects
 the application, its configured font, and the terminal profile. No desktop application is chosen
@@ -17,10 +17,10 @@ automatically. See [guided installation](INSTALL.md#run-setup).
 When the tools are already installed, use the configuration-only commands:
 
 ```sh
-homi profile preview --terminal --mesh
-homi profile install --terminal --mesh
-homi profile status
-homi profile uninstall
+com8 profile preview --terminal --mesh
+com8 profile install --terminal --mesh
+com8 profile status
+com8 profile uninstall
 ```
 
 The standalone equivalent is `python3 profiles/manage.py ...` in a source tree.
@@ -55,7 +55,7 @@ only for explicitly configured remote sync/registration. Provider CLIs and
 authentication are separate prerequisites. The box module needs Apple/container
 on a supported Mac and an explicitly built image; selecting it on Linux does
 not install a different backend. Snapshot scheduling needs the platform's user
-service manager. `homi profile status` reports executable discovery, not proof
+service manager. `com8 profile status` reports executable discovery, not proof
 of authentication, service access, or a compatible installed version.
 
 ## What is retained
@@ -70,21 +70,21 @@ of authentication, service access, or a compatible installed version.
   agent launcher. These and the basic `t`/`tn`/`tk`/`tl`/`tp`/`tj`/`tw`/`twp`/
   `to`/`tws`/`twg` helpers have executable wrappers for zsh and Bash. Existing
   provider settings stay with the provider.
-- `mesh` / `homi-mesh` for manual and Tailscale host discovery, SSH, VNC,
+- `mesh` / `com8-mesh` for manual and Tailscale host discovery, SSH, VNC,
   explicit remote commands, host metadata, and remote terminal helpers.
 
 Browser, chat, research, wall, phone, project-task dispatch, and dashboard
 shortcuts are removed from this profile. It does not source every shell module,
 start a landing UI, or introduce another terminal-message implementation.
-Agent messaging and explicit execution control remain HOMI's existing APIs.
+Agent messaging and explicit execution control remain COM8's existing APIs.
 
 Bulk launch/scaling helpers (`tsl`, `tslm`, `tml`, `taa`, `tra`, `tap`, `tscale`)
 are not loaded by the default profile. The initial setup does not select
 snapshots, accounts, or containers. To opt into workspace save/restore later,
-use `homi profile install --snapshots`; only that module loads the Bash helpers
+use `com8 profile install --snapshots`; only that module loads the Bash helpers
 `tss NAME` and `tsr [-n] NAME`. From any shell, their explicit equivalents are
-`homi-workstation shell tss NAME` and `homi-workstation shell tsr -n NAME`.
-State lives under `~/.local/state/homi/workstation/sessions`.
+`com8-workstation shell tss NAME` and `com8-workstation shell tsr -n NAME`.
+State lives under `~/.local/state/com8/workstation/sessions`.
 Names are restricted to tokens; saving refuses to overwrite an existing snapshot.
 `tsr -n` previews restoration. Scheduling remains a separate explicit action.
 
@@ -93,13 +93,13 @@ memory. The inherited Claude inference chooses an unclaimed transcript for a
 working directory; Codex uses an open rollout file with a last-session fallback.
 Those fallback cases do not prove exact conversation identity. Non-agent
 commands are staged but not automatically executed on restore. Existing sessions
-are skipped. `homi profile install --snapshots` adds explicit snapshot/archive commands.
+are skipped. `com8 profile install --snapshots` adds explicit snapshot/archive commands.
 Scheduling remains a separate operation; see [snapshots](SNAPSHOTS.md).
 Installing the profile does not migrate or load an existing LaunchAgent.
 
 ## User configuration and optional accounts
 
-Generated files live in `~/.config/homi/profiles`. Keep private choices in:
+Generated files live in `~/.config/com8/profiles`. Keep private choices in:
 
 - `local.sh`: trusted shell overrides, sourced by profile tools and shells;
 - `local.tmux.conf`: loaded after the generated tmux configuration;
@@ -113,37 +113,37 @@ consulted. `cxx` and `cdxx` explicitly select their provider's full-auto modes;
 to run without a configured containment adapter instead of silently running on
 the host.
 
-`HOMI_ACCOUNT_LAUNCHER` can name one executable accepting
+`COM8_ACCOUNT_LAUNCHER` can name one executable accepting
 `launch --provider claude|codex [--box] -- ARGS`, matching the existing
-Anu account helper. `HOMI_BOX_LAUNCHER` can name an executable that accepts a
+Anu account helper. `COM8_BOX_LAUNCHER` can name an executable that accepts a
 command and arguments. These are executable paths, not evaluated command strings.
 
-`homi profile install --accounts` selects the packaged account launcher,
+`com8 profile install --accounts` selects the packaged account launcher,
 observer, and minimal secrets client. Configure the existing usage service,
 credential store, and any existing account/cache paths explicitly in `local.sh`.
 The module retains working rotation/rebalance and provider resume behavior;
 it does not host the usage or secrets service. See the
 [account module configuration](../profiles/runtime/accounts/README.md).
 
-For the observer, also set `HOMI_PROFILE_WATCH=1`. The account module supplies
-`HOMI_PANE_WATCHER`; a private override may name another executable. Generic
+For the observer, also set `COM8_PROFILE_WATCH=1`. The account module supplies
+`COM8_PANE_WATCHER`; a private override may name another executable. Generic
 profiles start no watcher. Private tmux options such as `@anu_autorotate` and
 `@anu_rebalance` belong in `local.tmux.conf`. Preserve account state, provider
 homes, and session metadata before retiring old paths; do not run both old and
 new observers on the same server.
 
-`homi profile install --box` selects the optional local container adapter.
+`com8 profile install --box` selects the optional local container adapter.
 It never starts or installs a container runtime during profile installation.
 See [contained execution](CONTAINED-EXECUTION.md) for explicit image builds,
 mounts, credentials, and runtime requirements.
 
 ```sh
-homi-mesh host add lab scientist@lab.example 2222
-homi-mesh ssh lab
-homi-mesh sshconfig
+com8-mesh host add lab scientist@lab.example 2222
+com8-mesh ssh lab
+com8-mesh sshconfig
 ```
 
-SSH export writes a separate `~/.config/homi/profiles/mesh/ssh.conf` and does
+SSH export writes a separate `~/.config/com8/profiles/mesh/ssh.conf` and does
 not change `~/.ssh/config`. Use it via `ssh -F PATH HOST` or add your own Include.
 `mesh run` and `mesh deploy` execute the command you explicitly supply; they
 are control operations, not agent messaging. VNC and actual remote host access
@@ -152,11 +152,11 @@ depend on configured platform software and authorization.
 ## Ownership, rollback, and migration
 
 Profile installation snapshots its runtime into a content-addressed directory
-under `~/.local/share/homi/profiles`. The active files and wrappers point to that
+under `~/.local/share/com8/profiles`. The active files and wrappers point to that
 installed copy, so deleting or moving the source checkout does not break them.
 No provider histories, credentials, or host inventories are copied into it.
 
-The installer maintains `~/.local/state/homi/profiles/ownership.json` and original
+The installer maintains `~/.local/state/com8/profiles/ownership.json` and original
 backups. Shell, tmux, and Ghostty files receive a marked block; unrelated text
 and file modes are preserved. Repeated installs preserve the first backup and
 later user edits outside the block. A preflight conflict aborts installation.
@@ -189,7 +189,7 @@ legacy Anu unlinker: that command can remove replacement symlinks it no longer
 owns.
 
 ```sh
-homi profile migrate-preview
+com8 profile migrate-preview
 ```
 
 This read-only report identifies legacy configuration links, executable pointers,
@@ -222,7 +222,7 @@ minimal secrets client against fake providers/network/stores. Real quota-driven
 handoff and private service access still need separate acceptance checks.
 
 Where Ghostty is installed, qualify its actual parser against the release with
-`python3 scripts/qualify-ghostty.py /path/to/homi-0.3.0`. This installs the artifact's
+`python3 scripts/qualify-ghostty.py /path/to/com8-0.3.0`. This installs the artifact's
 terminal profile in a temporary home, validates the generated include, checks the
 loaded settings, and requires rejection of a deliberately invalid option. It opens
 no window and checks neither rendering nor whether the requested font is available.

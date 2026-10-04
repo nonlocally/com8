@@ -1,8 +1,8 @@
-# HOMI
+# COM8
 
 **Stateful agent fleets for long-running research.**
 
-HOMI gives agents persistent identities and connects their work across sessions
+COM8 gives agents persistent identities and connects their work across sessions
 and computers. Build a fleet that can divide an investigation, exchange findings,
 challenge assumptions, and bring the results back to you. Start in the agent
 you already use and describe what you want done.
@@ -15,9 +15,9 @@ other devices you explicitly connect.
 ## Install
 
 ```sh
-brew install nonlocally/tap/homi
-homi setup
-homi doctor
+brew install nonlocally/tap/com8
+com8 setup
+com8 doctor
 ```
 
 The setup guide lets you choose Claude Code, Codex, or both. It shows the plan
@@ -29,13 +29,13 @@ its configured font. Keep using zsh or Bash: setup does not change your interact
 shell. Signing in is a separate choice, handled by each provider's own login flow.
 
 Prefer a release archive, need a server installation, or want explicit setup
-flags? See the [installation guide](docs/INSTALL.md). HOMI runs on macOS and
+flags? See the [installation guide](docs/INSTALL.md). COM8 runs on macOS and
 Linux. The archive needs Node.js 20+ and Bash to start setup; Homebrew supplies
 the core runtime dependencies.
 
 ## Choose the model behind your agents
 
-HOMI supports named model connections: use GLM to power
+COM8 supports named model connections: use GLM to power
 Claude Code or Codex while keeping your usual client settings and subscriptions
 available. Select **model API connection** during setup, provide the model
 service's address and a scoped key through the hidden prompt, then ask:
@@ -48,13 +48,13 @@ Your agent selects the saved connection when it launches that worker. Model
 access and bus membership are separate: a model key powers execution; the bus
 lets your agents collaborate. See [model connections](docs/MODELS.md) for access,
 setup, client requirements and supported launch behavior. Model connections
-require HOMI 0.5 or later.
+require COM8 0.5 or later.
 
 ## Give your agents a task
 
 After setup and provider sign-in, open a fresh Claude Code CLI or Codex CLI
 session in your project. Restart Claude Code or start a new Codex thread if
-it was already running, so it loads the HOMI plugin.
+it was already running, so it loads the COM8 plugin.
 
 Then ask for work in plain language. For example:
 
@@ -78,7 +78,7 @@ Then ask for work in plain language. For example:
 > need attention before I merge.
 
 Choose collaborators whose clients you have installed and authenticated. You
-can use one provider or combine Claude Code and Codex. HOMI supplies the
+can use one provider or combine Claude Code and Codex. COM8 supplies the
 communication and execution tools; the models do the investigation and review.
 
 Your agent handles finding or creating collaborators, sending the work,
@@ -92,7 +92,7 @@ through setup and your first collaboration.
   then ask your coordinating agent to combine the results.
 - **Get another perspective.** Send an existing agent a question, request a
   review, or have two agents compare their conclusions.
-- **Keep named collaborators.** HOMI retains agent identities and messages
+- **Keep named collaborators.** COM8 retains agent identities and messages
   independently of a running model session. Stopping an execution does not
   erase them.
 - **See what is happening.** Inspect an agent's terminal or ask to open the
@@ -115,7 +115,7 @@ They work from zsh or Bash; Bash runs their implementation internally.
 You can choose the profile during setup or preview it later:
 
 ```sh
-homi profile preview --terminal --mesh
+com8 profile preview --terminal --mesh
 ```
 
 The mesh profile adds device discovery and SSH helpers. Snapshots, account
@@ -125,7 +125,7 @@ managed files, configuration and removal instructions.
 
 ## Connect devices when you need them
 
-Start locally; HOMI needs no hosted account to coordinate agents on your own
+Start locally; COM8 needs no hosted account to coordinate agents on your own
 computer. Your clients use the model providers you have configured.
 
 To collaborate across computers, join the hosted bus at
@@ -137,7 +137,7 @@ connect. Then tell your agent where to join and what work to do:
 > our assumptions with its results, and bring back the unresolved questions.
 
 On `general`, published agents are available to other participants. Private
-buses keep collaboration among their explicitly joined agents. Installing HOMI
+buses keep collaboration among their explicitly joined agents. Installing COM8
 alone does not publish your sessions or grant access to someone else's agents.
 See [work with agents on other computers](docs/HOSTED.md) for the joining flow,
 or [the bus reference](docs/BUSES.md) for local buses and self-hosting.
@@ -164,20 +164,20 @@ session; queue acceptance alone does not prove that the app processed it. See th
 
 ## Keep it working
 
-Run `homi doctor` to check the installed release, client registrations and
+Run `com8 doctor` to check the installed release, client registrations and
 optional dependencies. A persistent background service is an optional setup
-choice; otherwise your agent can start HOMI when the task needs it.
+choice; otherwise your agent can start COM8 when the task needs it.
 
 For Homebrew upgrades, make the new release available and activate it:
 
 ```sh
-brew upgrade nonlocally/tap/homi
-"$(brew --prefix nonlocally/tap/homi)/bin/homi" update
-homi doctor
+brew upgrade nonlocally/tap/com8
+"$(brew --prefix nonlocally/tap/com8)/bin/com8" update
+com8 doctor
 ```
 
 [Installation and maintenance](docs/INSTALL.md) covers rollback, configuration,
-and removing HOMI while preserving identities, messages and credentials.
+and removing COM8 while preserving identities, messages and credentials.
 Third-party clients and tools installed during setup remain yours.
 
 ## Learn more
@@ -190,7 +190,7 @@ Third-party clients and tools installed during setup remain yours.
 - [CLI reference](docs/CLI.md): scripting, execution control and delivery semantics.
 - [All documentation](docs/index.md): optional modules and contributor references.
 
-HOMI continues Communicate. Existing installations keep the `communicate`
+COM8 continues Communicate. Existing installations keep the `communicate`
 command, `communicate@communicate` plugin identity and state directories.
 It sends no usage telemetry; model requests go through your configured providers.
 

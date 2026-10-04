@@ -1,7 +1,7 @@
 {
   "name": "communicate",
-  "version": "0.5.1",
-  "description": "HOMI: durable agent identities, native Claude/Codex messaging, shared buses and explicit terminal seats.",
+  "version": "0.6.0",
+  "description": "COM8: durable agent identities, native Claude/Codex messaging, shared buses and explicit terminal seats.",
   "author": {
     "name": "Aadarsh Agarwal",
     "url": "https://github.com/aadarwal"
@@ -17,5 +17,5 @@
     "registration",
     "discovery"
   ],
-  "repository": "https://github.com/nonlocally/HOMI"
+  "repository": "https://github.com/nonlocally/com8"
 }

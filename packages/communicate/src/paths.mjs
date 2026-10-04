@@ -14,4 +14,4 @@ export const isSourceCheckout = path.resolve(pkgDir) === checkoutPackage &&
 export const communicateCli = isSourceCheckout
   ? path.join(checkout, "bin", "communicate")
   : path.join(pkgDir, "vendor", "bin", "communicate");
-export const homiCli = path.join(path.dirname(communicateCli), "homi");
+export const com8Cli = path.join(path.dirname(communicateCli), "com8");

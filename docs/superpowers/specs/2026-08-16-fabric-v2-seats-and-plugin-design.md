@@ -1,9 +1,9 @@
-# Fabric v2 — the seat plane, homi spawn, and the from-scratch plugin — Design
+# Fabric v2 — the seat plane, com8 spawn, and the from-scratch plugin — Design
 
-Date: 2026-08-16 · Status: **draft, awaiting review** · Builds on: `2026-08-15-agent-fabric-design.md` (v1, shipped as homi in PR #10)
+Date: 2026-08-16 · Status: **draft, awaiting review** · Builds on: `2026-08-15-agent-fabric-design.md` (v1, shipped as com8 in PR #10)
 
 > v1 shipped the message plane: durable identities, mailboxes, store→wake, links.
-> v2 completes the fabric so the anu plugin (`~/HOMI/plugins/anu`) can retire —
+> v2 completes the fabric so the anu plugin (`~/COM8/plugins/anu`) can retire —
 > which requires restoring something the first v2 sketch wrongly discarded:
 > **the seat plane**. The v1 spec already reserved `pane:` as a typed reach on an
 > identity; the cluster-conductor pattern (an agent driving a live, Duo-authenticated
@@ -14,10 +14,10 @@ Date: 2026-08-16 · Status: **draft, awaiting review** · Builds on: `2026-08-15
 
 ## Goal
 
-Make `plugins/anu` useless by making homi complete: (1) finish the message plane
+Make `plugins/anu` useless by making com8 complete: (1) finish the message plane
 (reply-correlated `ask`, groups, notify); (2) add the **seat plane** — drive any
 interactive surface, local or cross-device, with the old pane discipline
-reimplemented fresh; (3) add **`homi spawn`** — the fabric creates agents, not
+reimplemented fresh; (3) add **`com8 spawn`** — the fabric creates agents, not
 just routes them; (4) build the **plugin from scratch** — a thin MCP server over
 the control socket, derived from a two-loop dogfood, published to npm + the MCP
 Registry, installable by any MCP client (`claude mcp add` / `codex mcp add` /
@@ -54,7 +54,7 @@ route, and the roster shows both — `communicate → mail: live · seat: mini-2
    *Rejected:* a separate seat transport.
 
 4. **Seat capability is opt-in per link, upgradable in place** (user-locked).
-   Links carry mail by default; `homi link <dev> --allow-seats` grants seat ops —
+   Links carry mail by default; `com8 link <dev> --allow-seats` grants seat ops —
    run against an existing link it **upgrades in place** (same mechanism as
    re-linking with a new addr); `--revoke-seats` downgrades. A seat envelope
    arriving on an ungranted link gets a negative ack and dead-letters on the
@@ -65,17 +65,17 @@ route, and the roster shows both — `communicate → mail: live · seat: mini-2
    intervals; precedence dead→approval→busy→booting→idle), the send discipline
    (sanitize → literal stage → **separate** retried Enter → verify by composer
    marker → exit-2 for sent-unconfirmed), two-signal approval detection,
-   fail-closed respond. All reimplemented fresh in homi's codebase with our own
+   fail-closed respond. All reimplemented fresh in com8's codebase with our own
    test suites; every timing constant ported as a deliberate, tested decision.
    Not one line copied from the 1,576-line pane bin. The dogfood phase doubles
    as re-verification of the scar tissue against live TUIs.
 
-6. **The seat module lives in the homi daemon** as an optional backend: probe
+6. **The seat module lives in the com8 daemon** as an optional backend: probe
    for tmux at startup; on headless devices seats are simply absent and mail is
    unaffected. Seat state can feed the identity roster (a bound seat's
    classifier state is a richer activity signal than a socket probe).
 
-7. **`homi spawn <identity> --cli claude|codex [--seat pane|headless] [--device D]`**
+7. **`com8 spawn <identity> --cli claude|codex [--seat pane|headless] [--device D]`**
    is the creator verb: headless mailbox-driven workers by default; a visible
    tmux seat when watching matters or the target is a TUI; `--device` spawns via
    a seat-granted link. Spawn auto-claims + adopts (rename-sync) + binds.
@@ -103,9 +103,9 @@ route, and the roster shows both — `communicate → mail: live · seat: mini-2
     has no general server-push); Claude sessions keep native socket-wake; the
     cc_peer codex adapter remains as the push path where it already works.
     Streamable HTTP binds on the tailnet → any device's MCP client can drive
-    any homi; auth = tailnet identity in v2 (spec OAuth only if ever exposed
+    any com8; auth = tailnet identity in v2 (spec OAuth only if ever exposed
     beyond it). Distribution: npm package (vendoring the stdlib-only Python
-    daemon — no pip; `npx homi setup` installs launchd/systemd + claims), then
+    daemon — no pip; `npx com8 setup` installs launchd/systemd + claims), then
     the MCP Registry via `mcpName` + `mcp-publisher`.
 
 ## The complete tool surface (~20 tools, five groups)
@@ -118,18 +118,18 @@ route, and the roster shows both — `communicate → mail: live · seat: mini-2
 | Creation | `spawn`, `consult` |
 | Links / human | `status`, `link_status`, `notify` |
 
-Resources: `homi://routes`, `homi://inbox/<name>`, `homi://seats` — with `ttlMs`
+Resources: `com8://routes`, `com8://inbox/<name>`, `com8://seats` — with `ttlMs`
 cache hints. Descriptions steer: messaging is the default plane; seats are the
 explicit interactive escape hatch.
 
 ## Build methodology (the two-loop dogfood)
 
 1. **Loop 1 — feature loop, CLI only.** Every capability lands as
-   `communicate homi …` verbs with isolated test scripts, exactly like v1
+   `communicate com8 …` verbs with isolated test scripts, exactly like v1
    (ask/groups/notify; the seat layer + classifier + send discipline; seat
    envelopes + link grants; spawn/bind). The CLI is the complete, tested
    definition. No plugin exists yet.
-2. **Loop 2 — dogfood with real agents.** Use homi to test homi: spawn a small
+2. **Loop 2 — dogfood with real agents.** Use com8 to test com8: spawn a small
    team (headless claude workers, a codex worker, one pane-seated agent) briefed
    to complete tasks only achievable through fabric verbs — (a) a
    mailbox-coordination task (workers produce a joint report using send/ask/
@@ -141,20 +141,20 @@ explicit interactive escape hatch.
    MCP tools from Claude Code *and* codex, across devices.
 4. **Publish** (npm + Registry; per-client install lines) and **retire**: when
    no client config references `plugins/anu` and its call count is zero for two
-   weeks, delete it from `~/HOMI`. `pane_present` stays with nv (editor
+   weeks, delete it from `~/COM8`. `pane_present` stays with nv (editor
    concern); beam survives untouched.
 
 ## Out of scope (v2)
 
 Box/job seat drivers (sandbox track); cross-fleet seat grants (restricted-key
-track); OAuth/CIMD on the HTTP transport (tailnet identity suffices until homi
+track); OAuth/CIMD on the HTTP transport (tailnet identity suffices until com8
 is exposed beyond it); a TS rewrite of the daemon (the Python daemon stays; the
 Node layer is a thin client).
 
 ## Open questions
 
-- npm name/scope (`homi` is likely taken; `@aadarwal/homi` + registry name
-  `io.github.aadarwal/homi`?).
+- npm name/scope (`com8` is likely taken; `@aadarwal/com8` + registry name
+  `io.github.aadarwal/com8`?).
 - Dogfood scale/budget per iteration (a handful of agents per loop, more only
   if friction warrants).
 - Whether `seat_read` output should redact obvious secrets before returning

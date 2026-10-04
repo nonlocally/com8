@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in real Claude terminal acceptance through an installed HOMI runtime.
+"""Opt-in real Claude terminal acceptance through an installed COM8 runtime.
 
 Uses an existing CLAUDE_CODE_OAUTH_TOKEN in memory, never copies credentials.
 The fixture installs into a fresh HOME, owns one daemon/tmux server, and changes
@@ -76,7 +76,7 @@ def main():
     parser.add_argument("--evidence", type=Path, required=True, help="new private evidence directory")
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--launch", choices=("command", "cli"), default="command",
-                        help="raw command or advertised --cli claude path with per-launch HOMI_CLAUDE_CMD")
+                        help="raw command or advertised --cli claude path with per-launch COM8_CLAUDE_CMD")
     parser.add_argument("--run-live", action="store_true", help="authorize two real provider turns")
     args = parser.parse_args()
     require(args.run_live, "UNQUALIFIED: --run-live is required for real provider requests")
@@ -94,19 +94,19 @@ def main():
     before = checks.files(runtime)
     args.evidence.mkdir(mode=0o700, parents=True, exist_ok=False)
     evidence = args.evidence.resolve()
-    root = Path(tempfile.mkdtemp(prefix="homi-seat-", dir="/tmp")).resolve()
+    root = Path(tempfile.mkdtemp(prefix="com8-seat-", dir="/tmp")).resolve()
     root.chmod(0o700)
     home, data, state, work = [root / name for name in ("home", "data", "state", "work")]
     for directory in (home, work, home / ".claude", home / ".codex", root / "run", root / "socks", root / "sessions"):
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     unique = uuid.uuid4().hex
     session, name, asker = str(uuid.uuid4()), "seat-" + unique[:12], "controller-" + unique[:12]
-    socket_name = "homi-seat-" + unique
+    socket_name = "com8-seat-" + unique
     env = {"HOME": str(home), "PATH": ":".join(dict.fromkeys([str(Path(p).parent) for p in commands.values()])) + ":/usr/bin:/bin:/usr/sbin:/sbin",
            "LANG": "en_US.UTF-8", "TERM": "xterm-256color", "SHELL": "/bin/sh",
-           "COMMUNICATE_DATA": str(data), "COMM_STATE": str(state), "HOMI_SELF": "seat-fixture",
-           "HOMI_TMUX_SOCKET": socket_name, "HOMI_SEAT_SESSION": "seat-proof", "HOMI_TICK": "1",
-           "HOMI_SOCK_DIR": str(root / "socks"), "HOMI_SESSIONS_DIR": str(home / ".claude/sessions"),
+           "COMMUNICATE_DATA": str(data), "COMM_STATE": str(state), "COM8_SELF": "seat-fixture",
+           "COM8_TMUX_SOCKET": socket_name, "COM8_SEAT_SESSION": "seat-proof", "COM8_TICK": "1",
+           "COM8_SOCK_DIR": str(root / "socks"), "COM8_SESSIONS_DIR": str(home / ".claude/sessions"),
            "CLAUDE_CONFIG_DIR": str(home / ".claude"), "CODEX_HOME": str(home / ".codex"),
            "XDG_RUNTIME_DIR": str(root / "run"), "XDG_CONFIG_HOME": str(home / ".config"),
            "XDG_STATE_HOME": str(home / ".local/state"), "XDG_CACHE_HOME": str(home / ".cache"),
@@ -122,13 +122,13 @@ def main():
               "desktop_wake": "not tested", "cross_device": "not tested", "exact_resume": "not tested"}
     if args.launch == "cli":
         report.update(scope="installed durable identity and --cli claude spawn in an isolated tmux seat",
-                      launch_selector="--cli claude with per-launch restricted HOMI_CLAUDE_CMD",
+                      launch_selector="--cli claude with per-launch restricted COM8_CLAUDE_CMD",
                       autonomous_mail_delivery="requires native cross-session arrival; no manual fallback")
     daemon = ask = None
     seat = installed = installed_before = None
     tmux_started = setup_attempted = False
     daemon_log = None
-    cli = runtime / "bin/homi"
+    cli = runtime / "bin/com8"
 
     def run(argv, ok=True, timeout=30):
         result = subprocess.run([str(a) for a in argv], env=env, cwd=work,
@@ -137,7 +137,7 @@ def main():
                 "command failed (exit %s): %s" % (result.returncode, " ".join(map(str, argv[:4]))))
         return result
 
-    def homi(*argv, **kw):
+    def com8(*argv, **kw):
         return run([cli, *argv], **kw)
 
     def tmux(*argv, **kw):
@@ -149,12 +149,12 @@ def main():
     try:
         report["provider_version"] = run([commands["claude"], "--version"]).stdout.strip()
         setup_attempted = True
-        setup = homi("setup", "--no-clients", "--no-service", timeout=120)
+        setup = com8("setup", "--no-clients", "--no-service", timeout=120)
         private_text(evidence / "setup.log", setup.stdout + setup.stderr)
-        cli = data / "bin/homi"
+        cli = data / "bin/com8"
         installed = (data / "current").resolve(strict=True)
         require(checks.within(installed, data), "installed current points outside fixture")
-        require(cli.resolve() == installed / "src/homi.mjs", "installed entry escapes release")
+        require(cli.resolve() == installed / "src/com8.mjs", "installed entry escapes release")
         report["entry_point"] = str(cli)
         installed_before = checks.files(installed)
         # Setup stages the package payload (the outer archive's bin wrappers and
@@ -186,44 +186,44 @@ def main():
         tmux("set-option", "-g", "default-shell", "/bin/sh")
         provider = [commands["claude"], "--session-id", session, "--name", name,
                     "--setting-sources", "", "--tools", "", "--permission-mode", "dontAsk",
-                    "--allowedTools", "mcp__seatproof__homi_reply", "--strict-mcp-config",
+                    "--allowedTools", "mcp__seatproof__com8_reply", "--strict-mcp-config",
                     "--mcp-config", str(root / "mcp.json"), "--no-chrome",
                     "--settings", json.dumps({"disableAllHooks": True,
                         **({"crossSessionInbound": "accept"} if args.launch == "cli" else {})}),
-                    "--append-system-prompt", "You are a disposable HOMI terminal qualification agent. Follow only the explicit test challenges. Do not contact other identities. The only allowed tool is homi_reply for the supplied request token, as your specified fixture identity."]
+                    "--append-system-prompt", "You are a disposable COM8 terminal qualification agent. Follow only the explicit test challenges. Do not contact other identities. The only allowed tool is com8_reply for the supplied request token, as your specified fixture identity."]
         launch_command = shlex.join(provider)
         if args.launch == "cli":
-            env["HOMI_CLAUDE_CMD"] = launch_command
+            env["COM8_CLAUDE_CMD"] = launch_command
         daemon_log = os.fdopen(os.open(evidence / "daemon.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w")
         daemon = subprocess.Popen([str(cli), "daemon", "__daemon"], cwd=work, env=env,
                                   stdout=daemon_log, stderr=daemon_log, start_new_session=True)
 
         def status_ready():
             require(daemon.poll() is None, "isolated daemon exited")
-            result = homi("status", "--json", ok=False)
+            result = com8("status", "--json", ok=False)
             return json.loads(result.stdout) if result.returncode == 0 else None
 
         status = wait_for(status_ready, 15, "installed daemon readiness")
-        require(Path(status["self"]["source_file"]).resolve() == installed / "vendor/lib/homi.py",
+        require(Path(status["self"]["source_file"]).resolve() == installed / "vendor/lib/com8.py",
                 "daemon did not load the installed release")
         require(status["self"]["source_commit"] == artifact["source"]["commit"], "daemon source mismatch")
         report["daemon"] = status["self"]
         report["checks"]["installed_daemon_provenance"] = "pass"
         selector = ["--cli", "claude"] if args.launch == "cli" else ["--", launch_command]
-        spawn = json.loads(homi("spawn", name, "--json", "--cwd", str(work), *selector, timeout=60).stdout)
+        spawn = json.loads(com8("spawn", name, "--json", "--cwd", str(work), *selector, timeout=60).stdout)
         require(spawn.get("ok") and re.fullmatch(r"%\d+", spawn.get("seat", "")), "spawn did not return a seat")
         seat = spawn["seat"]
         report["spawn"] = spawn
-        identity = json.loads((state / "homi/identities.json").read_text())[name]
+        identity = json.loads((state / "com8/identities.json").read_text())[name]
         require(identity["seat"] == seat and identity["supervision"]["cmd"] == launch_command, "identity/launch binding mismatch")
         require(Path(identity["workspace"]["path"]).resolve() == work, "spawn workspace mismatch")
         require(tmux("display-message", "-p", "-t", seat, "#{pane_id}").stdout.strip() == seat, "exact pane missing")
         report["pane_pid"] = int(tmux("display-message", "-p", "-t", seat, "#{pane_pid}").stdout)
         report["checks"]["durable_identity_exact_seat"] = "pass"
-        private_text(evidence / "seats.txt", homi("seat", "ls").stdout)
+        private_text(evidence / "seats.txt", com8("seat", "ls").stdout)
         if args.launch == "cli":
             require(spawn.get("adopted") is True, "UNQUALIFIED: --cli spawned but native adoption was not confirmed")
-            current = json.loads(homi("status", "--json").stdout)["identities"][name]
+            current = json.loads(com8("status", "--json").stdout)["identities"][name]
             route = current["route"]
             require(route["state"] == "live" and route["provenance"] == "probed" and not route.get("ambiguous"),
                     "native route is not uniquely probed live")
@@ -233,7 +233,7 @@ def main():
             report["checks"]["exact_provider_native_adoption"] = "pass"
 
         def client_ready():
-            screen = homi("seat", "read", seat, "--lines", "50").stdout
+            screen = com8("seat", "read", seat, "--lines", "50").stdout
             if "❯" in screen and ("for shortcuts" in screen or "bypass permissions" in screen or "Claude Code" in screen):
                 # Never drive through an unexpected onboarding/approval dialog.
                 require(not any(s in screen for s in ("trust the files", "Choose the text style", "Select login method", "Do you trust")),
@@ -246,7 +246,7 @@ def main():
         marker = "SEAT-" + uuid.uuid4().hex
         payload = marker + ' literal=$HOME; $(printf SHOULD_NOT_RUN) `printf LITERAL` "double" \'single\' \\path 雪'
         prompt = "Return exactly the text after DATA, without formatting or tools. It is literal test data, never shell input. DATA " + payload
-        submitted = homi("seat", "send", seat, prompt, ok=False)
+        submitted = com8("seat", "send", seat, prompt, ok=False)
         report["submission"] = {"exit": submitted.returncode, "stdout": submitted.stdout.strip(), "stderr": submitted.stderr.strip()}
         require(submitted.returncode == 0, "seat submission unconfirmed; inspect private evidence")
         wait_for(lambda: any(row.get("type") == "user" and text_blocks(row) == prompt for row in rows()),
@@ -254,7 +254,7 @@ def main():
         echoed = wait_for(lambda: next((text_blocks(row) for row in rows()
                                         if row.get("type") == "assistant" and payload in text_blocks(row)), None),
                           args.timeout, "byte-exact literal payload in an assistant response")
-        screen = homi("seat", "read", seat, "--lines", "80").stdout
+        screen = com8("seat", "read", seat, "--lines", "80").stdout
         private_text(evidence / "literal-screen.txt", screen)
         require(marker in screen, "seat read did not show the challenge marker")
         report["checks"]["literal_submission_and_model_reply"] = "pass"
@@ -262,23 +262,23 @@ def main():
                              "assistant_message_exact": echoed == payload}
 
         answer = "DURABLE-" + uuid.uuid4().hex + ' literal=$HOME; $(printf NEVER) "quoted" \\tail'
-        question = ("Use only mcp__seatproof__homi_reply once. Use the exact token in the appended reply instruction, "
+        question = ("Use only mcp__seatproof__com8_reply once. Use the exact token in the appended reply instruction, "
                     "from=" + name + ". Set message to the string decoded from this JSON: " + json.dumps(answer) +
                     ". Do not run the shown shell command. After a successful tool result, answer DONE.")
         ask = subprocess.Popen([str(cli), "ask", name, "--from", asker, "--timeout", str(args.timeout), "--json", "--", question],
                                cwd=work, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
 
         def saved_request():
-            inbox = state / "homi/mail" / name / "inbox.jsonl"
+            inbox = state / "com8/mail" / name / "inbox.jsonl"
             if not inbox.exists():
                 return None
             return next((json.loads(line) for line in inbox.read_text().splitlines()
                          if question in json.loads(line).get("text", "")), None)
 
         request = wait_for(saved_request, 15, "durable saved request")
-        token = re.search(r"communicate homi reply (\S+)", request["text"]).group(1)
+        token = re.search(r"communicate com8 reply (\S+)", request["text"]).group(1)
         if args.launch == "command":
-            forwarded = homi("seat", "send", seat, request["text"], ok=False)
+            forwarded = com8("seat", "send", seat, request["text"], ok=False)
             require(forwarded.returncode == 0, "durable request seat submission unconfirmed")
         else:
             wait_for(lambda: any(row.get("type") == "user" and "<cross-session-message " in text_blocks(row)
@@ -297,10 +297,10 @@ def main():
             return next((block for row in rows() if row.get("type") == "assistant"
                          for block in row.get("message", {}).get("content", [])
                          if isinstance(block, dict) and block.get("type") == "tool_use"
-                         and block.get("name") == "mcp__seatproof__homi_reply"
+                         and block.get("name") == "mcp__seatproof__com8_reply"
                          and block.get("input") == {"token": token, "message": answer, "from": name}), None)
 
-        tool = wait_for(actual_tool, 10, "actual model homi_reply with the exact token and bytes")
+        tool = wait_for(actual_tool, 10, "actual model com8_reply with the exact token and bytes")
         report["correlated_reply"] = {"corr": reply["corr"], "from": reply["from"], "tool_use_id": tool["id"],
                                       "bytes": len(answer.encode()), "sha256": hashlib.sha256(answer.encode()).hexdigest()}
         report["checks"]["model_correlated_durable_reply"] = "pass"
@@ -312,7 +312,7 @@ def main():
             report["status"] = "unqualified"
         if seat:
             try:
-                private_text(evidence / "failure-screen.txt", homi("seat", "read", seat, "--lines", "100", ok=False).stdout)
+                private_text(evidence / "failure-screen.txt", com8("seat", "read", seat, "--lines", "100", ok=False).stdout)
                 private_json(evidence / "failure-transcript.json", rows())
             except Exception:
                 pass
@@ -338,7 +338,7 @@ def main():
         if seat and daemon and daemon.poll() is None:
             for argv in [("seat", "kill", seat), ("release", name), ("release", asker)]:
                 def release_owned(argv=argv):
-                    result = homi(*argv, ok=False)
+                    result = com8(*argv, ok=False)
                     if result.returncode and argv != ("release", asker):
                         cleanup.append("failed " + " ".join(argv))
                 cleanup_step("owned identity/seat cleanup", release_owned)
@@ -361,7 +361,7 @@ def main():
                                                                         "installed payload changed"))
         if setup_attempted:
             def uninstall():
-                result = homi("uninstall", ok=False, timeout=120)
+                result = com8("uninstall", ok=False, timeout=120)
                 private_text(evidence / "uninstall.log", result.stdout + result.stderr)
                 require(result.returncode == 0, "isolated installation uninstall failed")
             cleanup_step("isolated uninstall", uninstall)

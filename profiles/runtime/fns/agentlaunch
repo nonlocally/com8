@@ -2,15 +2,15 @@
 # Agent command registry: alias\tcommand\tdescription
 _al_registry() {
   cat <<'EOF'
-cx	homi-agent cx	Claude (interactive permissions)
-cxx	homi-agent cxx	Claude (full auto)
-cxc	homi-agent cxc	Claude (configured contained execution)
-claude	homi-agent claude	Claude (default)
-c	homi-agent c	OpenCode
-cdx	homi-agent cdx	Codex
-cdxx	homi-agent cdxx	Codex (full auto)
-cdxxs	homi-agent cdxxs	Codex (workspace sandbox)
-pi	homi-agent pi	Pi
+cx	com8-agent cx	Claude (interactive permissions)
+cxx	com8-agent cxx	Claude (full auto)
+cxc	com8-agent cxc	Claude (configured contained execution)
+claude	com8-agent claude	Claude (default)
+c	com8-agent c	OpenCode
+cdx	com8-agent cdx	Codex
+cdxx	com8-agent cdxx	Codex (full auto)
+cdxxs	com8-agent cdxxs	Codex (workspace sandbox)
+pi	com8-agent pi	Pi
 EOF
 }
 

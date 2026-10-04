@@ -37,7 +37,7 @@ ACCOUNT="$ANU_ROOT/profiles/runtime/accounts/account"
 assert_file "$ACCOUNT" "anu-account bin present"
 
 SD="$(new_stubdir)"; export PATH="$SD:$PATH"
-export HOMI_ACCOUNT_PANE="$SD/pane"
+export COM8_ACCOUNT_PANE="$SD/pane"
 LOG="$(mktmp)/calls.log"; : > "$LOG"
 FIX="$(mktmp)"
 export ANU_USAGE_URL="http://dash.test"
@@ -218,7 +218,7 @@ assert_eq "0" "$([ -f "$ANU_ACCOUNT_CODEX_DIR/nobody/config.toml" ] && echo 1 ||
 
 t_section "2f. the installed hook command is an ABSOLUTE path, never a PATH lookup"
 # Codex 0.156.0 stopped handing the hooks it spawns the launching shell's
-# PATH: an installed `homi-account hook codex session-start` resolved to the
+# PATH: an installed `com8-account hook codex session-start` resolved to the
 # wrong `anu` and did nothing at all — silently, because a hook that fails is
 # a hook that writes no stamp. So `add` writes the absolute path of the
 # anu-account that ran it, and nothing about the hook depends on anyone's PATH.
@@ -226,7 +226,7 @@ stub "$SD" anu 'printf "anu %s\n" "$*"'      # on PATH, and deliberately ignored
 out="$(ANU_ACCOUNT_HOOK_CMD= "$ACCOUNT" add --provider codex abspath 2>&1)"; rc=$?
 assert_ok $rc "add works with no ANU_ACCOUNT_HOOK_CMD override"
 cfg_abs="$(cat "$ANU_ACCOUNT_CODEX_DIR/abspath/config.toml")"
-assert_not_contains "$cfg_abs" 'command = "homi-account hook' \
+assert_not_contains "$cfg_abs" 'command = "com8-account hook' \
   "the dispatcher on PATH is NOT what gets written"
 assert_contains "$cfg_abs" "command = \"$ACCOUNT hook codex session-start\"" \
   "…the absolute path of the anu-account that ran the add is"
@@ -856,7 +856,7 @@ assert_fail $rc "with no ranked account logged in here, launch refuses"
 assert_eq "1" "$rc" "…exit 1 — a local credential problem, not an exhausted pool (that is still 3)"
 assert_contains "$out" "account_epsilon, fixture_owner, account_beta" "…the message names the ranked accounts, in rank order"
 assert_contains "$out" "none is logged in on this device" "…and says what is actually wrong"
-assert_contains "$out" "homi-account add --provider codex" "…with the command that fixes it"
+assert_contains "$out" "com8-account add --provider codex" "…with the command that fixes it"
 # The hint names an account this device really is logged in as — whichever
 # one it is; the invariant is that following the advice would work.
 suggested="$(printf '%s' "$out" | sed -n 's/.*--as \([A-Za-z0-9_-]*\).*/\1/p' | tail -1)"
