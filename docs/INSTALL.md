@@ -14,7 +14,7 @@ open a fresh session and ask your agent to create peers, send messages, or
 coordinate work. See the [Quickstart](QUICKSTART.md) for examples and
 [Homebrew](#homebrew) below for upgrades and removal.
 
-You can also install from the [COM8 0.5.0 release archive](https://github.com/nonlocally/com8/releases/tag/v0.5.0).
+You can also install from the [COM8 0.6.0 release archive](https://github.com/nonlocally/com8/releases/tag/v0.6.0).
 
 ## Requirements
 
@@ -39,10 +39,10 @@ The release provides `com8-VERSION.tar.gz` and its matching `.sha256` file.
 Download both, then verify the archive before extracting it:
 
 ```sh
-curl -fLO https://github.com/nonlocally/com8/releases/download/v0.5.0/com8-0.5.0.tar.gz
-curl -fLO https://github.com/nonlocally/com8/releases/download/v0.5.0/com8-0.5.0.tar.gz.sha256
-shasum -a 256 -c com8-0.5.0.tar.gz.sha256
-tar -xzf com8-0.5.0.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz.sha256
+shasum -a 256 -c com8-0.6.0.tar.gz.sha256
+tar -xzf com8-0.6.0.tar.gz
 ```
 
 The archive contains the CLI, the MCP server, the plugin, the daemon, and its
@@ -56,7 +56,7 @@ to a machine over SSH installs exactly like a downloaded one.
 For Homebrew, run `com8 setup`. From an extracted archive, use:
 
 ```sh
-./com8-0.5.0/bin/com8 setup
+./com8-0.6.0/bin/com8 setup
 ```
 
 With no flags in an interactive terminal, `setup` guides you through the clients,
@@ -69,13 +69,13 @@ For automation or a selection you already know, use explicit flags:
 
 ```sh
 # Preview only: no downloads, login, package installation or configuration writes.
-./com8-0.5.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
+./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
 
 # Apply that selection; omit either client or profile you do not want.
-./com8-0.5.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --yes
+./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --yes
 
 # CLI-only configuration, including on a server:
-./com8-0.5.0/bin/com8 setup --no-clients --no-service
+./com8-0.6.0/bin/com8 setup --no-clients --no-service
 ```
 
 Add `--ghostty` on macOS to select the application, the configured Nerd Font,
@@ -251,7 +251,7 @@ If you installed optional profiles, remove their configuration separately with
 `com8 profile uninstall` before removing COM8 itself.
 
 ```sh
-/path/to/com8-0.3.1/bin/com8 update     # from the newly verified archive
+/path/to/com8-0.6.0/bin/com8 update     # from the newly verified archive
 com8 rollback --dry-run
 com8 rollback
 com8 uninstall --claude                 # remove only this client's registration
@@ -277,6 +277,41 @@ Rules that hold throughout:
 Upgrading from Communicate 0.1.x or 0.2.x keeps the original payload. Use the
 new release's `bin/com8` for lifecycle commands; the old package has no `com8`
 entry point.
+
+Upgrading from a 0.3-0.5.1 installation: 0.6.0 renames the product command, the
+managed service label (`com.communicate.com8` / `communicate-com8.service`),
+the `COM8_*` environment variables, the durable state subdirectory under
+`~/.local/state/communicate/`, the tmux server that holds seats, the profile
+configuration and state directories under `~/.config/` and `~/.local/state/`,
+the `~/.local/bin/com8-*` profile wrappers and their shell rc block, the
+`com8_*` MCP tools and `com8-core` skill, the tag on planted session files,
+the signed-card kind and `com8v1.` invite-code prefix, the `com8-fleet:` marker
+in `~/.ssh/authorized_keys` and the `~/.ssh/id_com8` fabric key. The release
+does not migrate identities, saved messages, device links, profile ownership
+ledgers, recorded service environment overrides or a previously installed
+service, and `doctor` does not report the previous release's directories.
+Before running `com8 setup --service`:
+
+- Remove the previous service with that release's own `uninstall` (or boot out
+  and disable its unit by hand). The renamed service is installed beside the
+  old one, not in its place, and only one daemon may own a state root.
+- Run that release's `profile uninstall` so its rc block, wrappers, ownership
+  ledger and snapshot schedule are removed, then reopen your shells.
+- Keep the previous state subdirectory until you no longer need it. Re-export
+  any custom socket, sessions or tmux overrides under their `COM8_*` names when
+  you install the new service.
+- Delete planted session files that the stopped daemon left in
+  `~/.claude/sessions`; 0.6.0 would otherwise treat them as real sessions.
+
+Devices joined with `pair`, `adopt`, `connect` or `federate` must all run
+0.6.0. `pair` and `adopt` do not recognise the previous release's daemon,
+service unit, staged kernel or fabric key on the far device and would install
+a second set beside them, so upgrade every device first (removing its old unit,
+staged kernel and key file) and re-run `adopt` or `pair` from both ends.
+Invite codes and signed cards issued by the previous release are rejected;
+re-issue them after the upgrade. `authorized_keys` lines appended by the
+previous release are not recognised by `federate accept` or `federate revoke`;
+remove them by hand before accepting the same peer again.
 
 ## Private configuration
 

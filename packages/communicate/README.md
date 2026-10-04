@@ -16,13 +16,13 @@ com8 doctor
 ```
 
 For an archive installation, download the archive and checksum from the
-[COM8 0.4.0 release](https://github.com/nonlocally/com8/releases/tag/v0.4.0), then:
+[COM8 0.6.0 release](https://github.com/nonlocally/com8/releases/tag/v0.6.0), then:
 
 ```sh
-shasum -a 256 -c com8-0.4.0.tar.gz.sha256
-tar -xzf com8-0.4.0.tar.gz
-./com8-0.4.0/bin/com8 setup                   # guided in an interactive terminal
-./com8-0.4.0/bin/com8 doctor
+shasum -a 256 -c com8-0.6.0.tar.gz.sha256
+tar -xzf com8-0.6.0.tar.gz
+./com8-0.6.0/bin/com8 setup                   # guided in an interactive terminal
+./com8-0.6.0/bin/com8 doctor
 export PATH="$HOME/.local/share/communicate/bin:$PATH"
 ```
 
@@ -46,11 +46,11 @@ Use `--no-clients` for CLI-only operation. Existing `setup --claude` and
 not removed by COM8's rollback or uninstall.
 
 `setup` stages an immutable copy of the release at
-`~/.local/share/communicate/0.4.0-<manifest-hash>/`, points `current` at it, and
+`~/.local/share/communicate/0.6.0-<manifest-hash>/`, points `current` at it, and
 registers the plugin with the clients you named. Start a fresh client session
 afterwards. Keep a copy of the archive for recovery and purge if an installed
 payload becomes damaged. The full flag reference, service, update, rollback, uninstall,
-and troubleshooting are in [docs/INSTALL.md](https://github.com/nonlocally/com8/blob/v0.4.0/docs/INSTALL.md).
+and troubleshooting are in [docs/INSTALL.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/INSTALL.md).
 
 After setup and provider login, open a fresh Claude Code CLI or Codex CLI session
 and ask for the work: *"Create a Claude agent called researcher, investigate the
@@ -98,7 +98,7 @@ sessions on the configured broker with membership checks and receipts.
 The three address spaces are explicit, so a failed lookup never targets another
 agent. A saved message, a bus receipt, a native submission, and a
 correlated reply keep their distinct meanings; none says a model finished the
-task. See [docs/CLI.md](https://github.com/nonlocally/com8/blob/v0.4.0/docs/CLI.md).
+task. See [docs/CLI.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/CLI.md).
 
 ## Plugin and MCP
 
@@ -107,7 +107,7 @@ the MCP server, the Claude Code/Codex plugin, and the daemon. Production Node
 dependencies are included in the release archive. The npm name
 `@aadarwal/communicate`, the plugin identity `communicate@communicate`, and the
 state directory remain compatible with earlier Communicate installations.
-Version 0.4.0 is distributed through Homebrew and release archives, not npm.
+Version 0.6.0 is distributed through Homebrew and release archives, not npm.
 
 The plugin carries skills, slash commands, and MCP tools. Native and bus tools
 keep their existing names and order; durable tools use `com8_` names. `com8 serve`
@@ -134,7 +134,7 @@ com8 bus dashboard --open
 selects an enrolled remote one. Installing this package grants no access to any
 hosted service; its administrator controls browser access, device enrollment,
 and membership. Owner-side networking and invitations are in
-[docs/BUSES.md](https://github.com/nonlocally/com8/blob/v0.4.0/docs/BUSES.md).
+[docs/BUSES.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/BUSES.md).
 
 ## Development
 
@@ -151,6 +151,6 @@ exercise the MCP server, durable ask/reply, copied plugin caches, immutable
 updates, rollback, ownership, service boundaries (with fixtures, never the
 host's service manager), install recovery, and client restoration. Real
 per-user service qualification and real provider exchanges are separate,
-opt-in checks described in [docs/RELEASING.md](https://github.com/nonlocally/com8/blob/v0.4.0/docs/RELEASING.md).
+opt-in checks described in [docs/RELEASING.md](https://github.com/nonlocally/com8/blob/v0.6.0/docs/RELEASING.md).
 
 MIT license; bundled third-party notices are retained.

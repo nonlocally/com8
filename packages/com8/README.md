@@ -5,8 +5,9 @@ terminal seats, native Claude/Codex delivery, the bus, and optional workstation
 profiles. Install the reviewed archive from
 [nonlocally/com8 releases](https://github.com/nonlocally/com8/releases); see the
 [combined package guide](../communicate/README.md) for setup and lifecycle details.
-The historical npm name is retained for compatibility; this does not claim that
-version 0.4.0 has been published to npm.
+The package and MCP registry names follow the product rename (`@aadarwal/com8`,
+`io.github.aadarwal/com8`); the earlier names are not provided as aliases. This
+does not claim that version 0.6.0 has been published to npm.
 
 This package preserves the legacy durable MCP tool names (`claim`, `send`,
 `agents_list`, `seat_spawn`, and others). `com8 serve` still exposes that legacy

@@ -191,7 +191,12 @@ Third-party clients and tools installed during setup remain yours.
 - [All documentation](docs/index.md): optional modules and contributor references.
 
 COM8 continues Communicate. Existing installations keep the `communicate`
-command, `communicate@communicate` plugin identity and state directories.
+command, the `communicate@communicate` plugin identity and the
+`~/.local/state/communicate/` root. Release 0.6.0 renames the product command,
+the `com8_*` MCP tools and `com8-core` skill, the service labels, the profile
+and model configuration directory and the durable state subdirectory; it does
+not migrate identities, saved messages or a previously installed service. See
+[upgrading](docs/INSTALL.md#update-roll-back-uninstall).
 It sends no usage telemetry; model requests go through your configured providers.
 
 Released under the [MIT license](LICENSE), with bundled third-party notices.
