@@ -25,6 +25,7 @@ $COM8_TMUX_SOCKET (tests).
 """
 import os
 import re
+import shlex
 import subprocess
 import time
 
@@ -128,6 +129,30 @@ class SeatDriver:
     def _field(self, seat, fmt):
         r = self._tmux("display", "-p", "-t", seat, fmt)
         return r.stdout.rstrip("\n") if r.returncode == 0 else ""
+
+    def server(self, observe=True):
+        """Report our selection and its observed server, without starting one.
+
+        Pane numbers are only meaningful on this server during its lifetime.
+        Missing or unreachable servers have no invented socket/PID observation.
+        """
+        result = {"argv": list(self._base), "socket_path": None, "pid": None}
+        if not observe:
+            return result
+        try:
+            response = self._tmux("display-message", "-p", "#{socket_path}\t#{pid}")
+            fields = response.stdout.strip().split("\t")
+            if (response.returncode == 0 and len(fields) == 2
+                    and os.path.isabs(fields[0]) and fields[1].isdigit()
+                    and int(fields[1]) > 0):
+                result.update(socket_path=fields[0], pid=int(fields[1]))
+        except SeatUnavailable:
+            pass
+        return result
+
+    def _missing(self, seat):
+        return SeatError("no such seat: %s on configured server %s; "
+                         "inspect com8 seat ls --json" % (seat, shlex.join(self._base)))
 
     def _ensure_session(self):
         if self._tmux("has-session", "-t", self.session).returncode != 0:
@@ -246,12 +271,13 @@ class SeatDriver:
             st = "dead"
             self.log("measure failed for", seat, e)
         return {"driver": "tmux", "handle": seat, "state": st,
-                "measured_at": time.time()}
+                "measured_at": time.time(),
+                "tmux_server": self.server(observe=st not in ("dead", "unknown"))}
 
     # -- send discipline -------------------------------------------------------
     def send(self, seat, text):
         if not self._pane_exists(seat):
-            raise SeatError("no such seat: %s" % seat)
+            raise self._missing(seat)
         # Flatten newlines/tabs to spaces and strip control bytes, so the
         # payload cannot drive the target's terminal.
         msg = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
@@ -311,11 +337,11 @@ class SeatDriver:
         args += [cmd]  # the command the window runs
         r = self._tmux(*args, check=True)
         seat = r.stdout.strip()
-        return {"ok": True, "seat": seat}
+        return {"ok": True, "seat": seat, "tmux_server": self.server()}
 
     def read(self, seat, lines=40, raw=False):
         if not self._pane_exists(seat):
-            raise SeatError("no such seat: %s" % seat)
+            raise self._missing(seat)
         text = "\n".join(self._capture(seat, lines))
         return {"ok": True, "seat": seat, "state": self.state(seat),
                 "screen": text if raw else self._redact(text)}
@@ -514,7 +540,7 @@ class SeatDriver:
                 if len(parts) >= 3:
                     seats.append({"seat": parts[0], "cmd": parts[1],
                                   "title": parts[2]})
-        return {"ok": True, "seats": seats}
+        return {"ok": True, "seats": seats, "tmux_server": self.server()}
 
 
 def adopt_pane(name, seat, sessions_dir, *, socket_path=None, timeout=6):

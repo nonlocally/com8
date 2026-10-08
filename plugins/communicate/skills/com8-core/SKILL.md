@@ -148,6 +148,8 @@ Follow the adapter's reported state, including held, unavailable and unknown.
 
 ```sh
 com8 seat spawn 'bash --norc --noprofile' --cwd /path/to/project
+com8 seat spawn --json --cwd /path/to/project -- 'bash --norc --noprofile'
+com8 seat ls --json
 com8 seat read %ID
 com8 seat send %ID 'a command requested by the user'
 com8 seat state %ID
@@ -156,6 +158,11 @@ com8 seat bind %ID reviewer
 
 Panes are scoped to their device and tmux server lifetime. A pane ID is not a
 globally durable identity, an authenticated principal, or a sandbox boundary.
+JSON seat listings and spawn results include `tmux_server` with the observed
+socket path and server PID. Ordinary `tmux` may select another server; use the
+reported exact socket when inspecting externally, and keep COM8's server
+selection unchanged. Put program flags inside the quoted command or after `--`;
+`--json` outside the command selects COM8 JSON output.
 Ordinary shell input can execute commands. Do not deliver agent messages into a
 shell just because native messaging is unavailable. Keyboard relay requires the
 existing explicit `seat bind --relay` opt-in and agent-surface checks.

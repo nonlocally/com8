@@ -16,6 +16,8 @@ a substitute agent or target another route silently.
 | `com8 inbox NAME` | Stored JSONL inbox; reading does not imply acknowledgement. |
 | `com8 ask NAME QUESTION --timeout SEC` | Existing durable request/reply path. |
 | `com8 seat ls` | Execution endpoints for the configured seat driver. |
+| `com8 seat ls --json` | Seats plus the configured tmux selector and observed server socket/PID. |
+| `com8 seat spawn --json -- 'bash --norc --noprofile'` | Start a seat and return its pane ID and server coordinates. |
 | `com8 bus register` | Exact current session on the configured broker. |
 | `com8 bus agents --json` | Registered sessions on that broker. |
 | `com8 bus send ID --bus NAME -- MESSAGE` | Bus delivery with membership checks. |
@@ -59,3 +61,20 @@ the exact session. Screen capture is execution observation, not an agent reply.
 Native filesystem/SSH trust, broker membership, and remote seat control are separate
 capabilities. A bus invitation does not authorize arbitrary shell control. A pane
 is not a container; select isolation explicitly when needed.
+
+## Terminal server coordinates
+
+COM8 normally uses the named tmux server `com8`; ordinary `tmux` may use a
+different server. `%2` on one server can be a different pane on another. Use
+`com8 seat ls --json` or a JSON spawn receipt to inspect `tmux_server.socket_path`
+and `tmux_server.pid`. External tmux inspection must select that exact socket,
+for example `tmux -S /exact/observed/socket list-panes -a`. Do not switch the
+daemon's server to make a stale pane reference resolve. Coordinates apply only
+on the reported device during that server's lifetime; a VM restart ends running
+seats even though durable identities and mail persist.
+
+`seat spawn` accepts `--json`, `--cwd`, `--name`, and `--device`. Quote a complete
+shell command or put command arguments after `--`; arguments after this separator
+belong to the program, including its own `--json`. Unknown COM8 options fail
+before creating a seat. JSON output describes the launch and selected server;
+use `com8 seat state %ID` and the provider's native route to verify readiness.

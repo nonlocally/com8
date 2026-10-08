@@ -1015,7 +1015,8 @@ class Com8:
                     "spawned_at": time.time()}
         self._persist_identities()
         self.log("spawned", name, "in seat", seat, "adopted" if adopted else "")
-        return {"ok": True, "name": name, "seat": seat, "adopted": adopted}
+        return {"ok": True, "name": name, "seat": seat, "adopted": adopted,
+                "tmux_server": sp.get("tmux_server")}
 
     def _do_restart(self, name):
         """Bring a spawned agent back using the supervision record. com8 is not
@@ -5280,30 +5281,49 @@ def cli_call(argv):
         req = {"op": "seat", "sub": sub}
         sock_to = 12.0
         if sub == "ls":
+            if any(arg != "--json" for arg in sargs):
+                sys.stderr.write("usage: com8 seat ls [--json]\n")
+                return 1
             r = _call(req)
-            for s in (r.get("seats") or []):
-                print("%-7s %-12s %s" % (s["seat"], s["cmd"], s["title"]))
+            if "--json" in sargs:
+                print(json.dumps(r))
+            else:
+                for s in (r.get("seats") or []):
+                    print("%-7s %-12s %s" % (s["seat"], s["cmd"], s["title"]))
             return 0 if r.get("ok") else 1
         if sub == "spawn":
             cwd = winname = dev = None
+            want_json = False
             rest = []
             i = 0
             while i < len(sargs):
+                if sargs[i] == "--":
+                    rest.extend(sargs[i + 1:]); break
+                if sargs[i] == "--json":
+                    want_json = True; i += 1; continue
+                if sargs[i] in ("--cwd", "--name", "--device") and (
+                        i + 1 >= len(sargs) or sargs[i + 1].startswith("--")):
+                    sys.stderr.write("%s needs a value\n" % sargs[i]); return 1
                 if sargs[i] == "--cwd" and i + 1 < len(sargs):
                     cwd = sargs[i + 1]; i += 2; continue
                 if sargs[i] == "--name" and i + 1 < len(sargs):
                     winname = sargs[i + 1]; i += 2; continue
                 if sargs[i] == "--device" and i + 1 < len(sargs):
                     dev = sargs[i + 1]; i += 2; continue
+                if sargs[i].startswith("-"):
+                    sys.stderr.write("Unknown seat option %s; quote the command or put its arguments after --\n" % sargs[i])
+                    return 1
                 rest.append(sargs[i]); i += 1
             if not rest:
                 sys.stderr.write("usage: communicate com8 seat spawn <command...> "
-                                 "[--cwd DIR] [--name WIN] [--device DEV]\n")
+                                 "[--cwd DIR] [--name WIN] [--device DEV] [--json] "
+                                 "[-- command...]\n")
                 return 1
             req.update({"cmd": " ".join(rest), "cwd": cwd, "name": winname,
                         "device": dev})
             r = _call(req, timeout=40)
-            print(r.get("seat") if r.get("ok") else (r.get("err") or "failed"))
+            print(json.dumps(r) if want_json else
+                  r.get("seat") if r.get("ok") else (r.get("err") or "failed"))
             return 0 if r.get("ok") else 1
         if sub in ("send",):
             if len(sargs) < 2:
