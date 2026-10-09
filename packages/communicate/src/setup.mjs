@@ -164,11 +164,27 @@ function checkClaudeOwnership(record, snapshot) {
     throw new Error("Claude plugin registration or enablement changed after setup; user changes are preserved. Reconcile the owned registration before setup, rollback or uninstall.");
 }
 
+// The plugins this release's marketplace provides. Another plugin enabled under
+// the same marketplace name stops resolving once that registration points here.
+const shippedPlugins = () => JSON.parse(readFileSync(path.join(pkgDir, "vendor/plugins/.claude-plugin/marketplace.json"), "utf8"))
+  .plugins.map((plugin) => `${plugin.name}@${MARKET_ID}`);
+
 function claudeInstall(dry, integration) {
   const marketRoot = integration ? path.join(integration.root, "plugins") : path.join(currentLink(), "vendor", "plugins");
   log(`Claude configuration: ${path.dirname(settingsPath())}${process.env.CLAUDE_CONFIG_DIR ? " (CLAUDE_CONFIG_DIR)" : ""}`);
   if (!executable("claude")) { log("Claude CLI unavailable; rerun com8 setup --claude after installing it."); return false; }
   const s = readSettings();
+  const previous = s.extraKnownMarketplaces?.[MARKET_ID]?.source;
+  const previousSource = previous?.path || previous?.repo || previous?.url;
+  if (previousSource && previousSource !== marketRoot) {
+    const shipped = new Set(shippedPlugins());
+    const stranded = Object.entries(s.enabledPlugins || {})
+      .filter(([id, enabled]) => enabled === true && id.endsWith(`@${MARKET_ID}`) && !shipped.has(id)).map(([id]) => id);
+    if (stranded.length)
+      log(`warning: ${dry ? "setup would replace" : "replacing"} the existing Claude marketplace "${MARKET_ID}" (${previousSource}). ` +
+        `These enabled plugins come from it and stop resolving while COM8 is installed: ${stranded.join(", ")}. ` +
+        `They stay enabled in ${settingsPath()}; com8 uninstall restores the previous marketplace.`);
+  }
   s.extraKnownMarketplaces = { ...(s.extraKnownMarketplaces || {}), [MARKET_ID]: { source: { source: "directory", path: marketRoot } } };
   s.enabledPlugins = { ...(s.enabledPlugins || {}), [PLUGIN_ID]: true };
   writeSettings(s, dry, `add extraKnownMarketplaces.${MARKET_ID} + enabledPlugins["${PLUGIN_ID}"]`);
