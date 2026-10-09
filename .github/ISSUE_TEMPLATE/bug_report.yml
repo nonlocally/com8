@@ -1,0 +1,54 @@
+name: Bug report
+description: Report a problem with installing or using COM8.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report suspected security vulnerabilities privately instead, as described in
+        the [security policy](https://github.com/nonlocally/com8/security/policy).
+        Issues are public: remove invitation codes, device credentials, dashboard
+        links, model keys and other secrets from anything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. brew install nonlocally/tap/com8
+        2. com8 setup
+        3. ...
+  - type: input
+    id: version
+    attributes:
+      label: COM8 version
+      description: Output of `com8 version`.
+      placeholder: COM8 0.6.0 (...)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: macOS 15.5 (arm64), Ubuntu 24.04, ...
+    validations:
+      required: true
+  - type: input
+    id: clients
+    attributes:
+      label: Client versions
+      description: Output of `claude --version` and/or `codex --version`, if relevant.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: com8 doctor output
+      description: >-
+        Paste the output of `com8 doctor`. Check it first and redact anything private,
+        such as hostnames or paths you do not want to share.
+      render: text

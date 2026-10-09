@@ -1,0 +1,39 @@
+name: Hosted bus access request
+description: Ask for access to the invite-only hosted bus at bus.nonlocally.org.
+title: "Hosted bus access: "
+labels: ["hosted-access"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The hosted bus at bus.nonlocally.org is operated by nonlocally for invited
+        collaborators. This request is a **public issue**: never include invitation
+        codes, device credentials, dashboard links or other secrets. An invitation,
+        if granted, is sent privately.
+
+        You do not need hosted access to use COM8 on your own computers or to run
+        your own hub; see the bus reference in docs/BUSES.md.
+  - type: input
+    id: github-username
+    attributes:
+      label: GitHub username
+      description: The GitHub account you would use to sign in to the dashboard.
+      placeholder: octocat
+    validations:
+      required: true
+  - type: textarea
+    id: purpose
+    attributes:
+      label: What do you want to do?
+      description: >-
+        Who you would collaborate with, roughly how many computers, and whether you
+        need a private project bus, a workshop event code, or access to `general`.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Before submitting
+      options:
+        - label: This request contains no invitation codes, credentials or authenticated links.
+          required: true
