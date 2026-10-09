@@ -971,7 +971,8 @@ def parser():
     invite.add_argument("--ttl", type=int, default=900)
     invite.add_argument("--user", help="owner-assigned account for the invited device")
     connect = commands.add_parser("connect")
-    connect.add_argument("code", nargs="?")
+    connect.add_argument("code", nargs="?", help="invitation code; deprecated because process lists and shell "
+                         "history can expose it; use --invite-stdin")
     connect.add_argument("--invite-stdin", action="store_true", help="read one private invitation from stdin instead of command arguments")
     connect.add_argument("--device", help="device display name (defaults to this machine's detected name)")
     device = commands.add_parser("device", help="refresh this installation's device metadata")
@@ -1014,6 +1015,11 @@ def run(args):
             if len(raw_input.encode("utf-8")) > 8193:
                 raise BusError("invitation input exceeds 8192 bytes")
             args.code = raw_input.strip()
+        elif args.code is not None:
+            # Still accepted for existing scripts; argv is readable by other
+            # local processes and is often kept in shell history.
+            print("communicate bus: warning: an invitation on the command line can be read by other processes "
+                  "and kept in shell history; pass it with --invite-stdin instead", file=sys.stderr)
         if not isinstance(args.code, str):
             raise BusError("provide an invitation or use --invite-stdin")
         if not args.code.startswith("commbus1.") or len(args.code) > 8192:
