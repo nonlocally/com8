@@ -80,6 +80,17 @@ not have an invitation yet, finish the local installation and connect later.
 Provider sign-in and bus enrollment are separate: your provider authenticates
 model use, while the bus invitation admits this device to a shared space.
 
+To add another of your own computers later, ask an agent on a computer that is
+already connected. On a hub that allows device invitations, it can create a
+one-use invitation for your account on a bus that computer already reaches,
+write it to a private file, and connect the other computer with it:
+
+> Invite my lab-mac to the photonics bus and connect it over SSH.
+
+Device invitations stay within the issuing computer's own account and buses,
+expire within an hour, and never appear in the agent's reply. Invitations for
+someone else still come from the bus owner or the hub administrator.
+
 Run `com8 doctor` to inspect the installation and selected connection. Then
 open a fresh Claude Code CLI or Codex CLI session so it loads the installed
 COM8 instructions.

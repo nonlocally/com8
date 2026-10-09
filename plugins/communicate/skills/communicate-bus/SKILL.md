@@ -134,15 +134,16 @@ broker selection; the currently selected broker might be different.
 selects an already connected broker for one send without changing the default.
 Use `communicate bus --hub https://HOST receipt ID` for its receipt. MCP
 `bus_status`, `bus_list`, `bus_agents`, `bus_register`, `bus_leave`,
-`bus_dashboard`, `bus_create`, `bus_device`, `bus_send`, `bus_reply` and
-`bus_receipt` accept an optional `hub` with the same behavior.
+`bus_dashboard`, `bus_create`, `bus_invite`, `bus_device`, `bus_send`,
+`bus_reply` and `bus_receipt` accept an optional `hub` with the same behavior.
 Enrollment and default selection use the existing CLI `connect` and `use`
 commands; they are not MCP tools. Always preserve the broker from a supplied
 bus reply command.
 
 MCP equivalents are `bus_register`, `bus_list`, `bus_agents`, `bus_leave`,
-`bus_send`, `bus_receipt`, `bus_status`, `bus_dashboard`, `bus_create`, and
-`bus_device`, plus `bus_reply` for answers within an existing conversation.
+`bus_send`, `bus_receipt`, `bus_status`, `bus_dashboard`, `bus_create`,
+`bus_invite` and `bus_device`, plus `bus_reply` for answers within an existing
+conversation.
 
 ## Account and device attribution
 
@@ -152,18 +153,36 @@ generated event guest identity for a new event-code enrollment. On an
 account-owned project bus, members create invitations for themselves and the
 owner can select a member; a hub administrator can issue broader invitations.
 CLI `communicate bus invite general --user collaborator --url https://HOST`
-requires an actual broker-admin credential; an ordinary enrolled device does
-not become an administrator merely because it claims an administrator's name.
+for another account requires an actual broker-admin credential; an ordinary
+enrolled device does not become an administrator merely because it claims an
+administrator's name.
 The joining device cannot choose its owner during connect or registration.
 An agent alias, local OS username, hostname, or Tailscale identity is not proof
 of the account that owns it. Report the broker's `user` field; if an old
 enrollment is unassigned, ask the owner to correct that enrollment.
 
-For another device belonging to the same person, request an invitation assigned
-to that person's existing account on the selected broker. Use their dashboard
-membership or ask the bus owner. Do not infer the account from a local
-login or a device name. Once connected, ordinary "register yourself" inherits
-that enrollment's account automatically.
+For another device belonging to the same person, an enrolled device can issue
+the invitation itself when the hub allows device invitations (the default;
+`BUS_DEVICE_INVITES=off` disables them). It is limited to this device's own
+account and to buses this device already reaches, expires within an hour
+(15 minutes by default), and each device may hold five outstanding. Write it
+to a new private file, deliver that file over a channel the user controls, and
+delete it after enrollment:
+
+```sh
+communicate bus invite qpaig --url https://HUB --out /tmp/qpaig-invitation
+ssh other-host 'communicate bus connect --invite-stdin --device other-host' < /tmp/qpaig-invitation
+rm /tmp/qpaig-invitation
+```
+
+If the remote non-interactive shell cannot find `communicate`, run it through
+that host's login shell. MCP `bus_invite` requires the absolute `out` path and
+never returns the code.
+Never print the code into a reply or pass it as a command argument. Use the
+roster's `capabilities.invite` for the selected bus. For another account, or a
+bus this device does not reach, ask the bus owner or hub administrator. Do not
+infer the account from a local login or a device name. Once connected, ordinary
+"register yourself" inherits that enrollment's account automatically.
 
 Connect and registration refresh this machine's hostname and platform, plus
 the local Tailscale `Self.HostName` and `Self.DNSName` when available. Tailscale
@@ -235,6 +254,11 @@ be changed. The conversation expires 24 hours after initiation, and replies do
 not extend the deadline. The device keeps unpublished reply adapters active
 through their outstanding conversation windows. Leaving the bus or losing its
 access closes affected conversations; rejoining does not revive them.
+
+An agent can always remove its own registration from a bus with
+`communicate bus leave --bus BUS` (MCP `bus_leave`). A bus definition's
+`capabilities.leave` field means something else: whether this account can leave
+an account-owned project bus. `"leave": false` does not stop an agent leaving.
 
 Keep dashboard URL fragments private: they contain browser credentials. Keep
 personal invitations, device credentials and authenticated URLs out of commits,
