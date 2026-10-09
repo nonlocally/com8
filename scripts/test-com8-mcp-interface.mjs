@@ -54,7 +54,7 @@ try {
   child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
   const tools = (await rpc("tools/list", {})).result.tools;
   const names = tools.map((tool) => tool.name);
-  for (const name of ["bus_dashboard", "bus_reply", "route", "com8_claim", "com8_seat_bind", "com8_model_list", "com8_model_doctor"]) assert(names.includes(name));
+  for (const name of ["bus_dashboard", "bus_invite", "bus_reply", "route", "com8_claim", "com8_seat_bind", "com8_model_list", "com8_model_doctor"]) assert(names.includes(name));
   assert(tools.find((tool) => tool.name === "com8_spawn").inputSchema.properties.model_connection);
   assert.deepEqual(JSON.parse(await call("com8_model_list")).connections, []);
   const invalidModel = await rpc("tools/call", { name: "com8_spawn", arguments: { name: "never-created", cli: "codex", model_connection: "missing" } });
