@@ -33,6 +33,10 @@ Provider sign-in remains with the provider, and installation alone grants no hos
 Node.js must already be available to start the archive's installer; the COM8
 Homebrew formula supplies Node and the core runtime dependencies.
 
+Windows is not supported. Running COM8 inside WSL2 has not been tested. COM8 is
+also a reserved device name on Windows, so a native Windows checkout of this
+repository can fail on paths that contain it.
+
 ## Get the archive
 
 The release provides `com8-VERSION.tar.gz` and its matching `.sha256` file.
@@ -102,7 +106,7 @@ downloads. `update` remains the explicit release activation command.
 | `--no-clients` | Install the CLI only; register clients later with `com8 setup --claude` or `--codex`. |
 | `--terminal`, `--mesh` | Select owned profiles and check their required tools. |
 | `--ghostty` | Explicitly select Ghostty, its configured font, and the terminal profile on macOS. |
-| `--model` | v0.5: configure a named model connection with a hidden key prompt. Requires a terminal; automation uses `com8 model add --key-file` or `--key-stdin`. |
+| `--model` | Configure a named model connection (0.5 and later) with a hidden key prompt. Requires a terminal; automation uses `com8 model add --key-file` or `--key-stdin`. |
 | `--bus=local` | Select local bus operation without starting a broker; keep saved remote connections. |
 | `--bus=HTTPS_ORIGIN` | Select a shared hub this installation has already joined. Does not enroll a new device. |
 | `--bus-invite-file=/absolute/path` | Join using a private invitation file owned by you. Cannot be combined with `--bus`. |
@@ -115,8 +119,8 @@ downloads. `update` remains the explicit release activation command.
 
 ### Choosing a model
 
-In v0.5, guided setup can add a model API connection, such as GLM, to power
-Claude Code or Codex directly. This is optional and does not change ordinary
+Guided setup (0.5 and later) can add a model API connection, such as GLM, to
+power Claude Code or Codex directly. This is optional and does not change ordinary
 client defaults or subscription login. The service's canonical HTTPS `/v1`
 address, model ID and scoped key are needed; setup never guesses a public
 endpoint or uses a bus credential for inference. Use `com8 setup --model` to
@@ -291,7 +295,14 @@ in `~/.ssh/authorized_keys` and the `~/.ssh/id_com8` fabric key. The release
 does not migrate identities, saved messages, device links, profile ownership
 ledgers, recorded service environment overrides or a previously installed
 service, and `doctor` does not report the previous release's directories.
-Before running `com8 setup --service`:
+The [0.6.0 release notes](https://github.com/nonlocally/com8/releases/tag/v0.6.0)
+name each previous identifier. To find what the previous release left behind,
+list services with `launchctl list | grep com.communicate.` on macOS or
+`systemctl --user list-units 'communicate-*'` on Linux: labels other than
+`com.communicate.com8` / `communicate-com8.service` (and a hub operator's
+`com.communicate.bus-hub`) belong to the previous release. Its state and
+configuration directories sit beside `com8/` under `~/.local/state/communicate/`
+and `~/.config/`. Before running `com8 setup --service`:
 
 - Remove the previous service with that release's own `uninstall` (or boot out
   and disable its unit by hand). The renamed service is installed beside the
@@ -401,11 +412,15 @@ com8 doctor
 Calling the formula's full path ensures that `update` uses the new installer
 even if an older COM8 launcher comes first on PATH.
 
-`com8` is a new formula, so `brew upgrade` of the formula installed for a
-0.3-0.5.1 release never reaches 0.6.0. Install `nonlocally/tap/com8`, run its
-`update` as above, then `brew uninstall` the previous formula so only one
-launcher remains on PATH. Runtime commands continue
-using the release selected by setup or rollback until you activate another one.
+The tap records the formula rename: its `formula_renames.json` maps the formula
+name used by the 0.3-0.5.1 releases to `com8`. Homebrew documents that it uses
+such a mapping during `brew update` and `brew migrate` to carry an installed
+formula over to its new name; that path was not exercised for 0.6.0. However the
+`com8` formula arrives, run its `update` from the full path as above and confirm
+with `com8 doctor`. If `brew list` still shows the previous formula,
+`brew uninstall` it so only one launcher remains on PATH. Runtime commands
+continue using the release selected by setup or rollback until you activate
+another one.
 
 If you selected profiles, run `com8 profile uninstall` first. Then remove COM8's
 owned client registrations and service before removing the formula:
