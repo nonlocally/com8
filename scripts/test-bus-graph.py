@@ -90,8 +90,12 @@ class GraphTests(unittest.TestCase):
         for agent, device in ((self.a, self.left), (self.bob, self.right)):
             self.assertEqual(nodes[agent]["device_id"], device["principal"])
             self.assertEqual(nodes[agent]["user"], device["user"])
-            self.assertEqual(nodes[agent]["device_metadata"], device["device_metadata"])
             self.assertEqual(nodes[agent]["status"], "queueable")
+        # A device sees its own host details; another device's stay with administrators.
+        self.assertEqual(nodes[self.a]["device_metadata"], self.left["device_metadata"])
+        self.assertNotIn("device_metadata", nodes[self.bob])
+        administered = {node["id"]: node for node in self.buses()["general"]["agents"]}
+        self.assertEqual(administered[self.bob]["device_metadata"], self.right["device_metadata"])
 
     def test_direction_counts_status_and_time_are_metadata_only(self):
         sent = self.send()
