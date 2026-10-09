@@ -18,7 +18,7 @@ echo "== parse_facts: KEY=VALUE lines survive ssh banner noise, defaults on abse
 r="$(PY "
 out='''Welcome to the cluster! (unauthorized use prohibited)
 OS=Darwin
-HOMEDIR=/Users/aadarwal
+HOMEDIR=/Users/example
 SHELL_=/opt/homebrew/bin/bash
 XDG=
 SSHIP=203.0.113.8
@@ -44,7 +44,7 @@ f = dict(os='Linux', login_shell='/bin/bash', home='/home/a', xdg='/run/user/100
          ssh_ip='1.2.3.4', cc_collision=False, own_key=True, fabric_key=True,
          reverse_ok=True, shim=True, tmux_bin='/usr/bin/tmux',
          claude_bin='/home/a/.local/bin/claude', kernel_hash='SAME', py3=True)
-acts, checklist = ha.plan(f, dict(kernel_hash='SAME', my_addr='aadarwal@mini'))
+acts, checklist = ha.plan(f, dict(kernel_hash='SAME', my_addr='me@hub'))
 print(len(acts), len(checklist))")"
 if [ "$r" = "0 0" ]; then ok "adopting twice is a no-op"
 else bad "idempotence (got: $r)"; fi
@@ -55,7 +55,7 @@ f = dict(os='Darwin', login_shell='/opt/homebrew/bin/bash', home='/Users/a', xdg
          ssh_ip='203.0.113.8', cc_collision=True, own_key=True, reverse_ok=False,
          shim=False, tmux_bin='/opt/homebrew/bin/tmux', claude_bin='/Users/a/.local/bin/claude',
          kernel_hash='OLD', py3=True)
-acts, checklist = ha.plan(f, dict(kernel_hash='NEW', my_addr='aadarwal@mini',
+acts, checklist = ha.plan(f, dict(kernel_hash='NEW', my_addr='me@hub',
                                   reverse_candidates=['203.0.113.8','100.1.1.1']))
 steps = [a['step'] for a in acts]
 alias = [a for a in acts if a['step']=='reverse_alias'][0]
@@ -72,7 +72,7 @@ r="$(PY "
 f = dict(os='Linux', login_shell='/bin/bash', home='/home/a', xdg='/run/user/1008',
          ssh_ip='203.0.113.8', cc_collision=False, own_key=True, reverse_ok=False,
          shim=False, tmux_bin='', claude_bin='', kernel_hash='OLD', py3=True)
-acts, checklist = ha.plan(f, dict(kernel_hash='NEW', my_addr='aadarwal@mini',
+acts, checklist = ha.plan(f, dict(kernel_hash='NEW', my_addr='me@hub',
                                   reverse_candidates=['203.0.113.8']))
 steps = [a['step'] for a in acts]
 print('runtime_dir' in steps, 'reverse_alias' in steps,
@@ -87,7 +87,7 @@ f = dict(os='Darwin', login_shell='/bin/zsh', home='/Users/a', xdg='',
          ssh_ip='10.0.0.9', cc_collision=False, own_key=False, reverse_ok=False,
          shim=False, tmux_bin='/opt/homebrew/bin/tmux', claude_bin='/Users/a/.local/bin/claude',
          kernel_hash='', py3=True)
-acts, _ = ha.plan(f, dict(kernel_hash='NEW', my_addr='aadarwal@mini'))
+acts, _ = ha.plan(f, dict(kernel_hash='NEW', my_addr='me@hub'))
 steps = [a['step'] for a in acts]
 print(steps.index('gen_fabric_key') < steps.index('authorize_key_here'),
       'runtime_dir' in steps, 'kernel_refresh' in steps)")"
@@ -101,7 +101,7 @@ f = dict(os='Darwin', login_shell='/bin/zsh', home='/Users/a', xdg='',
          ssh_ip='10.0.0.9', cc_collision=True, own_key=True, reverse_ok=True,
          shim=True, tmux_bin='/x/tmux', claude_bin='/x/claude',
          kernel_hash='SAME', py3=True)
-acts, _ = ha.plan(f, dict(kernel_hash='SAME', my_addr='aadarwal@mini'))
+acts, _ = ha.plan(f, dict(kernel_hash='SAME', my_addr='me@hub'))
 rt = [a for a in acts if a['step']=='runtime_dir']
 print(bool(rt), rt[0]['profiles'] if rt else '-', rt[0]['reason'] if rt else '-')")"
 if [ "$r" = "True ['~/.zshenv'] collision" ]; then
@@ -114,7 +114,7 @@ f = dict(os='Darwin', login_shell='/bin/zsh', home='/Users/a', xdg='',
          ssh_ip='10.0.0.9', cc_collision=False, own_key=True, reverse_ok=True,
          shim=True, tmux_bin='/x/tmux', claude_bin='/x/claude',
          kernel_hash='SAME', py3=True)
-acts, _ = ha.plan(f, dict(kernel_hash='SAME', my_addr='aadarwal@mini'))
+acts, _ = ha.plan(f, dict(kernel_hash='SAME', my_addr='me@hub'))
 steps = [a['step'] for a in acts]
 print('reverse_alias' in steps, 'authorize_key_here' in steps, 'runtime_dir' in steps)")"
 if [ "$r" = "False False False" ]; then
@@ -127,7 +127,7 @@ f = dict(os='Linux', login_shell='/bin/bash', home='/home/a', xdg='/run/user/1',
          ssh_ip='', cc_collision=False, own_key=True, reverse_ok=False,
          shim=True, tmux_bin='/x/tmux', claude_bin='/x/claude',
          kernel_hash='SAME', py3=True)
-acts, checklist = ha.plan(f, dict(kernel_hash='SAME', my_addr='aadarwal@mini',
+acts, checklist = ha.plan(f, dict(kernel_hash='SAME', my_addr='me@hub',
                                   reverse_candidates=[]))
 print(any(a['step']=='reverse_alias' for a in acts),
       any('reverse' in c for c in checklist))")"
@@ -136,15 +136,15 @@ else bad "no-candidate plan (got: $r)"; fi
 
 echo "== B: hub_reverse_candidates — source IP first, virtual ranges last, deduped"
 r="$(PY "
-print(ha.hub_reverse_candidates('100.126.234.47',
-      ['203.0.113.8','100.126.234.47','192.168.64.1']))")"
-if [ "$r" = "['100.126.234.47', '203.0.113.8', '192.168.64.1']" ]; then
+print(ha.hub_reverse_candidates('100.64.0.47',
+      ['203.0.113.8','100.64.0.47','192.168.64.1']))")"
+if [ "$r" = "['100.64.0.47', '203.0.113.8', '192.168.64.1']" ]; then
   ok "connection IP leads; 192.168 sinks; the duplicate collapses"
 else bad "hub candidates (got: $r)"; fi
 
 echo "== A: probe reports empty KHASH when no kernel is present (fresh device)"
 r="$(PY "
-sc = ha.probe_script('aadarwal@mini')
+sc = ha.probe_script('me@hub')
 guard = 'current/com8.py ]; then' in sc
 empty = 'else echo' in sc
 print(guard, empty)")"
@@ -357,7 +357,7 @@ def okssh(addr, cmd, timeout=60):
     seen.append(cmd)
     return (0, '')
 ha.execute('u@h', [{'step':'reverse_alias','candidates':['203.0.113.8']}],
-           dict(os='Darwin'), dict(my_addr='aadarwal@mini', here_dir='/tmp'),
+           dict(os='Darwin'), dict(my_addr='me@hub', here_dir='/tmp'),
            ssh=okssh, say=lambda s: None)
 probe = seen[0]; write = seen[-1]
 print('id_com8' in probe, 'IdentitiesOnly' in probe,
@@ -369,7 +369,7 @@ else bad "alias identity pinning (got: $r)"; fi
 
 echo "== probe asks about the fabric key and tests reverse WITH it"
 r="$(PY "
-sc = ha.probe_script('aadarwal@mini')
+sc = ha.probe_script('me@hub')
 print('COM8KEY=' in sc, 'id_com8' in sc, 'IdentitiesOnly=yes' in sc)")"
 if [ "$r" = "True True True" ]; then
   ok "probe reports COM8KEY and its REV test uses the fabric key only"
@@ -562,7 +562,7 @@ f = dict(os='Linux', is_termux=True, login_shell='/bin/bash', home='/h', xdg='',
          claude_bin='/x/claude', kernel_hash='SAME', py3=True, com8_self='')
 acts, checklist = ha.plan(f, dict(kernel_hash='SAME', my_addr='a@m',
                                   reverse_candidates=['1.2.3.4']))
-named = dict(f, com8_self='aadarshs-pixel-10')
+named = dict(f, com8_self='example-phone')
 _, cl2 = ha.plan(named, dict(kernel_hash='SAME', my_addr='a@m',
                              reverse_candidates=['1.2.3.4']))
 print(any('COM8_SELF' in c for c in checklist), any('COM8_SELF' in c for c in cl2))")"
@@ -642,7 +642,7 @@ base = dict(os='Linux', is_termux=True, login_shell='/bin/bash', home='/h',
             tmux_bin='/x/tmux', claude_bin='/x/claude', kernel_hash='SAME',
             py3=True, com8_self='', com8_self_files=[])
 loc = dict(kernel_hash='SAME', my_addr='a@m', reverse_candidates=['1.2.3.4'])
-named = dict(base, com8_self_value='aadarshs-pixel-10')
+named = dict(base, com8_self_value='example-phone')
 acts, cl = ha.plan(named, loc)
 rst = [a for a in acts if a['step']=='restart_daemon'][0]
 seen = []
@@ -650,9 +650,9 @@ def cap(addr, cmd, timeout=60):
     seen.append(cmd); return (0, '9')
 ha.execute('u@h', [rst], named, dict(my_addr='a@m', here_dir='/tmp'),
            ssh=cap, say=lambda s: None)
-print(rst.get('com8_self'), 'COM8_SELF=aadarshs-pixel-10' in seen[0],
+print(rst.get('com8_self'), 'COM8_SELF=example-phone' in seen[0],
       any('COM8_SELF' in c for c in cl))")"
-if [ "$r" = "aadarshs-pixel-10 True False" ]; then
+if [ "$r" = "example-phone True False" ]; then
   ok "the read-back name rides into the daemon start; no checklist once configured"
 else bad "com8_self read-back (got: $r)"; fi
 
