@@ -128,12 +128,17 @@ class OwnershipTests(unittest.TestCase):
         token = device['token']
         self.assertEqual(set(self.buses(token)), {'lab'})
         self.assertFalse(self.call('snapshot', token)['can_create_bus'])
-        for op, fields in (('create', {'bus': 'stolen'}), ('invite', {'bus': 'lab', 'user': 'bob'}),
+        for op, fields in (('create', {'bus': 'stolen'}), ('invite', {'bus': 'lab', 'user': 'carol'}),
+                           ('invite', {'bus': 'bob-private', 'user': 'bob'}),
                            ('member_add', {'bus': 'lab', 'user': 'carol'}),
                            ('member_remove', {'bus': 'lab', 'user': 'bob'}),
                            ('revoke', {'principal': device['principal']})):
             self.denied(op, token, **fields)
         self.denied('register', token, bus='bob-private', session_key='x', name='x')
+        # The device may enroll another device for its own attributed account on
+        # the bus it already reaches (which the bus owner could already do), and
+        # nothing more: no other account, no other bus, no management role.
+        self.assertEqual(self.call('invite', token, bus='lab')['user'], 'bob')
         self.assertEqual(self.buses(token)['lab']['role'], 'viewer')
 
     def test_remove_is_bus_scoped_cancels_leases_and_old_invites(self):

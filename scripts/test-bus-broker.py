@@ -89,7 +89,9 @@ class BrokerTests(unittest.TestCase):
         self.refused("redeem", token="", invite=outstanding, code="forbidden")
         self.refused("invite_revoke", token=peer["token"], invite=outstanding, code="forbidden")
         self.refused("register", token=peer["token"], session_key="secret", name="secret", bus="unknown", code="forbidden")
-        for op, fields in (("create", {"bus": "x"}), ("invite", {}), ("revoke", {"principal": "admin"}), ("members", {})):
+        # A device may invite only its own account's devices (scripts/test-bus-device-invites.py).
+        for op, fields in (("create", {"bus": "x"}), ("invite", {"user": "someone-else"}),
+                           ("revoke", {"principal": "admin"}), ("members", {})):
             self.refused(op, token=peer["token"], code="forbidden", **fields)
 
     def test_snapshot_does_not_disclose_private_names_memberships_or_principals(self):
