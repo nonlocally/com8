@@ -14,9 +14,12 @@ select its existing connection with `communicate bus use URL`.
 
 Run `communicate bus list --json` and `communicate bus agents --json`, then
 summarize registered memberships and actual availability. Queueable Codex
-threads are not necessarily live. If asked to open the interface, run
-`communicate bus dashboard --open`. See the communicate-bus skill for
-registration, selected buses, and secure invitations. Keep authenticated
+threads are not necessarily live. If asked to open the interface, call
+`bus_dashboard` with `open: true`; it opens this computer's browser without
+returning the credential-bearing link. Without MCP, run
+`communicate bus dashboard --open` and never repeat the link it prints.
+See the communicate-bus skill for registration, selected buses, and secure
+invitations. Keep authenticated
 dashboard URLs, personal invitations and device credentials private. A shared
 event code supplied by the user can be redeemed through stdin to join its bus;
 follow communicate-bus, then register this exact session and verify the result.

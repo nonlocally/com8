@@ -1162,6 +1162,8 @@ def run(args):
         return request(conn, "invite_revoke", invite=invite)
     if cmd == "dashboard":
         url = conn["url"] + "/#token=" + urllib.parse.quote(conn["token"], safe="")
+        print("communicate bus: this dashboard link contains this device's bus credential; "
+              "open it only in your own browser and never paste or share it", file=sys.stderr)
         if args.open:
             webbrowser.open(url)
         return url
