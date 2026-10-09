@@ -18,6 +18,9 @@ for (const key of ["CODEX_HOME", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "COMM_CO
 mkdirSync(path.join(taskHome, ".codex"), { recursive: true });
 mkdirSync(path.join(taskHome, "bin"), { recursive: true });
 writeFileSync(path.join(taskHome, "bin", "tailscale"), '#!/bin/sh\nprintf \'%s\\n\' \'{"Self":{"HostName":"mcp-fixture","DNSName":"mcp-fixture.test.ts.net."}}\'\n', { mode: 0o755 });
+// Python's webbrowser honours BROWSER first; record the link instead of opening one.
+env.BROWSER = path.join(taskHome, "bin", "fixture-browser");
+writeFileSync(env.BROWSER, '#!/bin/sh\nprintf \'%s\\n\' "$1" >> "$HOME/browser-opened"\n', { mode: 0o755 });
 const senderThread = "11111111-1111-4111-8111-111111111111";
 const recipientThread = "22222222-2222-4222-8222-222222222222";
 writeFileSync(path.join(taskHome, ".codex", "session_index.jsonl"),
@@ -41,7 +44,7 @@ const descriptor = process.env.COMM_MCP_TEST_DESCRIPTOR
 // installation paths and its isolated port; retain PATH for fake providers.
 const child = spawn(descriptor?.command || process.env.COMM_MCP_TEST_COMMAND || "node",
   descriptor?.args || [entry, "serve"], { env: descriptor
-    ? { HOME: taskHome, PATH: env.PATH, ...descriptor.env } : env,
+    ? { HOME: taskHome, PATH: env.PATH, BROWSER: env.BROWSER, ...descriptor.env } : env,
     stdio: ["pipe", "pipe", "pipe"] });
 let buf = "", stderr = ""; const pending = new Map();
 child.stderr.on("data", (d) => { stderr += d; });
@@ -167,9 +170,21 @@ try {
   }
   assert(replyQueued, "scoped MCP reply did not queue to original sender");
   assert((await jsonCall("bus_status")).hub === hub, "operation-specific hub changed the default connection");
+  // The person at a terminal still gets the authenticated link, with a warning.
+  const printed = spawnSync(communicateCli, ["bus", "--hub", hub, "dashboard"], { env, encoding: "utf8", timeout: 30000 });
+  const credential = printed.stdout.match(/^http:\/\/127\.0\.0\.1:\d+\/#token=(\S+)\s*$/)?.[1];
+  assert(printed.status === 0 && credential, "CLI dashboard must print the authenticated loopback URL");
+  assert(/credential/i.test(printed.stderr), "CLI dashboard must warn that its link carries a credential");
+  // An agent transcript never receives that credential.
   const dashboard = await call("bus_dashboard", { hub });
-  assert(/^http:\/\/127\.0\.0\.1:\d+\/#token=\S+\s*$/.test(dashboard), "dashboard must return authenticated loopback URL");
-  const page = await fetch(dashboard.split("#")[0]);
+  assert(!dashboard.includes(credential) && !dashboard.includes("#token="), "bus_dashboard returned its credential into the transcript");
+  assert(dashboard.includes(hub), "bus_dashboard did not name the selected hub");
+  assert(!existsSync(path.join(taskHome, "browser-opened")), "bus_dashboard opened a browser without being asked");
+  const opened = await call("bus_dashboard", { hub, open: true });
+  assert(!opened.includes(credential) && !opened.includes("#token="), "an opened dashboard returned its credential");
+  const launched = existsSync(path.join(taskHome, "browser-opened")) ? readFileSync(path.join(taskHome, "browser-opened"), "utf8").trim() : "";
+  assert(launched === `${hub}/#token=${credential}`, "bus_dashboard did not open the authenticated link locally");
+  const page = await fetch(hub + "/");
   assert(page.status === 200 && (await page.text()).includes("<html"), "dashboard asset missing");
   await call("bus_leave", { target: recipient.id, bus: "photonics", hub });
   const after = await jsonCall("bus_agents", { bus: "photonics" });
