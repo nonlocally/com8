@@ -6,7 +6,7 @@ A *seat* is an occupied, drivable surface — a tmux pane running a shell, an
 agent CLI, or an ssh session into a cluster. Seats are the explicit escape
 hatch for things you cannot mailbox (HPC login nodes, REPLs, TUIs). This module
 is a CLEAN-ROOM reimplementation of the anu `pane` bin's two hard-won
-disciplines, ported from the behavioral spec in docs/studies/, not its code:
+disciplines, ported from a behavioral study of that tool, not its code:
 
   * the state classifier — dead > approval > busy > booting > idle, using the
     signals that actually survive answer-streaming (the CLI title spinner

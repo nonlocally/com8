@@ -46,7 +46,7 @@ die()  { err "$*"; exit 1; }
 #
 # A "device" is one of:
 #   local            -> this machine, run commands directly (no ssh)
-#   <tailscale-name> -> e.g. aadarshs-mac-mini-2 (resolved via MagicDNS)
+#   <tailscale-name> -> e.g. my-mac-mini (resolved via MagicDNS)
 #   user@host        -> any ssh target
 #
 # Transport is strictly ssh (over Tailscale or plain). Nothing else.

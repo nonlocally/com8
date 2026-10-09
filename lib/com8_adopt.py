@@ -7,7 +7,7 @@ The PLANNER is pure (facts in, actions out) so every field lesson is a unit
 test, not tribal knowledge:
   - reverse keys: the far device dials the hub with its OWN key, installed
     during adopt over the already-authenticated channel (never a laptop's
-    forwarded agent — mini-1 died of that).
+    forwarded agent — a field device lost its reverse leg that way).
   - dial address: when the hub's bare device name doesn't resolve from the
     far side (off-tailnet or without MagicDNS), the address
     that provably works is the one this very ssh connection came from —
@@ -87,7 +87,7 @@ def probe_script(my_addr, hub_key_material=""):
         # REV counts ONLY when the fabric key exists: `-i <missing>` does not
         # force a failure, so ssh falls through to an agent or another
         # identity and reports a reverse leg the DAEMON will not have
-        # (mini-1, live: adopt skipped authorizing the key, and pair then
+        # (seen live: adopt skipped authorizing the key, and pair then
         # found the reverse leg dead).
         '[ -f ~/.ssh/id_com8 ] && ssh -o BatchMode=yes -o ConnectTimeout=6 '
         '-i ~/.ssh/id_com8 -o IdentitiesOnly=yes %(me)s true 2>/dev/null '
