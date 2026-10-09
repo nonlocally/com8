@@ -1016,6 +1016,7 @@ class Broker:
 
     def _op_snapshot(self, db, p, r, now):
         allowed = self._visible_buses(db, p)
+        account = self._account_user(p)
         buses = []
         for bus in allowed:
             definition = self._bus_definition(db, bus)
@@ -1028,9 +1029,13 @@ class Broker:
                 memberships = [b[0] for b in db.execute("SELECT bus FROM memberships WHERE agent=? ORDER BY bus", (a["id"],))
                                if b[0] in allowed]
                 row = {"id": a["id"], "name": a["name"], "kind": a["kind"], "device": a["device"],
-                       "user": a["user"], "device_id": a["principal"], "device_metadata": json.loads(a["device_metadata"]),
+                       "user": a["user"], "device_id": a["principal"],
                        "description": a["description"], "last_seen": a["last_seen"], "buses": memberships,
                        "status": a["status"] if now - a["last_seen"] <= LIVE_TTL else "offline"}
+                # Hostnames and tailnet names describe a person's machine. Only
+                # that device, its signed-in account and administrators see them.
+                if p["is_admin"] or a["principal"] == p["id"] or (account is not None and a["user"] == account):
+                    row["device_metadata"] = json.loads(a["device_metadata"])
                 if p["is_admin"]:
                     row["principal"] = a["principal"]
                 agents.append(row)

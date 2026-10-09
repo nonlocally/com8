@@ -75,6 +75,32 @@ class IdentityTests(unittest.TestCase):
             self.assertFalse(self.b.handle(device["token"], dict(payload, op="device"))["ok"])
         self.assertEqual(self.call("device", token=device["token"])["user"], "aadarwal")
 
+    def test_device_metadata_reaches_only_its_device_its_account_and_administrators(self):
+        metadata = {"hostname": "mini.local", "platform": "darwin", "tailscale_hostname": "mini",
+                    "tailscale_dns_name": "mini.tail0000.ts.net"}
+        owner = self.enroll("aadarwal", device_metadata=metadata)
+        peer = self.enroll("peer", device_metadata={"hostname": "peer.local"})
+        owned = self.call("register", token=owner["token"], session_key="s", name="worker")["id"]
+        self.call("register", token=peer["token"], session_key="p", name="peer-worker")
+
+        def rows(snapshot):
+            return {agent["user"]: agent for agent in snapshot["buses"][0]["agents"]}
+
+        self.assertEqual(rows(self.call("snapshot", token=owner["token"]))["aadarwal"]["device_metadata"], metadata)
+        self.assertEqual(rows(self.call("snapshot"))["aadarwal"]["device_metadata"], metadata)
+        by_peer = self.call("snapshot", token=peer["token"])
+        self.assertEqual(rows(by_peer)["aadarwal"]["id"], owned)
+        self.assertEqual(rows(by_peer)["aadarwal"]["device"], "same-name")
+        self.assertNotIn("device_metadata", rows(by_peer)["aadarwal"])
+        self.assertNotIn("mini.tail0000.ts.net", json.dumps(by_peer))
+        self.assertNotIn("mini.local", json.dumps(by_peer))
+        reader_hash = hashlib.sha256(b"peer-browser-fixture").hexdigest()
+        browser = self.b.browser_session("peer", reader_hash)["token"]
+        by_account = self.b.handle(browser, {"op": "snapshot"}, reader="peer", reader_hash=reader_hash)
+        self.assertTrue(by_account["ok"], by_account)
+        self.assertEqual(rows(by_account)["peer"]["device_metadata"], {"hostname": "peer.local"})
+        self.assertNotIn("device_metadata", rows(by_account)["aadarwal"])
+
     def test_same_device_labels_and_agent_names_remain_distinct_and_private_scoped(self):
         self.call("create", bus="photonics")
         left, right = self.enroll("aadarwal"), self.enroll("peer")
