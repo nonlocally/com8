@@ -649,6 +649,17 @@ authorityKeyIdentifier = keyid:always
                     for process in spawned:
                         process.wait(timeout=3)
 
+    def test_16_invitation_argument_still_connects_but_points_to_stdin(self):
+        command = [str(ROOT / "bin/communicate"), "bus", "connect"]
+        argv = subprocess.run(command + [self.code(), "--device", "argv-device"], env=self.env("argv-invite"),
+                              text=True, capture_output=True, timeout=30)
+        self.assertEqual(argv.returncode, 0, argv.stderr + argv.stdout)
+        self.assertIn("--invite-stdin", argv.stderr)
+        piped = subprocess.run(command + ["--invite-stdin", "--device", "stdin-device"], input=self.code(),
+                               env=self.env("stdin-invite"), text=True, capture_output=True, timeout=30)
+        self.assertEqual(piped.returncode, 0, piped.stderr + piped.stdout)
+        self.assertNotIn("--invite-stdin", piped.stderr)
+
     def test_15_first_use_status_does_not_create_or_restart_local_hub(self):
         env = self.env("read-only-status")
         state = Path(env["COMM_STATE"]) / "bus"
