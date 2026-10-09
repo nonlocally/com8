@@ -201,9 +201,19 @@ separate agents. If self cannot be resolved, explain the missing session
 identity rather than claim registration succeeded. Registration with an
 explicit local agent name is for intentionally registering that named session.
 
-Claude socket liveness and Codex queueability are different. **Queueable**
-means the thread can accept a queued turn; it does not prove it is currently
-running. Offline/stale rows must not be described as live.
+Claude socket liveness and Codex queueability are different. For Codex,
+**queueable** means the thread can accept a queued turn; it does not prove it is
+currently running. A roster entry with `kind:service` is an application adapter,
+not a Claude/Codex session. Its `queueable` status confirms local bridge
+configuration, not endpoint health or task completion. Use the exact registered
+service ID with the ordinary bus send/reply flow. The application can separately
+refuse a caller; bus membership does not grant application account or artifact
+access. Offline/stale rows must not be described as live.
+
+`register-service` is for an operator intentionally publishing a configured
+application with a fixed HTTPS endpoint and dedicated private credential file.
+Do not use it to register this session or invent a service for a missing target.
+Native `bus_register` MCP semantics remain unchanged.
 
 ## Browse, send, and leave
 

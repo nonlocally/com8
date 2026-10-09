@@ -58,7 +58,7 @@ for omitted in phone com8_board.py com8_talk.py com8_cockpit.py; do
   [ ! -e "$PKG/vendor/lib/$omitted" ] && ok "optional application excluded: $omitted" || fail "optional application leaked: $omitted"
 done
 ls "$PKG/vendor/plugins" | grep -v "^\.claude-plugin$\|^communicate$" | grep -q . && fail "foreign plugin in vendor: $(ls "$PKG/vendor/plugins")" || ok "only the communicate plugin vendored"
-for artifact in bus.py bus_broker.py bus_ui.html assets/bus-graph.js assets/bus-graph.css assets/bus-graph.LICENSES.txt; do
+for artifact in bus.py bus_broker.py bus_service.py bus_ui.html assets/bus-graph.js assets/bus-graph.css assets/bus-graph.LICENSES.txt; do
   [ -f "$PKG/vendor/lib/$artifact" ] && ok "bus payload: $artifact" || fail "bus payload missing: $artifact"
 done
 

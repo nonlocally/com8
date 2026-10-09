@@ -26,7 +26,7 @@ mkdirSync(vendor, { recursive: true });
 for (const file of ["bin/communicate", "bin/com8", "bin/com8-boxed-init", "LICENSE"]) copy(file);
 for (const file of readdirSync(path.join(repo, "lib")))
   if (file.endsWith(".sh")) copy("lib/" + file);
-for (const file of new Set([...kernel, "bus.py", "bus_broker.py", "bus_ui.html"])) copy("lib/" + file);
+for (const file of new Set([...kernel, "bus.py", "bus_broker.py", "bus_service.py", "bus_ui.html"])) copy("lib/" + file);
 for (const file of ["bus-graph.js", "bus-graph.css", "bus-graph.LICENSES.txt"]) copy("lib/assets/" + file);
 copy("plugins/.claude-plugin");
 copy("plugins/communicate");

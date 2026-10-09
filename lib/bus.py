@@ -35,7 +35,7 @@ import webbrowser
 sys.dont_write_bytecode = True
 LIB = Path(__file__).resolve().parent
 # Captured once: a running worker must not mistake changed source for code it loaded.
-WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_service.py").read_bytes()).hexdigest()
 TAILSCALE_STATUS_TIMEOUT = 1.5
 
 
@@ -564,6 +564,9 @@ def register(args):
 
 
 def current_status(record):
+    if record["kind"] == "service":
+        from bus_service import configured
+        return "queueable" if configured(record) else "offline"
     if record["kind"] == "codex":
         return "queueable" if os.access(record["binary"], os.X_OK) else "offline"
     # Follow the SAME Claude session across socket changes, never a name collision.
@@ -578,6 +581,9 @@ def current_status(record):
 
 
 def deliver(record, envelope):
+    if record["kind"] == "service":
+        from bus_service import enqueue
+        return enqueue(state_dir(), record, envelope)
     sender = envelope["sender"]
     # IDs and bus names are generated/validated by the broker, never remote shell text.
     reply = ("communicate bus --hub %s reply %s --from %s -- \"<answer>\"" %
@@ -756,6 +762,10 @@ def worker():
                                     record_and_ack(conn, record, envelope, *result)
                                 except (BusError, OSError, ValueError, KeyError) as exc:
                                     errors.append({"agent": record["id"], "error": " ".join(str(exc).split())[:200]})
+                    # Fixed service endpoints share this outbound worker; no session,
+                    # shell, additional listener or per-message process is involved.
+                    from bus_service import advance
+                    errors.extend(advance(root, registrations(), cfg["connections"], request))
                     db.execute("DELETE FROM delivered WHERE at < ?", (time.time() - 172800,))
                     db.commit()
                     publish(delivery_errors=errors)
@@ -847,6 +857,16 @@ def rehome_connection(old, new):
                         raise BusError("old enrollment changed during rehome; retry with its current connection")
                     check_destination(cfg)
                     original_regs = registrations()
+                    if (root / "service-jobs.sqlite").exists():
+                        from bus_service import journal
+                        service_jobs = journal(root)
+                        try:
+                            pending = service_jobs.execute("SELECT 1 FROM jobs WHERE hub=? AND state='pending' AND expires>? LIMIT 1",
+                                                           (old, time.time())).fetchone()
+                        finally:
+                            service_jobs.close()
+                        if pending:
+                            raise BusError("service replies are pending on the old hub; drain them before rehome")
                     expanded = dict(original_regs)
                     for key, record in original_regs.items():
                         if record["url"] != old:
@@ -933,6 +953,16 @@ def parser():
     reg.add_argument("--kind", choices=["claude", "codex"])
     reg.add_argument("--description")
     reg.add_argument("--json", action="store_true")
+    service = commands.add_parser("register-service", help="publish a fixed authenticated service adapter")
+    service.add_argument("name")
+    service.add_argument("--service-id", required=True, help="stable service principal UUID")
+    service.add_argument("--endpoint", required=True, help="fixed HTTPS bridge endpoint")
+    service.add_argument("--token-file", required=True, help="private bearer-token file; never token bytes")
+    service.add_argument("--contract-version", type=int, choices=(1, 2), default=1,
+                         help="bridge contract (2 requires broker-authored reply correlation)")
+    service.add_argument("--bus", default="general")
+    service.add_argument("--description", default="")
+    service.add_argument("--json", action="store_true")
     for name in ("list", "agents", "status"):
         cmd = commands.add_parser(name)
         cmd.add_argument("--json", action="store_true")
@@ -997,6 +1027,18 @@ def run(args):
         return stop_services()
     if cmd == "register":
         return register(args)
+    if cmd == "register-service":
+        from bus_service import registration
+        ident = registration(args)
+        conn = connection(hub=args.hub)
+        result = request(conn, "register", session_key=ident["session_key"], name=ident["name"],
+                         kind="service", description=args.description, bus=args.bus, status="queueable",
+                         device_metadata=device_metadata())
+        ident = remember_adapter(conn, ident, result, args.description, args.bus)
+        start_worker()
+        return {**attribution(result), "ok": True, "id": ident["id"], "name": ident["name"],
+                "bus": args.bus, "hub": ident["url"], "status": "queueable", "kind": "service",
+                "note": "Durable service queue configured; this is not a native session or runtime qualification."}
     if cmd == "connect":
         if getattr(args, "invite_stdin", False):
             if args.code is not None:

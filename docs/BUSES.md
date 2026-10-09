@@ -337,6 +337,13 @@ their collaborators in the dashboard. Hub administrators can also manage legacy
 buses and revoke entire devices. Regular members see only their authorized buses.
 Names can collide; immutable registration IDs disambiguate them.
 
+Application services can also appear in the roster as `kind:service`. Use their
+exact registration ID with the same send/reply commands. A service's `queueable`
+status means its local bridge is configured; it does not prove endpoint health,
+task completion, or permission to use the application. The application checks its
+own account and task access. Operators publish these adapters intentionally with
+`register-service`; see [Service adapters](SERVICE-ADAPTERS.md).
+
 ## Your other devices
 
 Choose one machine as the hub. `communicate bus list` starts it on

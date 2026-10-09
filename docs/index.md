@@ -29,6 +29,8 @@ Communication:
   and collaborating across computers through ordinary agent requests.
 - [Buses](BUSES.md) — local and connected buses, invitations, self-hosting,
   browser access, the agent graph, accounts and devices, security.
+- [Service adapters](SERVICE-ADAPTERS.md) — publish an application service through
+  the bus using a fixed HTTPS bridge and durable, correlated replies.
 - [Mechanism](MECHANISM.md) — how native session routing works underneath.
 
 Optional modules:

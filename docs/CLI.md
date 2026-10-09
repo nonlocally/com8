@@ -19,6 +19,7 @@ a substitute agent or target another route silently.
 | `com8 seat ls --json` | Seats plus the configured tmux selector and observed server socket/PID. |
 | `com8 seat spawn --json -- 'bash --norc --noprofile'` | Start a seat and return its pane ID and server coordinates. |
 | `com8 bus register` | Exact current session on the configured broker. |
+| `com8 bus register-service` | Intentionally publish a configured application service; see [service adapters](SERVICE-ADAPTERS.md). |
 | `com8 bus agents --json` | Registered sessions on that broker. |
 | `com8 bus send ID --bus NAME -- MESSAGE` | Bus delivery with membership checks. |
 | `com8 native agents` | Existing native socket/SSH routing table. |

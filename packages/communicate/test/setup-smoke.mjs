@@ -66,7 +66,7 @@ if (readFileSync(path.join(fakeHome, "claude-cached-version"), "utf8") !== insta
 if (!readdirSync(path.join(fakeHome, ".claude")).some((f) => f.startsWith("settings.json.communicate-backup-"))) die("no backup written");
 if (!lstatSync(path.join(data, "current")).isSymbolicLink()) die("current is not a symlink");
 if (!existsSync(path.join(data, "current", "vendor", "bin", "communicate"))) die("payload CLI missing");
-for (const file of ["bus.py", "bus_broker.py", "bus_ui.html", "assets/bus-graph.js", "assets/bus-graph.css", "assets/bus-graph.LICENSES.txt"])
+for (const file of ["bus.py", "bus_broker.py", "bus_service.py", "bus_ui.html", "assets/bus-graph.js", "assets/bus-graph.css", "assets/bus-graph.LICENSES.txt"])
   if (!existsSync(path.join(data, "current", "vendor", "lib", file))) die(`bus payload missing: ${file}`);
 if (!existsSync(path.join(data, "current", "vendor", "plugins", "communicate", "skills", "communicate-bus", "SKILL.md"))) die("bus registration skill missing");
 if (!existsSync(path.join(data, "current", "vendor", "plugins", ".claude-plugin", "marketplace.json"))) die("marketplace file missing in payload");

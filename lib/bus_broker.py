@@ -299,7 +299,9 @@ class Broker:
                                               ("principals", "device_metadata", "TEXT NOT NULL DEFAULT '{}'"),
                                               ("invites", "user", "TEXT"),
                                               ("invites", "issuer_user", "TEXT"),
-                                              ("messages", "conversation", "TEXT REFERENCES conversations(id)")):
+                                              ("messages", "conversation", "TEXT REFERENCES conversations(id)"),
+                                              ("messages", "in_reply_to", "TEXT"),
+                                              ("messages", "correlation_version", "INTEGER NOT NULL DEFAULT 0")):
                 columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
                 if name not in columns:
                     db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, declaration))
@@ -1335,7 +1337,8 @@ class Broker:
                    (reply, chat["id"], chat["identity"], chat["next_seq"], content, now, now, mid))
         db.execute("UPDATE human_chats SET next_seq=next_seq+1,updated_at=? WHERE id=?", (now, chat["id"]))
         return {"id": reply, "status": "replied", "target": "human." + chat["identity"],
-                "expires_at": previous["expires_at"], "conversation_expires_at": previous["expires_at"]}
+                "expires_at": previous["expires_at"], "conversation_expires_at": previous["expires_at"],
+                "correlation_version": 1, "conversation_id": chat["id"], "in_reply_to": mid}
 
     def _chat_ack(self, db, agent, mid, lease, status, detail, now):
         self._cancel_chat_invalid(db, now)
@@ -1352,6 +1355,8 @@ class Broker:
 
     def _op_send(self, db, p, r, now):
         sender = self._owned(db, p, r.get("sender"))
+        if any(field in r for field in ("conversation_id", "in_reply_to", "correlation_version")):
+            raise BusError("message correlation is assigned by the broker")
         bus = _bus(r.get("bus", "general"))
         target = _text(r.get("target"), "target", 128)
         if not self._granted(db, p["id"], bus) or (bus != "general" and not self._member(db, sender["id"], bus)):
@@ -1378,7 +1383,8 @@ class Broker:
         # Atomic with enqueue: a lost HTTP response must not duplicate an answer.
         # Existing clients omit request_id and retain their original semantics.
         sender = self._owned(db, p, r.get("sender"))
-        if any(field in r for field in ("target", "bus", "conversation", "chat", "identity")):
+        if any(field in r for field in ("target", "bus", "conversation", "chat", "identity",
+                                       "conversation_id", "in_reply_to", "correlation_version")):
             raise BusError("reply destination and bus are fixed by the original message")
         key = r.get("request_id")
         if key is None:
@@ -1414,19 +1420,21 @@ class Broker:
         if not self._conversation_valid(db, conversation, now):
             raise BusError("conversation has ended or access changed", "not_found")
         return self._enqueue(db, sender["id"], previous["sender"], previous["bus"], r.get("message"),
-                             conversation["id"], conversation["expires_at"], now)
+                             conversation["id"], conversation["expires_at"], now, in_reply_to=mid)
 
-    def _enqueue(self, db, sender, target, bus, message, conversation, expires_at, now):
+    def _enqueue(self, db, sender, target, bus, message, conversation, expires_at, now, *, in_reply_to=None):
         self._message_content(message)
         pending = self._pending_count(db, target)
         if pending >= MAX_PENDING or db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= MAX_RECORDS:
             raise BusError("recipient queue is full", "limit")
         mid = "m_" + uuid.uuid4().hex
-        db.execute("""INSERT INTO messages(id,sender,target,bus,message,status,created_at,expires_at,updated_at,conversation)
-                      VALUES(?,?,?,?,?,'accepted',?,?,?,?)""", (mid, sender, target, bus, message, now, expires_at, now, conversation))
+        db.execute("""INSERT INTO messages(id,sender,target,bus,message,status,created_at,expires_at,updated_at,conversation,
+                      in_reply_to,correlation_version) VALUES(?,?,?,?,?,'accepted',?,?,?,?,?,1)""",
+                   (mid, sender, target, bus, message, now, expires_at, now, conversation, in_reply_to))
         db.execute("INSERT INTO outbound_queue(message,target) VALUES(?,?)", (mid, target))
         return {"id": mid, "status": "accepted", "target": target, "expires_at": expires_at,
-                "conversation_expires_at": expires_at}
+                "conversation_expires_at": expires_at, "correlation_version": 1,
+                "conversation_id": conversation, "in_reply_to": in_reply_to}
 
     def _op_poll(self, db, p, r, now):
         # Leases permit crash recovery, not payload retraction: once fetched,
@@ -1471,7 +1479,8 @@ class Broker:
                                  "kind": "human", "user": m["identity"], "device": "browser", "device_id": None},
                                  "sender_type": "human", "chat": m["chat"], "target": m["agent"], "bus": m["bus"],
                                  "message": m["content"], "created_at": m["created_at"], "expires_at": m["expires_at"],
-                                 "lease": lease, "reply_to": m["id"], "conversation_expires_at": m["expires_at"]})
+                                 "lease": lease, "reply_to": m["id"], "conversation_expires_at": m["expires_at"],
+                                 "correlation_version": 1, "conversation_id": m["chat"], "in_reply_to": None})
                 continue
             m = db.execute("SELECT * FROM messages WHERE id=?", (queued["message"],)).fetchone()
             db.execute("UPDATE messages SET status='leased',lease=?,lease_until=?,updated_at=? WHERE id=?",
@@ -1480,7 +1489,9 @@ class Broker:
                                 (m["sender"],)).fetchone()
             messages.append({"id": m["id"], "sender": dict(sender), "target": m["target"], "bus": m["bus"],
                              "message": m["message"], "created_at": m["created_at"], "expires_at": m["expires_at"], "lease": lease,
-                             "reply_to": m["id"], "conversation_expires_at": m["expires_at"]})
+                             "reply_to": m["id"], "conversation_expires_at": m["expires_at"],
+                             "correlation_version": m["correlation_version"],
+                             "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]})
         return {"messages": messages, "lease_seconds": LEASE_TTL}
 
     def _op_ack(self, db, p, r, now):
@@ -1513,13 +1524,16 @@ class Broker:
                               JOIN agents a ON a.id=c.agent WHERE m.id=? AND a.principal=?""", (mid, p["id"])).fetchone()
             if m is None:
                 raise BusError("unknown or unavailable message", "not_found")
-            return {key: m[key] for key in ("id", "status", "detail", "created_at", "updated_at", "expires_at")}
+            return {**{key: m[key] for key in ("id", "status", "detail", "created_at", "updated_at", "expires_at")},
+                    "correlation_version": 1, "conversation_id": m["chat"], "in_reply_to": m["in_reply_to"]}
         m = db.execute("""SELECT m.* FROM messages m JOIN agents s ON s.id=m.sender JOIN agents t ON t.id=m.target
                           WHERE m.id=? AND (s.principal=? OR t.principal=?)""", (mid, p["id"], p["id"])).fetchone()
         if m is None:
             raise BusError("unknown or unavailable message", "not_found")
         return {"id": mid, "status": m["status"], "detail": m["detail"],
-                "created_at": m["created_at"], "updated_at": m["updated_at"], "expires_at": m["expires_at"]}
+                "created_at": m["created_at"], "updated_at": m["updated_at"], "expires_at": m["expires_at"],
+                "correlation_version": m["correlation_version"],
+                "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]}
 
     def _op_leave(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"), admin=True)

@@ -58,6 +58,8 @@ jobs:
           mkdir -p "$RUNNER_TEMP/com8-artifact"
           tar -xzf "dist/com8-$(cat VERSION).tar.gz" -C "$RUNNER_TEMP/com8-artifact"
           python3 scripts/qualify-installed.py "$RUNNER_TEMP/com8-artifact/com8-$(cat VERSION)" > "$RUNNER_TEMP/com8-artifact-qualification.json"
+      - name: Qualify service adapters from the shipped runtime
+        run: python3 -B scripts/test-bus-service.py --runtime "$RUNNER_TEMP/com8-artifact/com8-$(cat VERSION)"
       - name: Check fleet harness fixtures against the shipped runtime without SSH or providers
         run: python3 scripts/qualify-provider-fleet.py self-test "$RUNNER_TEMP/com8-artifact/com8-$(cat VERSION)" --archive "dist/com8-$(cat VERSION).tar.gz"
       - name: Check hosted qualification boundaries without network or providers
