@@ -5,7 +5,7 @@
 # real mail in the daemon store. Fully isolated: its own COMM_STATE + socket.
 set -uo pipefail
 command -v node >/dev/null 2>&1 || { echo "skip: node not installed"; exit 0; }
-PKG="/Users/aadarwal/src/aadarwal/communicate/packages/com8"
+PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")/../packages/com8" && pwd)"
 T="$(mktemp -d /tmp/com8-mcp.XXXXXX)"
 export COMM_STATE="$T/state" COM8_SOCK="$T/state/com8/com8.sock"
 export XDG_DATA_HOME="$T/share" COM8_SELF="mcphost" COM8_TICK=1 COM8_NO_PERSIST=1
