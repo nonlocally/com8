@@ -122,7 +122,35 @@ try {
     assert(!`${removed.stdout}${removed.stderr}`.includes("fixture-device-token"), "uninstall printed the device credential");
   }
 
-  console.log("PASS: setup-safety — uninstall stops the bus and reports what remains");
+  // 4. Replacing someone's own "communicate" marketplace names the enabled
+  // plugins that stop resolving, in the preview and when applied; nothing is removed.
+  {
+    const box = sandbox("old-marketplace");
+    const oldMarket = path.join(box.home, "old checkout/plugins");
+    fs.mkdirSync(oldMarket, { recursive: true });
+    const original = { extraKnownMarketplaces: { communicate: { source: { source: "directory", path: oldMarket } } },
+      enabledPlugins: { "phone@communicate": true, "retired@communicate": false, "other@other": true } };
+    fs.writeFileSync(box.settings, JSON.stringify(original));
+    const preview = box.run(["setup", "--claude", "--dry-run"]);
+    assert(preview.stdout.includes("phone@communicate"), "dry-run hid the enabled plugin that stops resolving\n" + preview.stdout);
+    assert(!preview.stdout.includes("retired@communicate"), "dry-run listed a disabled plugin");
+    assert.deepEqual(JSON.parse(fs.readFileSync(box.settings)), original, "dry-run changed settings");
+    const applied = box.run(["setup", "--claude"]);
+    assert(applied.stdout.includes("phone@communicate") && applied.stdout.includes(oldMarket),
+      "setup replaced the marketplace without naming it and the plugin that stops resolving\n" + applied.stdout);
+    const after = JSON.parse(fs.readFileSync(box.settings));
+    assert.equal(after.enabledPlugins["phone@communicate"], true, "setup removed the user's plugin enablement");
+    assert.equal(after.enabledPlugins["other@other"], true, "setup changed an unrelated plugin");
+  }
+
+  // A fresh machine has no marketplace of its own to replace and gets no warning.
+  {
+    const box = sandbox("fresh-marketplace");
+    const { stdout } = box.run(["setup", "--claude"]);
+    assert(!/warning/i.test(stdout), "fresh setup warned about replacing a marketplace\n" + stdout);
+  }
+
+  console.log("PASS: setup-safety — uninstall stops the bus and reports what remains, replaced marketplaces are named");
 } finally {
   for (const { env, cli, pids } of fixtureBuses) {
     spawnSync(cli, ["bus", "stop"], { env, encoding: "utf8", timeout: 15000 });
