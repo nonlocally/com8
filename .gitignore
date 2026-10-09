@@ -13,10 +13,8 @@ registry/*.md
 !registry/README.md
 !registry/EXAMPLE.md
 
-# Open WebUI's session-signing key. It was tracked until 2026-08-16; untracked
-# now, but it remains in this repo's history — rotate it if the repo is ever
-# published or shared (Workspace → regenerate, or delete the file and restart
-# open-webui to have a new one written).
+# Open WebUI writes its session-signing key here when run from a checkout.
+# It is a local secret and never repository content.
 /.webui_secret_key
 
 # Browser accessibility dumps from the playwright MCP — screen captures of live
