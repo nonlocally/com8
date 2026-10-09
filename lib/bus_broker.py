@@ -35,6 +35,9 @@ MAX_PRINCIPALS = 1024
 MAX_BUSES = 256
 MAX_ACCOUNT_BUSES = 32
 MAX_ACCOUNT_INVITES = 128
+MAX_DEVICE_INVITES = 5
+DEVICE_INVITE_TTL = 900
+MAX_DEVICE_INVITE_TTL = 3600
 MAX_ACTIVE_EVENTS_PER_BUS = 8
 MAX_EVENT_HISTORY = 20
 MAX_INVITES = 4096
@@ -131,6 +134,11 @@ class Broker:
         self.admin_readers = frozenset(reader.strip() for reader in os.environ.get("BUS_ADMIN_READERS", "").split(",")
                                       if reader.strip())
         self.openwebui_readers = os.environ.get("BUS_OPENWEBUI_READERS") == "1"
+        # An enrolled device may invite its own account's other devices onto
+        # buses it already reaches; "off" restores operator/browser-only invitations.
+        self.device_invites = os.environ.get("BUS_DEVICE_INVITES", "own")
+        if self.device_invites not in ("own", "off"):
+            raise ValueError("BUS_DEVICE_INVITES must be own or off")
         try:
             self.reader_users = json.loads(os.environ.get("BUS_READER_USERS", "{}"))
             if (not isinstance(self.reader_users, dict) or len(self.reader_users) > MAX_PRINCIPALS
@@ -299,6 +307,7 @@ class Broker:
                                               ("principals", "device_metadata", "TEXT NOT NULL DEFAULT '{}'"),
                                               ("invites", "user", "TEXT"),
                                               ("invites", "issuer_user", "TEXT"),
+                                              ("invites", "issuer_principal", "TEXT"),
                                               ("messages", "conversation", "TEXT REFERENCES conversations(id)")):
                 columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
                 if name not in columns:
@@ -751,8 +760,51 @@ class Broker:
         self._cancel_invalid(db, now)
         return {"bus": name, "user": user, "removed": True}
 
+    def _device_inviter(self, p):
+        """An enrolled device credential with an administrator-assigned account."""
+        return (self.device_invites == "own" and not p["is_admin"]
+                and p.get("browser_reader") is None and p.get("user") is not None)
+
+    def _device_may_invite(self, db, p, bus):
+        """Device invitations never reach beyond the issuing device's own access.
+
+        The device's account stays invitation attribution (see _account_user):
+        it grants no bus management, only more devices for that same account on
+        buses this device already reaches. Event admission is not extendable.
+        """
+        if bus is None or not self._device_inviter(p) or not self._granted(db, p["id"], bus["name"]):
+            return False
+        if self.users and p["user"] not in self.users:
+            return False
+        if bus["owner_user"] is not None and not self._account_member(db, bus["name"], p["user"]):
+            return False
+        return db.execute("""SELECT 1 FROM event_joins j JOIN event_invites e ON e.id=j.event
+                             WHERE j.principal=? AND e.bus=?""", (p["id"], bus["name"])).fetchone() is None
+
+    def _device_invite(self, db, p, r, bus, now):
+        if r.get("user", p["user"]) != p["user"]:
+            raise BusError("a device may only invite devices for its own account", "forbidden")
+        if not self._device_may_invite(db, p, self._bus_definition(db, bus)):
+            raise BusError("this device cannot invite devices to that bus", "forbidden")
+        ttl = r.get("ttl", DEVICE_INVITE_TTL)
+        if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 60 <= ttl <= MAX_DEVICE_INVITE_TTL:
+            raise BusError("device invitations must expire within 60 to %d seconds" % MAX_DEVICE_INVITE_TTL)
+        outstanding = "SELECT COUNT(*) FROM invites WHERE redeemed_at IS NULL AND expires_at>?"
+        if db.execute(outstanding, (now,)).fetchone()[0] >= MAX_INVITES:
+            raise BusError("outstanding invitation limit reached", "limit")
+        if db.execute(outstanding + " AND issuer_user=?", (now, p["user"])).fetchone()[0] >= MAX_ACCOUNT_INVITES:
+            raise BusError("account invitation limit reached", "limit")
+        if db.execute(outstanding + " AND issuer_principal=?", (now, p["id"])).fetchone()[0] >= MAX_DEVICE_INVITES:
+            raise BusError("this device's outstanding invitation limit reached", "limit")
+        secret = secrets.token_urlsafe(32)
+        db.execute("INSERT INTO invites(digest,bus,expires_at,user,issuer_user,issuer_principal) VALUES(?,?,?,?,?,?)",
+                   (_digest(secret), bus, now + ttl, p["user"], p["user"], p["id"]))
+        return {"invite": secret, "bus": bus, "user": p["user"], "expires_at": now + ttl}
+
     def _op_invite(self, db, p, r, now):
         bus = _bus(r.get("bus", "general"))
+        if self._device_inviter(p):
+            return self._device_invite(db, p, r, bus, now)
         managed = self._managed_bus(db, p, bus, member=True)
         ttl = r.get("ttl", 3600)
         if isinstance(ttl, bool) or not isinstance(ttl, (int, float)) or not 60 <= ttl <= 604800:
@@ -774,8 +826,8 @@ class Broker:
               AND redeemed_at IS NULL AND expires_at>?""", (account, now)).fetchone()[0] >= MAX_ACCOUNT_INVITES):
             raise BusError("account invitation limit reached", "limit")
         secret = secrets.token_urlsafe(32)
-        db.execute("INSERT INTO invites(digest,bus,expires_at,user,issuer_user) VALUES(?,?,?,?,?)",
-                   (_digest(secret), bus, now + ttl, user, account))
+        db.execute("INSERT INTO invites(digest,bus,expires_at,user,issuer_user,issuer_principal) VALUES(?,?,?,?,?,?)",
+                   (_digest(secret), bus, now + ttl, user, account, p["id"]))
         return {"invite": secret, "bus": bus, "user": user, "expires_at": now + ttl}
 
     def _op_invite_revoke(self, db, p, r, now):
@@ -783,6 +835,9 @@ class Broker:
         invitation = db.execute("SELECT * FROM invites WHERE digest=?", (_digest(secret),)).fetchone()
         if invitation is None or invitation["redeemed_at"] is not None:
             raise BusError("unknown or already redeemed invitation", "not_found")
+        if self._device_inviter(p) and invitation["issuer_principal"] == p["id"]:
+            db.execute("UPDATE invites SET expires_at=MIN(expires_at,?) WHERE digest=?", (now, _digest(secret)))
+            return {"revoked": True, "bus": invitation["bus"]}
         bus = self._managed_bus(db, p, invitation["bus"], member=True)
         if self._bus_role(db, p, bus) == "member" and invitation["user"] != self._account_user(p):
             raise BusError("members may only revoke invitations for their own devices", "forbidden")
@@ -1040,7 +1095,8 @@ class Broker:
             event_join = bus != "general" and definition["visibility"] == "private" and role in ("admin", "owner")
             row = {"name": bus, "visibility": definition["visibility"], "agents": agents,
                    "owner_user": definition["owner_user"], "role": role,
-                   "capabilities": {"invite": role == "admin" or (account_owned and role in ("owner", "member")),
+                   "capabilities": {"invite": role == "admin" or (account_owned and role in ("owner", "member"))
+                                    or self._device_may_invite(db, p, definition),
                                     "manage_members": manage_members, "leave": account_owned and role == "member",
                                     "event_join": event_join}}
             if manage_members:

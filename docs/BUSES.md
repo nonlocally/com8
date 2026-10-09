@@ -136,6 +136,11 @@ readable names in collaborator selectors, such as their GitHub logins. Labels
 are presentation only; requests and access checks continue to use account IDs.
 Keep the labels in step with the reviewed gateway roster and reader mappings.
 
+`BUS_DEVICE_INVITES` controls whether enrolled devices may invite their own
+account's devices (see [Accounts and devices](#accounts-and-devices)): `own`,
+the default, allows it; `off` keeps invitations to administrators and signed-in
+account holders.
+
 The service binds to `127.0.0.1:7433`, behind the operator's configured HTTPS
 origin tunnel. A gateway uses matching `BUS_ORIGIN_URL` and
 `BUS_GATEWAY_SHARED_SECRET` settings. Every origin request, including health and
@@ -268,11 +273,31 @@ invitation, and the owner can select one of the bus's members. The hosted
 administrator can issue invitations for existing operator-managed buses.
 Account attribution is separate from administrative access:
 an enrolled device owned by `aadarwal` still has a scoped device credential.
-The CLI equivalent is available only with an actual broker-admin credential:
+The CLI equivalent for another account is available only with an actual
+broker-admin credential:
 
 ```sh
 communicate bus invite general --user peer --url https://YOUR-HUB
 ```
+
+An enrolled device can invite another device for its own account, so an agent
+can add its user's other computers without an administrator. The invitation is
+limited to buses that device already reaches (never an event bus it joined with
+a shared code), keeps account-owned buses' membership rule, expires within an
+hour (15 minutes by default), and each device may hold five outstanding at a
+time. The device gains no management rights. Write it to a new private file
+rather than printing it, deliver the file privately, and delete it afterwards:
+
+```sh
+communicate bus invite photonics --url https://YOUR-HUB --out /tmp/photonics-invitation
+ssh lab-mac 'communicate bus connect --invite-stdin --device lab-mac' < /tmp/photonics-invitation
+rm /tmp/photonics-invitation
+```
+
+`--out` refuses an existing file or symlink, and MCP `bus_invite` always uses
+it, so the code never enters an agent transcript. A device can revoke the
+invitations it issued with `communicate bus revoke-invite`. Each invitation
+records the credential that issued it.
 
 The joining client cannot assign itself to an account during connect or
 registration. An existing unassigned enrollment can receive its first account
@@ -331,6 +356,9 @@ Named registration only adds the named membership. It creates the bus when
 run by the local owner, and requires a prior invitation on a remote installation.
 Leaving a bus removes this session's membership; device revocation is the owner
 control that prevents that device from re-registering with the same credential.
+An agent can always leave a bus it joined. The `leave` capability reported for
+an account-owned project bus is about the account leaving that project, not
+about agents unregistering.
 
 Account owners can create project buses, issue scoped invitations and manage
 their collaborators in the dashboard. Hub administrators can also manage legacy

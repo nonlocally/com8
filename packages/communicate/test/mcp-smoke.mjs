@@ -2,7 +2,7 @@
 // Exercise the MCP contract against isolated state and a fake Codex executable.
 // No live sessions, real messages, registry server, or user settings are used.
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -75,7 +75,7 @@ const call = async (name, args = {}, errorExpected = false) => {
 const jsonCall = async (...args) => JSON.parse(await call(...args));
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const EXPECT = ["agents_list", "whereis", "route", "send", "codex_queue", "codex_ask", "status", "ask", "card_set",
-  "bus_register", "bus_list", "bus_agents", "bus_leave", "bus_send", "bus_receipt", "bus_status", "bus_dashboard", "bus_create", "bus_device", "bus_reply",
+  "bus_register", "bus_list", "bus_agents", "bus_leave", "bus_send", "bus_receipt", "bus_status", "bus_dashboard", "bus_create", "bus_invite", "bus_device", "bus_reply",
   "com8_status", "com8_start", "com8_agents", "com8_claim", "com8_release", "com8_send", "com8_ask", "com8_reply", "com8_inbox", "com8_wait",
   "com8_spawn", "com8_restart", "com8_seats", "com8_seat_spawn", "com8_seat_send", "com8_seat_read", "com8_seat_state", "com8_seat_bind", "com8_seat_interrupt", "com8_seat_kill", "com8_model_list", "com8_model_doctor"];
 let failed = false;
@@ -102,11 +102,13 @@ try {
     ["bus_register", { kind: "codex", session: senderThread }],
     ["bus_dashboard", {}],
     ["bus_create", { name: "must-not-exist" }],
+    ["bus_invite", { bus: "general", url: "https://hub.example", out: path.join(taskHome, "never-written") }],
     ["bus_leave", { target: "unknown", bus: "general" }],
   ]) {
     assert(/not connected/.test(await call(tool, { ...args, hub: "https://unconnected.invalid" }, true)),
       `${tool} must reject an unconnected explicit hub instead of choosing a local broker`);
   }
+  assert(!existsSync(path.join(taskHome, "never-written")), "unconnected-hub bus_invite wrote an invitation file");
   assert(!existsSync(path.join(env.COMM_STATE, "bus", "server.json")), "explicit-hub operations started a fallback local broker");
   assert(!existsSync(path.join(env.COMM_STATE, "bus", "registrations.json")), "unconnected-hub registration created an adapter");
   assert(/cannot identify this session/.test(await call("bus_register", {}, true)), "missing self must fail without creating an agent");
@@ -139,6 +141,16 @@ try {
   assert(device.device === "MCP device fixture", "bus_device failed to update this device label");
   assert(device.device_id === sender.device_id && device.user === sender.user, "device update changed enrollment identity or account");
   assert(device.device_metadata?.tailscale_hostname === "mcp-fixture", "device metadata was not refreshed from Self");
+  const invitationFile = path.join(taskHome, "invitation-fixture");
+  const issued = await call("bus_invite", { bus: "photonics", url: "https://hub.example", out: invitationFile, hub });
+  assert(issued.includes(invitationFile) && /--invite-stdin/.test(issued), "bus_invite must say where the invitation went");
+  assert(!issued.includes("commbus1."), "bus_invite returned the invitation code into the transcript");
+  assert((statSync(invitationFile).mode & 0o777) === 0o600, "bus_invite file must be private");
+  assert(readFileSync(invitationFile, "utf8").startsWith("commbus1."), "bus_invite file must hold the invitation");
+  assert(/absolute/.test(await call("bus_invite", { bus: "photonics", url: "https://hub.example", out: "relative-file", hub }, true)),
+    "bus_invite must refuse a relative output path");
+  assert(/new file/.test(await call("bus_invite", { bus: "photonics", url: "https://hub.example", out: invitationFile, hub }, true)),
+    "bus_invite must never replace an existing file");
   assert(/not connected/.test(await call("bus_send", {
     target: recipient.id, from: sender.id, bus: "photonics", message, hub: "https://unconnected.invalid",
   }, true)), "bus_send must forward the selected hub before the subcommand");

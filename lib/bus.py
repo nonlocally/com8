@@ -134,6 +134,28 @@ def write_json(path, value):
         tmp.unlink(missing_ok=True)
 
 
+def private_output(value):
+    """A new absolute path for a credential file: never replaced, never followed."""
+    path = Path(value)
+    if not path.is_absolute():
+        raise BusError("--out must be an absolute path")
+    if os.path.lexists(path):
+        raise BusError("--out must name a new file; an existing file or link is never replaced or followed")
+    if not path.parent.is_dir():
+        raise BusError("--out directory does not exist")
+    return path
+
+
+def write_private(path, text):
+    # O_EXCL also refuses a symlink planted after the earlier check.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(fd, "w") as stream:
+        os.fchmod(stream.fileno(), 0o600)
+        stream.write(text)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
 @contextlib.contextmanager
 def locked(name, blocking=True):
     with open(state_dir() / (name + ".lock"), "a+") as stream:
@@ -961,6 +983,7 @@ def parser():
     invite.add_argument("--url", required=True)
     invite.add_argument("--ttl", type=int, default=900)
     invite.add_argument("--user", help="owner-assigned account for the invited device")
+    invite.add_argument("--out", help="write the invitation to this new private file (absolute path) instead of printing it")
     connect = commands.add_parser("connect")
     connect.add_argument("code", nargs="?")
     connect.add_argument("--invite-stdin", action="store_true", help="read one private invitation from stdin instead of command arguments")
@@ -1143,12 +1166,20 @@ def run(args):
         return request(conn, "receipt", id=args.id)
     if cmd == "invite":
         url = validate_url(args.url)
+        out = private_output(args.out) if args.out is not None else None
         payload = {"bus": args.bus, "ttl": args.ttl}
         if args.user is not None:
             payload["user"] = args.user
         result = request(conn, "invite", **payload)
-        code = base64.urlsafe_b64encode(json.dumps({"url": url, "invite": result["invite"]}).encode()).decode().rstrip("=")
-        return "commbus1." + code
+        code = "commbus1." + base64.urlsafe_b64encode(json.dumps(
+            {"url": url, "invite": result["invite"]}).encode()).decode().rstrip("=")
+        if out is not None:
+            write_private(out, code + "\n")
+            return ("invitation for %s written to %s (expires in %d s); deliver it privately and connect with "
+                    "--invite-stdin" % (result.get("bus", args.bus), out, args.ttl))
+        print("communicate bus: warning: this invitation is a credential; whoever holds it can enroll a device. "
+              "Prefer --out /absolute/path and deliver the file privately", file=sys.stderr)
+        return code
     if cmd == "revoke":
         return request(conn, "revoke", principal=args.principal)
     if cmd == "revoke-invite":
