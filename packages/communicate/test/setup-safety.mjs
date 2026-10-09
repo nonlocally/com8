@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Setup/uninstall boundaries a person can observe: uninstall stops the bus it
-// would otherwise leave running and says what it keeps.
+// would otherwise leave running and says what it keeps, a replaced plugin
+// marketplace is named before its plugins stop resolving, and non-interactive
+// plain setup shows its plan before applying it.
 // Isolated homes, fixture clients and a sandboxed loopback broker only.
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -150,7 +152,24 @@ try {
     assert(!/warning/i.test(stdout), "fresh setup warned about replacing a marketplace\n" + stdout);
   }
 
-  console.log("PASS: setup-safety — uninstall stops the bus and reports what remains, replaced marketplaces are named");
+  // 5. Plain non-interactive setup still applies its default, but shows the plan first.
+  {
+    const box = sandbox("plain-noninteractive");
+    const { stdout } = box.run(["setup"]);
+    const applied = stdout.indexOf("payload staged");
+    const plan = stdout.slice(0, applied < 0 ? undefined : applied);
+    assert(applied > 0 && /plan/i.test(plan), "non-interactive setup changed the installation before showing a plan\n" + stdout);
+    assert(plan.includes("Claude Code"), "plan omitted the Claude Code registration\n" + stdout);
+    assert(plan.includes("Codex"), "plan omitted the Codex decision\n" + stdout);
+    assert(plan.includes("--dry-run"), "plan did not offer a preview without changes\n" + stdout);
+    assert.equal(JSON.parse(fs.readFileSync(box.settings)).enabledPlugins?.["communicate@communicate"], true,
+      "plain setup no longer applies its default selection");
+    // Explicit selections and updates are already a decision; they keep their output.
+    const update = box.run(["update"]).stdout;
+    assert(!/plan/i.test(update.slice(0, Math.max(0, update.indexOf("current ->")))), "update started narrating a plan\n" + update);
+  }
+
+  console.log("PASS: setup-safety — uninstall stops the bus and reports what remains, replaced marketplaces are named, non-interactive setup shows its plan");
 } finally {
   for (const { env, cli, pids } of fixtureBuses) {
     spawnSync(cli, ["bus", "stop"], { env, encoding: "utf8", timeout: 15000 });

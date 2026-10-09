@@ -448,10 +448,23 @@ function remainingAfterUninstall() {
   return lines;
 }
 
-export async function runSetup(argv) {
+// Plain `com8 setup` without a terminal applies its default selection, which
+// automation relies on. Say what that selection does before changing anything.
+function showDefaultPlan(f) {
+  const saved = readJson(ledgerPath());
+  log("No interactive terminal, so setup applies its default plan:");
+  log(`  - stage COM8 ${pkg.version} in ${dataRoot()} and make it current`);
+  if (f.claude) log(executable("claude") ? `  - register COM8 with Claude Code (${settingsPath()})` : "  - skip Claude Code: its CLI is not on PATH");
+  if (f.codex) log(executable("codex") ? `  - register COM8 with Codex (${codexHome()})` : "  - skip Codex: its CLI is not on PATH");
+  log(!f.noService && (f.service || saved.service) ? "  - refresh the installed daemon service" : "  - leave the daemon service unchanged");
+  log("Preview without changes: com8 setup --dry-run. Choose clients with --claude, --codex or --no-clients, or run com8 setup in a terminal for guided setup.");
+}
+
+export async function runSetup(argv, { narratePlan = false } = {}) {
   const f = parseFlags(argv);
   if (!f.uninstall && f.claude) assertManagedPath(settingsPath());
   if (!f.uninstall && f.codex) assertManagedPath(path.join(codexHome(), "config.toml"));
+  if (narratePlan && !f.dryRun && !f.uninstall) showDefaultPlan(f);
   if (f.dryRun) {
     if (f.uninstall) {
       log(`[dry-run] would remove only owned registrations and executable links; preserve ${stateRoot()}`);

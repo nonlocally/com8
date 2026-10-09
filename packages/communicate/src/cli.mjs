@@ -39,7 +39,7 @@ if (!["setup", "update", "uninstall", "rollback", "doctor"].includes(cmd) &&
       const result = await onboarding.runOnboarding(rest);
       if (result.status === "cancelled") { console.log("Setup cancelled."); process.exitCode = 130; }
     }
-    else await (await import("./setup.mjs")).runSetup(rest);
+    else await (await import("./setup.mjs")).runSetup(rest, { narratePlan: rest.length === 0 });
     break;
   }
   case "update":
