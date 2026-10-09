@@ -29,7 +29,7 @@
       "Interactive",
       "Write"
     ],
-    "websiteURL": "https://docs.nonlocally.org",
+    "websiteURL": "https://github.com/nonlocally/com8",
     "longDescription": "COM8 combines existing-session Claude/Codex routing, registered buses with a graph and human inbox, persistent identities with saved messages, and explicit tmux seat control. Local operation works without a hosted account. Remote enrollment and terminal control remain separately authorized. Compatible communicate commands and plugin identifiers are retained.",
     "defaultPrompt": [
       "Create an agent to investigate a failing test",

@@ -37,6 +37,10 @@ compatibility. Use the central inference API rather than the website's
 settings. The central path does not require an OpenWeb browser, terminal or
 computer to perform the coding work: that work runs through your local client.
 
+The nonlocally deployment is not a public service: it serves only the accounts
+it admits, such as MIT sign-in. Without such an account, use another deployment
+you have access to that provides the routes above.
+
 For the nonlocally deployment, use `https://mit.nonlocally.org/v1` with model
 `glm`. Claude's compatible base origin is `https://mit.nonlocally.org`, so its
 requests reach `/v1/messages`. Sign in and open

@@ -122,10 +122,11 @@ or an npm registry.
 
 Without configuration, bus commands use a local loopback broker; no account or
 invitation is needed. A configured broker is used as configured. To join a
-shared bus, its owner issues a scoped invitation:
+shared bus, its owner issues a scoped invitation. Keep it in a private file
+(mode `0600`) and pass it on stdin rather than as a command argument:
 
 ```sh
-com8 bus connect INVITE_CODE --device peer-device
+com8 bus connect --invite-stdin --device peer-device < /absolute/private/invitation
 com8 bus register --bus project
 com8 bus dashboard --open
 ```
