@@ -2,6 +2,7 @@
 """Enrolled devices inviting their own account's other devices, within their own access."""
 import base64
 import contextlib
+import importlib.util
 import io
 import json
 import os
@@ -195,6 +196,38 @@ class DeviceInvitationCliTests(unittest.TestCase):
         self.assertTrue(code.startswith("commbus1."))
         self.assertIn("credential", stderr.getvalue())
         self.assertIn("--out", stderr.getvalue())
+
+
+class HubInstallerSettingTests(unittest.TestCase):
+    """An installed hub can carry the operator's device-invitation choice."""
+
+    def install(self, settings_values):
+        spec = importlib.util.spec_from_file_location("install_bus_hub", ROOT / "scripts" / "install-bus-hub.py")
+        installer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(installer)
+        with tempfile.TemporaryDirectory(prefix="bus-hub-installer-") as temp:
+            temp = Path(temp)
+            (temp / "source" / "lib").mkdir(parents=True)
+            (temp / "source" / "lib" / "bus_broker.py").write_text("")
+            settings = temp / "settings.json"
+            settings.write_text(json.dumps(settings_values))
+            settings.chmod(0o600)
+            argv = ["install-bus-hub.py", "--source", str(temp / "source"), "--state", str(temp / "state"),
+                    "--settings", str(settings)]
+            with mock.patch.object(sys, "argv", argv), mock.patch.object(installer.sys, "platform", "darwin"), \
+                    mock.patch.object(installer.subprocess, "run"), \
+                    mock.patch.object(installer.Path, "home", return_value=temp / "home"), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                installer.main()
+            return (temp / "state" / "run-hub.py").read_text()
+
+    def test_installed_hub_forwards_the_device_invitation_setting(self):
+        runner = self.install({"BUS_GATEWAY_SHARED_SECRET": "s" * 40, "BUS_DEVICE_INVITES": "off"})
+        self.assertIn("'BUS_DEVICE_INVITES'", runner)
+
+    def test_installer_refuses_an_unknown_device_invitation_setting(self):
+        with self.assertRaises(SystemExit):
+            self.install({"BUS_GATEWAY_SHARED_SECRET": "s" * 40, "BUS_DEVICE_INVITES": "everyone"})
 
 
 if __name__ == "__main__":
