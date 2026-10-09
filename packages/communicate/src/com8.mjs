@@ -19,7 +19,7 @@ try {
         const result = await onboarding.runOnboarding(args);
         if (result.status === "cancelled") { console.log("Setup cancelled."); process.exitCode = 130; }
       }
-      else await (await import("./setup.mjs")).runSetup(args);
+      else await (await import("./setup.mjs")).runSetup(args, { narratePlan: args.length === 0 });
       break;
     }
     case "update":
