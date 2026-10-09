@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Enrolled devices inviting their own account's other devices, within their own access."""
+import base64
 import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import sqlite3
+import stat
 import sys
 import tempfile
 import unittest
@@ -12,6 +15,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "lib"))
+import bus
 from bus_broker import Broker
 
 
@@ -129,6 +133,68 @@ class DeviceInvitationTests(unittest.TestCase):
         self.assertEqual(long_lived["expires_at"], self.now + 86400)
         peer = self.call("redeem", token="", invite=long_lived["invite"], device="peer")
         self.assertEqual(self.issuer(peer["principal"]), (None, "admin"))
+
+
+class DeviceInvitationCliTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="bus-device-invite-cli-")
+        self.addCleanup(self.tmp.cleanup)
+        env = {"BUS_READER_USERS": json.dumps(USERS), "BUS_ADMIN_READERS": "aadarsh",
+               "BUS_GATEWAY_SHARED_SECRET": "test-only-gateway-" + "x" * 40}
+        with mock.patch.dict(os.environ, env):
+            self.broker = Broker(Path(self.tmp.name) / "broker")
+        self.broker.handle(self.broker.admin_token, {"op": "create", "bus": "qpaig"})
+        invite = self.broker.handle(self.broker.admin_token, {"op": "invite", "bus": "qpaig", "user": "aadarwal"})
+        device = self.broker.handle("", {"op": "redeem", "invite": invite["invite"], "device": "agent-device"})
+        self.conn = {"url": "https://hub.example", "token": device["token"]}
+        self.requests = []
+
+    def request(self, conn, op, **payload):
+        self.requests.append(op)
+        result = self.broker.handle(conn.get("token"), dict(payload, op=op))
+        if not result.get("ok"):
+            raise bus.BusError(result.get("error", "request failed"))
+        return result
+
+    def run_cli(self, *argv):
+        with mock.patch("bus.connection", return_value=self.conn), mock.patch("bus.request", side_effect=self.request):
+            return bus.run(bus.parser().parse_args(["invite", *argv]))
+
+    def test_out_writes_a_private_file_and_prints_only_its_path(self):
+        target = Path(self.tmp.name) / "invitation"
+        result = self.run_cli("qpaig", "--url", "https://hub.example", "--out", str(target))
+        self.assertIsInstance(result, str)
+        self.assertIn(str(target), result)
+        self.assertIn("--invite-stdin", result)
+        self.assertNotIn("commbus1.", result)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
+        code = target.read_text().strip()
+        self.assertTrue(code.startswith("commbus1."))
+        raw = code.split(".", 1)[1]
+        card = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
+        self.assertEqual(card["url"], "https://hub.example")
+        enrolled = self.broker.handle("", {"op": "redeem", "invite": card["invite"], "device": "second"})
+        self.assertEqual(enrolled["user"], "aadarwal")
+
+    def test_out_refuses_symlinks_existing_files_and_relative_paths_before_requesting(self):
+        existing = Path(self.tmp.name) / "existing"
+        existing.write_text("keep")
+        link = Path(self.tmp.name) / "link"
+        link.symlink_to(Path(self.tmp.name) / "elsewhere")
+        for out in (str(existing), str(link), "relative-invitation"):
+            with self.subTest(out=out), self.assertRaises(bus.BusError):
+                self.run_cli("qpaig", "--url", "https://hub.example", "--out", out)
+        self.assertEqual(self.requests, [])
+        self.assertEqual(existing.read_text(), "keep")
+        self.assertFalse((Path(self.tmp.name) / "elsewhere").exists())
+
+    def test_printed_invitation_warns_that_it_is_a_credential(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = self.run_cli("qpaig", "--url", "https://hub.example")
+        self.assertTrue(code.startswith("commbus1."))
+        self.assertIn("credential", stderr.getvalue())
+        self.assertIn("--out", stderr.getvalue())
 
 
 if __name__ == "__main__":
