@@ -59,10 +59,21 @@ function callBus(args, { env = process.env, cli = communicateCli, run = spawnSyn
   } catch { throw new Error("The bus returned an invalid result; no connection success is claimed."); }
 }
 
-export function inspectBus(options = {}) {
+export function busStateDir(options = {}) {
   const env = options.env || process.env;
   const state = env.COMM_STATE || path.join(env.XDG_STATE_HOME || path.join(env.HOME || os.homedir(), ".local/state"), "communicate");
-  const file = path.join(state, "bus/client.json");
+  return path.join(state, "bus");
+}
+
+// Stop this device's outbound worker and any owned local broker. Registrations
+// and enrollment stay. A machine that never used the bus gets no new state.
+export function stopBus(options = {}) {
+  if (!existsSync(busStateDir(options))) return null;
+  return callBus(["stop"], options).status;
+}
+
+export function inspectBus(options = {}) {
+  const file = path.join(busStateDir(options), "client.json");
   if (!existsSync(file)) return { configured: false, selection: "not selected", enrollment: "not enrolled" };
   let saved, selected;
   try {

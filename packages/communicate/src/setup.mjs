@@ -1,7 +1,7 @@
 // setup/doctor for @aadarwal/communicate — stabilize the payload, register
 // both ecosystems, reversibly. Never touches CLI-owned plugin state files;
 // never hand-edits ~/.codex/config.toml.
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, renameSync, readlinkSync, realpathSync, chmodSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync, renameSync, readlinkSync, realpathSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { home, dataRoot, currentLink, ledgerPath, readJson, writeJson, hash, lin
 import { communicateCli } from "./paths.mjs";
 import { buildIntegration, removeIntegration } from "./integration.mjs";
 import { readCodexSettings, writeCodexSettings } from "./codex-settings.mjs";
-import { inspectBus, busSummary } from "./bus-setup.mjs";
+import { inspectBus, busSummary, busStateDir, stopBus } from "./bus-setup.mjs";
 
 const pkgDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pkg = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
@@ -414,6 +414,24 @@ function restoreService(record) {
   } else rmSync(record.path, { force: true });
 }
 
+// Uninstall keeps people's data; say exactly what stays and where.
+function remainingAfterUninstall() {
+  const lines = [];
+  const busDir = busStateDir();
+  if (existsSync(busDir)) {
+    const bus = inspectBus({ offline: true });
+    lines.push(bus.configured && !bus.local
+      ? `bus: this device stays enrolled at ${bus.hub}; its credential and registrations remain in ${busDir}. Its agents stay listed there until they leave or the hub administrator revokes this device.`
+      : `bus: local registrations and messages remain in ${busDir}`);
+  }
+  const models = process.env.COM8_MODEL_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(home(), ".config"), "com8/models");
+  if (existsSync(models)) lines.push(`model connections and their keys remain in ${models}`);
+  const claudeDir = path.dirname(settingsPath());
+  const backups = existsSync(claudeDir) ? readdirSync(claudeDir).filter((name) => name.startsWith("settings.json.communicate-backup-")).length : 0;
+  if (backups) lines.push(`${backups} private Claude settings backup${backups === 1 ? "" : "s"} remain in ${claudeDir} (settings.json.communicate-backup-*)`);
+  return lines;
+}
+
 export async function runSetup(argv) {
   const f = parseFlags(argv);
   if (!f.uninstall && f.claude) assertManagedPath(settingsPath());
@@ -421,6 +439,8 @@ export async function runSetup(argv) {
   if (f.dryRun) {
     if (f.uninstall) {
       log(`[dry-run] would remove only owned registrations and executable links; preserve ${stateRoot()}`);
+      if (!f.selective && existsSync(busStateDir()))
+        log("[dry-run] would stop the bus worker and any owned local broker; registrations and enrollment are kept");
       const saved = readJson(ledgerPath());
       if (!f.selective) await uninstallService(saved.service, true);
     } else {
@@ -445,6 +465,13 @@ export async function runSetup(argv) {
         delete saved.clients.codex; writeJson(ledgerPath(), saved);
       }
       if (!f.selective && await uninstallService(saved.service)) { delete saved.service; writeJson(ledgerPath(), saved); }
+      // An uninstalled machine must not keep polling a hub or delivering messages.
+      if (!f.selective) {
+        try {
+          const stopped = stopBus();
+          if (stopped) log(stopped === "stopped" ? "stopped the bus worker and any owned local broker" : "the bus worker and local broker are stopping");
+        } catch { log("warning: could not stop the bus worker; run com8 bus stop"); }
+      }
       if (!f.selective) for (const [file, target] of Object.entries(saved.links)) {
         try {
           if (readlinkSync(file) === target) { rmSync(file); delete saved.links[file]; }
@@ -491,6 +518,7 @@ export async function runSetup(argv) {
       writeJson(ledgerPath(), saved);
       log(`uninstalled owned integrations; identities, mail, credentials and configuration preserved at ${stateRoot()}`);
       if (!f.purge) log(`release payloads retained at ${dataRoot()} for rollback/reinstall`);
+      if (!f.selective) for (const line of remainingAfterUninstall()) log(line);
       return;
     }
     const previous = linkTarget();
