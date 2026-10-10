@@ -1519,7 +1519,7 @@ class Broker:
     def _op_receipt(self, db, p, r, now):
         mid = _text(r.get("id"), "message id", 128)
         self._cancel_invalid(db, now)
-        if mid.startswith("hm_"):
+        if mid.startswith(("hm_", "hr_")):
             m = db.execute("""SELECT m.* FROM human_chat_messages m JOIN human_chats c ON c.id=m.chat
                               JOIN agents a ON a.id=c.agent WHERE m.id=? AND a.principal=?""", (mid, p["id"])).fetchone()
             if m is None:

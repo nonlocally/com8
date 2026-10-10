@@ -253,6 +253,31 @@ class Services(unittest.TestCase):
     def test_v2_cli_worker_correlated_reply_is_acknowledged_without_a_reply_loop(self):
         self.cli_worker_roundtrip(version=2)
 
+    def payload_cli(self, module, fixture, env, *args):
+        """Observe the actual subprocess boundary, before allowing execution."""
+        original_run = subprocess.run
+        invocations = []
+        def checked_run(argv, *positional, **kwargs):
+            self.assertEqual(argv[:2], [str(PAYLOAD / "bin/communicate"), "bus"],
+                             "CLI invocation escaped the selected payload")
+            invocations.append(argv)
+            return original_run(argv, *positional, **kwargs)
+        with mock.patch.object(module.subprocess, "run", side_effect=checked_run):
+            result = fixture.cli(env, *args)
+        self.assertEqual(len(invocations), 1, "fixture did not execute the selected CLI exactly once")
+        return result
+
+    def test_cli_guard_rejects_another_root_before_execution(self):
+        module = fixture_module("test-bus-client")
+        fixture = module.BusClientTest()
+        # Simulate a helper regression that ignores the selected payload. The
+        # guard must reject its actual argv before executing the wrong CLI.
+        module.ROOT = self.root / "unselected-checkout"
+        with mock.patch.object(module.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, "{}", "")) as launch:
+            with self.assertRaisesRegex(AssertionError, "CLI invocation escaped"):
+                self.payload_cli(module, fixture, {}, "status", "--no-start", "--json")
+            launch.assert_not_called()
+
     def cli_worker_roundtrip(self, version):
         module = fixture_module("test-bus-client")
         fixture_cls = module.BusClientTest
@@ -288,14 +313,13 @@ class Services(unittest.TestCase):
         thread.start()
         try:
             env = fixture.env("service-worker")
-            fixture.cli(env, "connect", fixture.code(user="service-account"))
+            self.payload_cli(module, fixture, env, "connect", fixture.code(user="service-account"))
             token_file = fixture.temp / "service.token"
             token_file.write_text(token)
             token_file.chmod(0o600)
-            registered = fixture.cli(env, "register-service", "qualified-fixture", "--service-id", self.sid,
+            registered = self.payload_cli(module, fixture, env, "register-service", "qualified-fixture", "--service-id", self.sid,
                 "--endpoint", "https://localhost:%d/bridge" % server.server_port,
                 "--token-file", str(token_file), "--contract-version", str(version), "--json")
-            self.assertEqual((module.ROOT / "bin/communicate").resolve(), (PAYLOAD / "bin/communicate").resolve())
             state = Path(env["COMM_STATE"]) / "bus"
             running = json.loads((state / "worker.json").read_text())
             self.assertEqual(running["runtime"], bus.WORKER_RUNTIME)
@@ -372,6 +396,19 @@ class Services(unittest.TestCase):
             self.assertTrue(message["conversation_id"].startswith("hc_"))
             self.assertIsNone(message["in_reply_to"])
             self.assertEqual(service.normalized(message, 2)["conversation_id"], message["chat"])
+            receipt = fixture.admin("receipt", id=one["id"])
+            self.assertTrue(one["id"].startswith("hr_"))
+            for field in ("id", "correlation_version", "conversation_id", "in_reply_to"):
+                self.assertEqual(receipt[field], one[field])
+                self.assertEqual(receipt[field], two[field])
+            # Knowing a human answer ID does not confer authority. An enrolled
+            # different principal and a human reader cannot use agent receipts.
+            invitation = fixture.admin("invite", bus="qit-wilde", user="peer")["invite"]
+            foreign = fixture.b.handle("", {"op": "redeem", "invite": invitation, "device": "foreign-fixture"})
+            self.assertTrue(foreign["ok"])
+            denied = fixture.b.handle(foreign["token"], {"op": "receipt", "id": one["id"]})
+            self.assertEqual(denied["code"], "not_found")
+            self.assertEqual(fixture.raw("receipt", id=one["id"])["code"], "forbidden")
         finally:
             fixture.tearDown()
 
