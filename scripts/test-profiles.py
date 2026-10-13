@@ -399,17 +399,33 @@ class Profiles(unittest.TestCase):
         self.install(["terminal", "mesh", "snapshots"])
         # Never uses the user's default server. Environment and socket are private.
         socket = str(Path(self.temp.name) / "tmux.sock")
-        tm = [shutil.which("tmux"), "-S", socket]
+        tm = [shutil.which("tmux"), "-N", "-S", socket]
         # Reproduce older tmux's client-dependent `info` on newer hosts too;
         # all real workspace operations still reach this dedicated server.
         shim = self.home / ".local/bin/tmux"
         shim.write_text("#!/bin/sh\n[ \"$1\" != info ] || exit 1\nexec "
-                        + shlex.quote(tm[0]) + ' "$@"\n')
+                        + shlex.quote(tm[0]) + ' -N "$@"\n')
         shim.chmod(0o755)
         cfg = str(self.profile.config / "tmux.conf")
         clients = []
+        # Own the actual server process: kill-server only acknowledges a request
+        # and can return while its shutdown hooks still write into this home.
+        # Interactive fixture shells do not need to persist command history.
+        server_env = dict(self.env, HISTFILE=os.devnull)
+        server_log = tempfile.TemporaryFile(mode="w+")
+        server = subprocess.Popen([tm[0], "-D", "-S", socket, "-f", cfg],
+                                  env=server_env, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL, stderr=server_log)
         try:
-            self.run_tool(*tm, "-f", cfg, "new-session", "-d", "-s", "fixture", "-x", "180", "-y", "60", BASH + " --noprofile --norc")
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                if self.run_tool(*tm, "show-options", "-g", check=False).returncode == 0:
+                    break
+                if server.poll() is not None:
+                    break
+                time.sleep(0.02)
+            self.assertIsNone(server.poll(), "fixture tmux server exited during startup")
+            self.run_tool(*tm, "new-session", "-d", "-s", "fixture", "-x", "180", "-y", "60", BASH + " --noprofile --norc")
             self.run_tool(*tm, "source-file", cfg)
             pane = self.run_tool(*tm, "display-message", "-p", "-t", "fixture", "#{pane_id}").stdout.strip()
             env = dict(self.env, TMUX=socket + ",0,0", TMUX_PANE=pane)
@@ -465,11 +481,24 @@ class Profiles(unittest.TestCase):
             current = self.run_tool(*tm, "list-clients", "-F", "#{window_index}").stdout.splitlines()
             self.assertEqual(sorted(current), ["1", "2"])
         finally:
-            for client in clients:
-                client.terminate()
-                client.wait(timeout=3)
-                client.stdin.close()
-            subprocess.run(tm + ["kill-server"], env=self.env, capture_output=True)
+            try:
+                for client in clients:
+                    client.terminate()
+                    client.wait(timeout=3)
+                    client.stdin.close()
+            finally:
+                subprocess.run(tm + ["kill-server"], env=self.env, capture_output=True, timeout=5)
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+                    server.wait(timeout=5)
+                    self.fail("fixture tmux server did not finish shutdown")
+                finally:
+                    server_log.seek(0)
+                    errors = server_log.read()
+                    server_log.close()
+                self.assertEqual(server.returncode, 0, errors)
 
 
 if __name__ == "__main__":
