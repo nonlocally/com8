@@ -3296,9 +3296,12 @@ class Com8:
             self.log("user: unclaimed (run `communicate com8 init` to claim a handle)")
         self.control_token = self._ensure_control_token()
         self._load_grants()
-        threading.Thread(target=self.control_server, daemon=True).start()
+        # A successful control/status reply is the CLI startup boundary.
+        # Publishing it during restore lets an immediate claim persist a
+        # partial identity map and erase records the loader has not read yet.
         self._load_identities()
         self._load_links()
+        threading.Thread(target=self.control_server, daemon=True).start()
         threading.Thread(target=self.outbound_loop, daemon=True).start()
         self.write_routes()
         self.tick_loop()

@@ -260,7 +260,11 @@ echo "== a pre-axes identities.json loads without losing anything"
 # nulls and keep every fact the file already held — above all claimed_at, the
 # age of the address, which _load_identities re-stamped on every daemon start
 # (so an identity claimed in March looked seconds old after any restart).
-"$COMM" com8 stop >/dev/null 2>&1; sleep 0.5
+# stop acknowledges a request before the daemon exits. Observe its actual
+# shutdown before replacing the persistence fixture or starting its successor.
+if ! python3 "$HERE/scripts/com8_fixture_lifecycle.py" stop "$COMM" "$COM8S"; then
+  bad "legacy fixture daemon failed to stop"; exit 1
+fi
 cat > "$COM8S/identities.json" <<'JSON'
 {
  "oldtimer": {
@@ -272,7 +276,9 @@ cat > "$COM8S/identities.json" <<'JSON'
  }
 }
 JSON
-"$COMM" com8 start >/dev/null 2>&1; sleep 1.5
+if ! python3 "$HERE/scripts/com8_fixture_lifecycle.py" start "$COMM" "$COM8S"; then
+  bad "legacy fixture daemon failed to start"; exit 1
+fi
 python3 - "$COM8S/identities.json" <<'PY' && ok "legacy record keeps claimed_at (and its seat) across load" || bad "legacy load lost claimed_at"
 import json,sys
 d=json.load(open(sys.argv[1]))["oldtimer"]
