@@ -1,0 +1,20 @@
+name: Admit a disposable CI guest
+description: Verify a pinned provisioner signature and guest isolation before checking out job code
+inputs:
+  expected-platform:
+    description: Optional required Python platform (linux or darwin)
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - name: Verify disposable guest
+      shell: bash
+      env:
+        EXPECTED_PLATFORM: ${{ inputs.expected-platform }}
+      run: |
+        arguments=(--disposable-ci)
+        if [ -n "$EXPECTED_PLATFORM" ]; then
+          arguments+=(--expected-platform "$EXPECTED_PLATFORM")
+        fi
+        python3 "$GITHUB_ACTION_PATH/../../../scripts/disposable_runner.py" "${arguments[@]}"
