@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Admit a fresh isolated guest before checking out job code
-        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        uses: nonlocally/com8/.github/actions/disposable-admission@660cbd00dcc9c7ca2d6aa8dc84ab9dbe8d01ec7f
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Admit a fresh isolated guest before checking out job code
-        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        uses: nonlocally/com8/.github/actions/disposable-admission@660cbd00dcc9c7ca2d6aa8dc84ab9dbe8d01ec7f
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -149,7 +149,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Admit a fresh isolated guest before checking out job code
-        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        uses: nonlocally/com8/.github/actions/disposable-admission@660cbd00dcc9c7ca2d6aa8dc84ab9dbe8d01ec7f
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -189,7 +189,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Admit a fresh isolated guest before checking out job code
-        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        uses: nonlocally/com8/.github/actions/disposable-admission@660cbd00dcc9c7ca2d6aa8dc84ab9dbe8d01ec7f
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -252,7 +252,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Admit a fresh isolated guest
-        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        uses: nonlocally/com8/.github/actions/disposable-admission@660cbd00dcc9c7ca2d6aa8dc84ab9dbe8d01ec7f
         with:
           expected-platform: linux
       - name: Require the qualification that this event requested
