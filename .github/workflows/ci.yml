@@ -1,27 +1,50 @@
 name: COM8 qualification
 on:
-  pull_request:
+  # Read the trusted base workflow; only maintainer branches may execute code.
+  pull_request_target:
   push:
-    branches: [main, release/com8-public]
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Reviewed source commit or tag; defaults to event revision
+        type: string
+        required: false
+      release_qualification:
+        description: Run canonical Homebrew and fresh onboarding qualification
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# Keep every main/release push; cancel only superseded PR runs.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 jobs:
   core:
+    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-14]
+        platform: [Linux, macOS]
         node: ['20', '22']
-    runs-on: ${{ matrix.os }}
+        # Retain both Node versions on Linux; the dashboard consumes Node 20.
+        exclude: ${{ fromJSON(github.event_name == 'pull_request_target' && '[{"platform":"macOS","node":"20"}]' || '[]') }}
+    runs-on:
+      group: nonlocally-public-disposable
+      labels: [self-hosted, "${{ matrix.platform }}", ARM64, isolated, disposable]
     timeout-minutes: 30
     steps:
+      - name: Admit a fresh isolated guest before checking out job code
+        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Package the reviewed commit itself so the tested archive is publishable.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
@@ -43,7 +66,9 @@ jobs:
       - run: npm run vendor
         working-directory: packages/communicate
       - name: Retained core and integration checks
-        run: bash scripts/test-release-core.sh
+        run: |
+          python3 -B scripts/test-disposable-runner.py
+          bash scripts/test-release-core.sh
       - name: Optional configuration checks
         run: |
           python3 scripts/test-profiles.py
@@ -69,22 +94,30 @@ jobs:
           name: com8-runtime-${{ runner.os }}-node${{ matrix.node }}
           path: dist/com8-*.tar.gz*
           if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: com8-qualification-${{ runner.os }}-node${{ matrix.node }}
           path: ${{ runner.temp }}/com8-artifact-qualification.json
           if-no-files-found: warn
+          retention-days: 7
 
   dashboard:
     needs: core
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on:
+      group: nonlocally-public-disposable
+      labels: [self-hosted, Linux, ARM64, isolated, disposable]
     timeout-minutes: 10
     steps:
+      - name: Admit a fresh isolated guest before checking out job code
+        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Package the reviewed commit itself so the tested archive is publishable.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -106,15 +139,22 @@ jobs:
           name: com8-dashboard-qualification
           path: ${{ runner.temp }}/com8-ui-evidence
           if-no-files-found: warn
+          retention-days: 7
 
   systemd:
-    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    runs-on:
+      group: nonlocally-public-disposable
+      labels: [self-hosted, Linux, ARM64, isolated, disposable]
     timeout-minutes: 20
     steps:
+      - name: Admit a fresh isolated guest before checking out job code
+        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Package the reviewed commit itself so the tested archive is publishable.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -138,17 +178,23 @@ jobs:
           name: com8-systemd-qualification
           path: ${{ runner.temp }}/com8-systemd-evidence
           if-no-files-found: warn
+          retention-days: 7
 
   homebrew:
-    # Current Homebrew bottles require a supported macOS release. Keep the
-    # independent core matrix on macOS 14 to exercise older runtime support.
-    runs-on: macos-15
+    if: (github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))) && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/release/com8-public' || (github.event_name == 'workflow_dispatch' && inputs.release_qualification))
+    # Canonical install/uninstall requires a clean supported macOS guest.
+    runs-on:
+      group: nonlocally-public-disposable
+      labels: [self-hosted, macOS, ARM64, isolated, disposable]
     timeout-minutes: 45
     steps:
+      - name: Admit a fresh isolated guest before checking out job code
+        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           # Package the reviewed commit itself so the tested archive is publishable.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ inputs.source_ref || github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -177,6 +223,7 @@ jobs:
           name: com8-homebrew-qualification
           path: ${{ runner.temp }}/com8-brew-evidence
           if-no-files-found: warn
+          retention-days: 7
       - name: Qualify TTY cancellation and fresh automated dependency setup on the disposable runner
         run: |
           mkdir -p "$RUNNER_TEMP/com8-onboarding-artifact"
@@ -192,3 +239,35 @@ jobs:
             ${{ runner.temp }}/com8-onboarding-evidence/command-*.log
             ${{ runner.temp }}/com8-onboarding-evidence/interactive-cancel.log
           if-no-files-found: warn
+          retention-days: 7
+
+  qualification:
+    # A skipped/untrusted PR is unqualified. This job runs trusted workflow
+    # code only; it never checks out the PR's head or dispatch's source_ref.
+    if: always()
+    needs: [core, dashboard, systemd, homebrew]
+    runs-on:
+      group: nonlocally-public-disposable
+      labels: [self-hosted, Linux, ARM64, isolated, disposable]
+    timeout-minutes: 5
+    steps:
+      - name: Admit a fresh isolated guest
+        uses: nonlocally/com8/.github/actions/disposable-admission@65b473e9348520f68f5615dca6ad3760ff6d9237
+        with:
+          expected-platform: linux
+      - name: Require the qualification that this event requested
+        env:
+          CORE_RESULT: ${{ needs.core.result }}
+          DASHBOARD_RESULT: ${{ needs.dashboard.result }}
+          SYSTEMD_RESULT: ${{ needs.systemd.result }}
+          HOMEBREW_RESULT: ${{ needs.homebrew.result }}
+          HOMEBREW_REQUIRED: ${{ startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/release/com8-public' || (github.event_name == 'workflow_dispatch' && inputs.release_qualification) }}
+        run: |
+          test "$CORE_RESULT" = success
+          test "$DASHBOARD_RESULT" = success
+          test "$SYSTEMD_RESULT" = success
+          if [ "$HOMEBREW_REQUIRED" = true ]; then
+            test "$HOMEBREW_RESULT" = success
+          else
+            test "$HOMEBREW_RESULT" = skipped || test "$HOMEBREW_RESULT" = success
+          fi

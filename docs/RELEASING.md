@@ -57,8 +57,10 @@ Use isolated fixtures on the developer's working Mac. Do not disable its existin
 integrations for qualification; actual legacy-disabled installation testing belongs
 on designated test devices.
 
-CI runs the retained core gate on Linux and macOS with Node 20 and 22, then extracts
-the built archive and runs `scripts/qualify-installed.py` against it. Its JSON
+CI runs the retained core gate on isolated disposable Linux and macOS guests with
+Node 20 and 22 (PRs use macOS Node 22 only), then extracts the built archive and
+runs `scripts/qualify-installed.py` against it. See [Self-hosted CI](SELF-HOSTED-CI.md)
+for admission, contributor trust and release qualification. Its JSON
 report is retained independently from the archive. Any explicitly unqualified
 upgrade check remains open; a successful process exit does not turn omitted live
 provider or previous-release checks into passes. See

@@ -3,11 +3,12 @@
 
 Uses the extracted release, real Homebrew packages and real client plugin CLIs.
 Never logs in, requests a model response, or starts a service. Shared hosts are
-refused before artifact access or subprocess execution.
+refused before artifact access, package changes or service-manager calls.
 """
 import argparse
 import errno
 import hashlib
+from disposable_runner import require_disposable_runner
 import json
 import os
 from pathlib import Path
@@ -32,10 +33,10 @@ def main():
     parser.add_argument("--disposable-ci", action="store_true")
     args = parser.parse_args()
     runner_temp = os.environ.get("RUNNER_TEMP")
-    if not (args.disposable_ci and sys.platform == "darwin" and os.getuid() != 0
-            and os.environ.get("GITHUB_ACTIONS") == "true"
-            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and runner_temp):
-        parser.error("requires a non-root disposable GitHub-hosted macOS runner")
+    try:
+        runner_proof = require_disposable_runner(args.disposable_ci, expected_platform="darwin")
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        parser.error(str(error))
     work = args.work.resolve()
     require(Path(runner_temp).resolve() in work.parents, "evidence must be inside RUNNER_TEMP")
     require(not work.exists(), "evidence already exists; refusing to reuse it")
@@ -46,7 +47,7 @@ def main():
     work.mkdir(mode=0o700)
     home = work / "home"
     home.mkdir(mode=0o700)
-    report = {"ok": False, "source": manifest["source"], "checks": [],
+    report = {"ok": False, "source": manifest["source"], "runner": runner_proof, "checks": [],
               "authentication_attempted": False, "model_requests": 0,
               "services_started": False, "third_party_packages_removed": False}
     # No provider, GitHub, SSH-agent, bus or controller credentials enter the

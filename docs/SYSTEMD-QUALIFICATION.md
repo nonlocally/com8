@@ -1,9 +1,11 @@
 # Actual Linux service qualification
 
 `scripts/qualify-systemd.py` tests an extracted release against a real systemd
-user manager. It runs only with `--disposable-ci` on a non-root GitHub-hosted
-Linux runner. Shared workstations, Minis, self-hosted runners and ordinary local
-invocations are refused before artifact reads, file creation or process calls.
+user manager. It runs only with `--disposable-ci` on a non-root disposable
+Actions runner: GitHub-hosted compatibility, or a self-hosted guest carrying a
+signed, pinned provisioner proof as described in [Self-hosted CI](SELF-HOSTED-CI.md).
+Shared workstations, persistent runners and ordinary local invocations are refused
+before artifact reads, file creation or service-manager calls.
 The independent `systemd` CI job builds its own release and uploads `report.json`.
 A local syntax check or refusal check does not qualify the Linux service.
 

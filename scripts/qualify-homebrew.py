@@ -4,13 +4,14 @@
 Run on a qualification host, passing an extracted artifact's archive and the
 rendered canonical formula. Only the candidate formula name, local archive URL,
 and keg-only status differ. Uses existing dependencies; never upgrades them.
---disposable-ci instead requires a GitHub-hosted runner and absent COM8 commands,
+--disposable-ci instead requires a verified disposable runner and absent COM8 commands,
 then tests the canonical linked formula with ordinary dependency resolution,
 brew test and brew reinstall. Never use that mode on a shared workstation.
 """
 import argparse
 import errno
 import hashlib
+from disposable_runner import require_disposable_runner
 import json
 import os
 from pathlib import Path
@@ -172,17 +173,20 @@ def main():
     parser.add_argument("formula", type=Path)
     parser.add_argument("--work", type=Path, required=True)
     parser.add_argument("--disposable-ci", action="store_true",
-                        help="Allow dependency changes on a disposable GitHub-hosted runner only")
+                        help="Allow dependency changes on a verified disposable Actions runner only")
     args = parser.parse_args()
-    if args.disposable_ci and not (os.environ.get("GITHUB_ACTIONS") == "true" and
-                                  os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
-                                  Path(os.environ.get("RUNNER_TEMP", "/nonexistent")).is_dir()):
-        parser.error("--disposable-ci requires a disposable GitHub-hosted runner; shared hosts are refused")
+    runner_proof = None
+    if args.disposable_ci:
+        try:
+            runner_proof = require_disposable_runner(True)
+        except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+            parser.error(str(error))
     archive = args.archive.resolve(strict=True)
     args.work.mkdir(parents=True, exist_ok=True)
     report = {"archive": str(archive), "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
-              "mode": ("canonical linked formula on disposable GitHub-hosted runner" if args.disposable_ci
+              "mode": ("canonical linked formula on disposable Actions guest" if args.disposable_ci
                        else "renamed keg-only candidate; canonical command names inside keg"), "checks": [], "ok": False}
+    report["runner"] = runner_proof
     brew = shutil.which("brew")
     if not brew:
         parser.error("Homebrew is required on the qualification host")

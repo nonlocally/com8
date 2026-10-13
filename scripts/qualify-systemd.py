@@ -7,6 +7,7 @@ socket/session roots and one uniquely scoped service belong to this test.
 """
 import argparse
 import hashlib
+from disposable_runner import require_disposable_runner
 import importlib.util
 import json
 import os
@@ -52,7 +53,7 @@ class Proof:
                         XDG_RUNTIME_DIR=f"/run/user/{os.getuid()}",
                         DBUS_SESSION_BUS_ADDRESS=f"unix:path=/run/user/{os.getuid()}/bus",
                         PYTHONDONTWRITEBYTECODE="1")
-        self.report = {"ok": False, "mode": "real systemd user manager on disposable GitHub-hosted runner",
+        self.report = {"ok": False, "mode": "real systemd user manager on disposable Actions guest",
                        "checks": [], "commands": [], "temporary": str(self.base), "home": str(self.home)}
         self.label = self.unit = None
         self.linger_changed = False
@@ -274,15 +275,15 @@ def main():
     parser.add_argument("--start-user-manager", action="store_true",
                         help="If needed, enable runner lingering and start user@UID.service; restore lingering afterwards")
     args = parser.parse_args()
-    # Keep this guard ahead of artifact reads, mkdir, subprocesses and managers.
-    if not (args.disposable_ci and sys.platform == "linux" and os.getuid() != 0 and
-            os.environ.get("GITHUB_ACTIONS") == "true" and
-            os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted" and
-            Path(os.environ.get("RUNNER_TEMP", "/nonexistent")).is_dir()):
-        parser.error("requires --disposable-ci on a non-root disposable GitHub-hosted Linux runner; shared hosts are refused")
+    # Keep admission ahead of artifact reads, mkdir and service-manager calls.
+    try:
+        runner_proof = require_disposable_runner(args.disposable_ci, expected_platform="linux")
+    except (OSError, ValueError, KeyError, RuntimeError, subprocess.SubprocessError) as error:
+        parser.error(str(error))
     require(args.work.resolve().is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve()), "evidence must be inside RUNNER_TEMP")
     require(not args.work.exists(), "evidence directory already exists; use a fresh run")
     proof = Proof(args.runtime.resolve(strict=True), args.work, args.start_user_manager)
+    proof.report["runner"] = runner_proof
     try:
         proof.execute()
     except Exception as error:
