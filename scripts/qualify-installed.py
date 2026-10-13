@@ -38,6 +38,35 @@ def within(path, parent):
         return False
 
 
+BASH_FRAME_BEGIN = "COM8_PROFILE_QUALIFICATION_BEGIN"
+BASH_FRAME_END = "COM8_PROFILE_QUALIFICATION_END"
+BASH_STARTUP_COMMAND = (
+    'for fn in t cx cxx cxc cdx cdxx cdxxs mesh; do declare -F "$fn" >/dev/null || exit 9; done; '
+    f'printf "{BASH_FRAME_BEGIN}\\nREADY\\n%s\\n%s\\n" "$HOME" "$COM8_PROFILE_RUNTIME"; '
+    'command -v com8-workstation || exit 10; '
+    f'printf "{BASH_FRAME_END}\\n"'
+)
+
+
+def bash_startup_observation(stdout, home, label):
+    # Distro startup files may print a leading banner, such as Ubuntu's sudo
+    # hint. Accept exactly one complete frame and keep every profile assertion.
+    lines = stdout.splitlines()
+    require(lines.count(BASH_FRAME_BEGIN) == lines.count(BASH_FRAME_END) == 1,
+            f"{label} Bash startup frame missing or duplicated")
+    start, end = lines.index(BASH_FRAME_BEGIN), lines.index(BASH_FRAME_END)
+    require(end - start == 5 and end == len(lines) - 1,
+            f"{label} Bash startup frame malformed")
+    ready, observed_home, runtime, launcher = lines[start + 1:end]
+    require(ready == "READY" and Path(observed_home) == home,
+            f"{label} Bash did not use its temporary profile")
+    require(bool(runtime) and within(runtime, home / ".local/share/com8/profiles"),
+            f"{label} Bash loaded a legacy profile")
+    require(Path(launcher) == home / ".local/bin/com8-workstation",
+            f"{label} Bash launcher is shadowed")
+    return {"runtime": runtime, "launcher": launcher}
+
+
 def files(root):
     """Contents, modes and link targets; excludes access/modified timestamps."""
     return {str(p.relative_to(root)): {"link": os.readlink(p)} if p.is_symlink()
@@ -299,15 +328,10 @@ class Qualification:
         with self.check("installed optional modules are self-contained and inert") as row:
             row.update(self.profile_helpers())
         with self.check("fresh interactive Bash startup") as row:
-            command = 'for fn in t cx cxx cxc cdx cdxx cdxxs mesh; do declare -F "$fn" >/dev/null || exit 9; done; printf "READY\\n%s\\n%s\\n" "$HOME" "$COM8_PROFILE_RUNTIME"; command -v com8-workstation'
             observations = {}
             for label, args in [("nonlogin", ["--noprofile", "-ic"]), ("login", ["-lic"])]:
-                result = self.run("bash", *args, command)
-                lines = result.stdout.splitlines()
-                require(lines[0] == "READY" and Path(lines[1]) == self.home, f"{label} Bash did not use its temporary profile")
-                require(within(lines[2], self.home / ".local/share/com8/profiles"), f"{label} Bash loaded a legacy profile")
-                require(Path(lines[3]) == self.home / ".local/bin/com8-workstation", f"{label} Bash launcher is shadowed")
-                observations[label] = {"runtime": lines[2], "launcher": lines[3]}
+                result = self.run("bash", *args, BASH_STARTUP_COMMAND)
+                observations[label] = bash_startup_observation(result.stdout, self.home, label)
             row["shells"] = observations
         if Path("/bin/zsh").exists():
             with self.check("fresh zsh discovers executable shortcuts without loading Bash functions") as row:

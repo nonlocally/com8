@@ -16,6 +16,9 @@ spec = importlib.util.spec_from_file_location("profiles", ROOT / "profiles/manag
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 BASH = next((p for p in ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", shutil.which("bash")] if p and Path(p).exists()), "bash")
+qualification_spec = importlib.util.spec_from_file_location("installed_qualification", ROOT / "scripts/qualify-installed.py")
+qualification = importlib.util.module_from_spec(qualification_spec)
+qualification_spec.loader.exec_module(qualification)
 
 
 class Profiles(unittest.TestCase):
@@ -40,6 +43,58 @@ class Profiles(unittest.TestCase):
         if check:
             self.assertEqual(result.returncode, 0, f"{args!r}\n{result.stdout}\n{result.stderr}")
         return result
+
+    def shell_frame(self):
+        runtime = str(self.home / ".local/share/com8/profiles/fixture/runtime")
+        launcher = str(self.home / ".local/bin/com8-workstation")
+        frame = "\n".join([qualification.BASH_FRAME_BEGIN, "READY", str(self.home),
+                            runtime, launcher, qualification.BASH_FRAME_END]) + "\n"
+        return frame, {"runtime": runtime, "launcher": launcher}
+
+    def test_installed_bash_frame_accepts_only_a_complete_observation_after_banner(self):
+        frame, expected = self.shell_frame()
+        for banner in ["", "Distro startup notice\n\n",
+                       'To run a command as administrator (user "root"), use "sudo <command>".\n']:
+            with self.subTest(banner=banner):
+                self.assertEqual(qualification.bash_startup_observation(banner + frame, self.home, "nonlogin"), expected)
+
+    def test_installed_bash_frame_rejects_missing_duplicate_malformed_or_wrong_fields(self):
+        frame, expected = self.shell_frame()
+        begin, end = qualification.BASH_FRAME_BEGIN, qualification.BASH_FRAME_END
+        invalid = {
+            "missing begin": frame.replace(begin + "\n", "", 1),
+            "missing end": frame.replace(end + "\n", "", 1),
+            "duplicate begin": begin + "\n" + frame,
+            "duplicate end": frame + end + "\n",
+            "duplicate frame": frame + frame,
+            "reversed markers": frame.replace(begin, "PLACEHOLDER").replace(end, begin).replace("PLACEHOLDER", end),
+            "missing field": frame.replace("READY\n", "", 1),
+            "extra field": frame.replace(end, "unexpected\n" + end, 1),
+            "trailing noise": frame + "unexpected\n",
+            "wrong readiness": frame.replace("READY\n", "NOT_READY\n", 1),
+            "wrong home": frame.replace(str(self.home) + "\n", "/tmp/wrong-home\n", 1),
+            "empty home": frame.replace(str(self.home) + "\n", "\n", 1),
+            "legacy runtime": frame.replace(expected["runtime"], "/tmp/legacy/runtime"),
+            "empty runtime": frame.replace(expected["runtime"], ""),
+            "shadowed launcher": frame.replace(expected["launcher"], "/usr/local/bin/com8-workstation"),
+        }
+        for label, output in invalid.items():
+            with self.subTest(label=label), self.assertRaises(RuntimeError):
+                qualification.bash_startup_observation(output, self.home, "fixture")
+
+    def test_installed_bash_frame_keeps_real_startup_function_and_launcher_checks(self):
+        self.install(["terminal", "mesh"])
+        for label, args in [("nonlogin", ["--noprofile", "-ic"]), ("login", ["-lic"])]:
+            result = self.run_tool(BASH, *args, qualification.BASH_STARTUP_COMMAND)
+            observation = qualification.bash_startup_observation(result.stdout, self.home, label)
+            self.assertEqual(observation["launcher"], str(self.home / ".local/bin/com8-workstation"))
+        missing = self.run_tool(BASH, "--noprofile", "-ic", "unset -f cx; " + qualification.BASH_STARTUP_COMMAND, check=False)
+        self.assertEqual(missing.returncode, 9)
+        self.assertNotIn(qualification.BASH_FRAME_BEGIN, missing.stdout)
+        shadowed = self.run_tool(BASH, "--noprofile", "-ic",
+                                 "com8-workstation() { :; }; " + qualification.BASH_STARTUP_COMMAND)
+        with self.assertRaisesRegex(RuntimeError, "launcher is shadowed"):
+            qualification.bash_startup_observation(shadowed.stdout, self.home, "fixture")
 
     def test_preview_and_migration_are_read_only(self):
         self.assertTrue(self.profile.plan(["terminal"]))
