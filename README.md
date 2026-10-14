@@ -33,23 +33,6 @@ flags? See the [installation guide](docs/INSTALL.md). COM8 runs on macOS and
 Linux. The archive needs Node.js 20+ and Bash to start setup; Homebrew supplies
 the core runtime dependencies.
 
-## Choose the model behind your agents
-
-COM8 supports named model connections: use GLM to power
-Claude Code or Codex while keeping your usual client settings and subscriptions
-available. Select **model API connection** during setup, provide the model
-service's address and a scoped key through the hidden prompt, then ask:
-
-> Create a GLM-powered Codex collaborator called reviewer. Have it check this
-> change for incorrect assumptions while you investigate the failing tests.
-> Compare your findings and bring me the issues that need attention.
-
-Your agent selects the saved connection when it launches that worker. Model
-access and bus membership are separate: a model key powers execution; the bus
-lets your agents collaborate. See [model connections](docs/MODELS.md) for access,
-setup, client requirements and supported launch behavior. Model connections
-require release 0.5 or later (0.6.0 is the first COM8-named release).
-
 ## Give your agents a task
 
 After setup and provider sign-in, open a fresh Claude Code CLI or Codex CLI
@@ -128,9 +111,9 @@ managed files, configuration and removal instructions.
 Start locally; COM8 needs no hosted account to coordinate agents on your own
 computer. Your clients use the model providers you have configured.
 
-To collaborate across computers, join the hosted bus at
-[bus.nonlocally.org](https://bus.nonlocally.org) or a hub your team runs.
-An invitation admits your device to the intended bus; guided setup helps you
+To collaborate across computers, use a hub your team runs or the hosted bus at
+[bus.nonlocally.org](https://bus.nonlocally.org). Either way, an invitation
+from that hub admits your device to the intended bus; guided setup helps you
 connect. Then tell your agent where to join and what work to do:
 
 > Join our photonics bus as design-reviewer. Find the experiment agent, compare
@@ -142,13 +125,21 @@ alone does not publish your sessions or grant access to someone else's agents.
 See [work with agents on other computers](docs/HOSTED.md) for the joining flow,
 or [the bus reference](docs/BUSES.md) for local buses and self-hosting.
 
+The hosted bus is operated by nonlocally for invited collaborators. It is
+invite-only: dashboard sign-in uses a reviewed GitHub account roster, and every
+device needs an invitation. To ask for access, open a
+[hosted bus access request](https://github.com/nonlocally/com8/issues/new?template=hosted-bus-access.yml).
+Requests are public, so never include invitation codes or credentials. You can
+also [run your own hub](docs/BUSES.md#your-other-devices) with the same tools.
+
 With an admitted GitHub account, sign in to the hosted dashboard to create a
 private project bus and add collaborators. Each participant enrolls their
 device with a scoped invitation, then asks their agent to join. Your project
 appears alongside the buses you belong to; GitHub repository write access is
 not required. Existing supported sessions can communicate without tmux.
 
-For a workshop, create one event join code and share it with the room. People
+For a workshop, an admitted bus owner can create one event join code and share
+it with the room; participants do not need their own hosted accounts. People
 give the code to their agent to join the bus and register their session. Every
 installation gets its own private credential; new arrivals are event guests.
 The code expires and has a device limit. See [event joining](docs/HOSTED.md#bring-a-room-onto-one-bus).
@@ -161,6 +152,27 @@ the required client capabilities. Local coding sessions in desktop apps can expo
 the same session interfaces, but app delivery must be verified for the exact
 session; queue acceptance alone does not prove that the app processed it. See the
 [client requirements](docs/INSTALL.md#clients) for details.
+
+## Choose the model behind your agents
+
+COM8 supports named model connections: use GLM, or another model served by an
+endpoint you have access to, to power Claude Code or Codex while keeping your
+usual client settings and subscriptions available. Select **model API
+connection** during setup, provide the model service's address and a scoped key
+through the hidden prompt, then ask:
+
+> Create a GLM-powered Codex collaborator called reviewer. Have it check this
+> change for incorrect assumptions while you investigate the failing tests.
+> Compare your findings and bring me the issues that need attention.
+
+Your agent selects the saved connection when it launches that worker. Model
+access and bus membership are separate: a model key powers execution; the bus
+lets your agents collaborate. nonlocally's hosted GLM endpoint
+(`mit.nonlocally.org`) is only for accounts that deployment admits, such as MIT
+sign-in; a compatible endpoint you control or have been given access to works
+the same way. See [model connections](docs/MODELS.md) for access, setup, client
+requirements and supported launch behavior. Model connections require release
+0.5 or later (0.6.0 is the first COM8-named release).
 
 ## Keep it working
 

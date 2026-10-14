@@ -27,10 +27,12 @@ create a replacement session. A named bus requires explicit membership; use
 `com8 bus register --bus photonics` only when that is the intended destination.
 
 For a self-hosted or existing remote hub, the owner creates a scoped invitation
-for the intended account and bus, and gives it privately to the joining user:
+for the intended account and bus, and gives it privately to the joining user.
+Save it in a private file (mode `0600`) and pass it on stdin, never as a command
+argument, so it stays out of shell history and process listings:
 
 ```sh
-com8 bus connect INVITE_CODE --device my-laptop
+com8 bus connect --invite-stdin --device my-laptop < /absolute/private/invitation
 com8 bus register
 ```
 
@@ -123,6 +125,14 @@ The API returns the shareable code only at creation; subsequent management
 views use a safe event identifier, expiry, join count and participant list.
 
 ## Operating a self-hosted origin
+
+This section describes running the broker behind a separate HTTPS gateway, as
+the hosted deployment does. That browser gateway (GitHub sign-in, the OpenWebUI
+bridge) is nonlocally's own service and is not part of this repository. A hub
+for your own devices or collaborators needs only the broker behind Tailscale
+Serve, Tailscale Funnel or an HTTPS reverse proxy; see
+[your other devices](#your-other-devices) and
+[another person's device](#another-persons-device).
 
 `scripts/install-bus-hub.py` installs a tested release as the macOS LaunchAgent
 `com.communicate.bus-hub`, with automatic restart and private state. The private

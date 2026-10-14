@@ -21,6 +21,15 @@ For a new worker, inspect com8_status and com8_agents; start the local daemon wh
 A stored message, queue receipt and model reply are different results. Queueing does not prove consumption or desktop wake. Report held, refused, unavailable or timed-out delivery without blind retries. A process restart does not prove restored conversation state; legacy natural-reply fallback is not explicit correlation. Terminal input is separate permission to execute commands; remote seat control and keyboard relay require their existing grants. Claim release, process termination and deletion of saved data remain distinct. Terminal/mesh profiles are optional; the bus dashboard, graph and human inbox remain available.`;
 const identityName = z.string().regex(/^[a-z0-9][a-z0-9._-]*$/);
 const seconds = z.number().min(0.1).max(600);
+// The CLI prints the dashboard link with this device's bus credential in its
+// fragment. That link belongs in the person's own browser, never in a transcript.
+const dashboardResult = (out, a) => {
+  let origin;
+  try { origin = new URL(out.trim()).origin; } catch { return "The bus dashboard link could not be read; run com8 bus dashboard --open in a terminal on this computer."; }
+  return a.open
+    ? `Asked this computer's default browser to open the bus dashboard at ${origin}. Its link carries this device's bus credential, so it is not shown here. If nothing opened, for example on a remote or headless machine, run com8 bus dashboard in a terminal there.`
+    : `Bus dashboard: ${origin}. Its link carries this device's bus credential, so it is not returned here. Call bus_dashboard with open: true to open it in this computer's browser, or run com8 bus dashboard --open in a terminal on this computer.`;
+};
 
 const TOOLS = [
   { name: "agents_list", desc: "Legacy socket routing table (separate from explicit bus membership): local Claude sessions, bridged remotes, and Codex peers with status, working dir, and DESCRIPTION — each session's own chat title. Match intent against descriptions, then address by exact name.", schema: { json: z.boolean().optional().describe("machine-readable rows incl. sockets") }, argv: (a) => a.json ? ["agents", "--json"] : ["agents"] },
@@ -39,7 +48,7 @@ const TOOLS = [
   { name: "bus_send", desc: "Initiate a conversation with a published recipient. General permits any exact local agent on an enrolled device without publishing the sender; private buses require both agents to join. Use bus_reply for answers. Returns a receipt, not an agent answer.", schema: { target: z.string(), message: z.string(), bus: z.string().optional(), from: z.string().optional().describe("self (default), or sender registration ID owned by this device"), hub: z.string().optional().describe("connected broker origin, or local; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "send", a.target, "--bus", a.bus ?? "general", "--from", a.from ?? "self", "--", a.message] },
   { name: "bus_receipt", desc: "Inspect delivery status for a bus message receipt. Distinguishes gateway acceptance from endpoint delivery or Codex queueing; does not assert an answer.", schema: { id: z.string(), hub: z.string().optional().describe("connected broker origin, or local; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "receipt", a.id] },
   { name: "bus_status", desc: "Inspect this device's selected broker and worker without starting services. configured:false means this selection has no saved connection; it does not imply that another configured hub is absent.", schema: { hub: z.string().optional().describe("broker origin to inspect, or local; an unconnected origin reports configured:false without starting services") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "status", "--json", "--no-start"] },
-  { name: "bus_dashboard", desc: "Inspect bus_status first, then return an authenticated browser URL for the selected bus interface. Treat its fragment token as a credential; show it only to the requesting user.", schema: { hub: z.string().optional().describe("connected broker origin, or local; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "dashboard"] },
+  { name: "bus_dashboard", desc: "Inspect bus_status first, then open the selected bus interface in this computer's browser (open: true) or report its address. Its authenticated link carries this device's bus credential and is never returned.", schema: { hub: z.string().optional().describe("connected broker origin, or local; selects this operation only"), open: z.boolean().optional().describe("open the authenticated dashboard in this computer's default browser") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "dashboard", ...(a.open ? ["--open"] : [])], result: dashboardResult },
   { name: "bus_create", desc: "Inspect bus_status first, then create a named bus using broker-administrator credentials, including the local owner. Ordinary enrolled device tokens cannot create buses. Admitted hosted users create their own project buses in the signed-in dashboard, then enroll devices and register agents there; see communicate-bus.", schema: { name: z.string(), hub: z.string().optional().describe("connected broker origin, or local; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "create", a.name] },
   { name: "bus_device", desc: "Refresh this installation's device metadata or display name on the selected broker. Stable device identity and administrator-assigned account ownership do not change. Only this machine's hostname, platform, and optional Tailscale Self names are collected.", schema: { name: z.string().optional().describe("new display label for this device"), hub: z.string().optional().describe("connected broker origin, or local; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "device", ...(a.name ? ["--name", a.name] : [])] },
   { name: "bus_reply", desc: "Reply to a message received by this exact agent, within its original participants and bus. The conversation expires 24 hours after initiation; replies do not extend it. This permits replies to unpublished general senders without publishing them.", schema: { id: z.string().describe("received message ID"), message: z.string(), from: z.string().optional().describe("self (default), or original recipient registration ID owned by this device"), hub: z.string().optional().describe("originating connected broker; selects this operation only") }, argv: (a) => ["bus", ...(a.hub ? ["--hub", a.hub] : []), "reply", a.id, "--from", a.from ?? "self", "--", a.message] },
@@ -76,7 +85,10 @@ export async function runServe() {
   for (const t of TOOLS) {
     server.registerTool(t.name, { description: t.desc, inputSchema: t.schema }, async (args) => {
       const a = args ?? {};
-      try { return text(await run(t.argv(a), t.timeoutMs ? t.timeoutMs(a) : undefined)); } catch (e) { return fail(e); }
+      try {
+        const out = await run(t.argv(a), t.timeoutMs ? t.timeoutMs(a) : undefined);
+        return text(t.result ? t.result(out, a) : out);
+      } catch (e) { return fail(e); }
     });
   }
   await server.connect(new StdioServerTransport());

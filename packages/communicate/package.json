@@ -29,11 +29,11 @@
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "prepack": "node scripts/vendor.mjs",
-    "test": "node test/mcp-smoke.mjs && node test/setup-smoke.mjs && node test/launcher-smoke.mjs && node test/onboarding.mjs && node test/model-setup.mjs && node test/bus-setup.mjs && node test/lifecycle-smoke.mjs && node test/service-boundaries.mjs && node test/service-boundaries.mjs --linux-fixture && node test/installer-boundary-smoke.mjs && node test/install-recovery.mjs && node test/codex-restoration.mjs && node test/claude-restoration.mjs"
+    "test": "node test/mcp-smoke.mjs && node test/setup-smoke.mjs && node test/setup-safety.mjs && node test/launcher-smoke.mjs && node test/onboarding.mjs && node test/model-setup.mjs && node test/bus-setup.mjs && node test/lifecycle-smoke.mjs && node test/service-boundaries.mjs && node test/service-boundaries.mjs --linux-fixture && node test/installer-boundary-smoke.mjs && node test/install-recovery.mjs && node test/codex-restoration.mjs && node test/claude-restoration.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "zod": "^3.25.0"
   },
-  "homepage": "https://docs.nonlocally.org"
+  "homepage": "https://github.com/nonlocally/com8"
 }

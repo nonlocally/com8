@@ -1,7 +1,7 @@
 // setup/doctor for @aadarwal/communicate — stabilize the payload, register
 // both ecosystems, reversibly. Never touches CLI-owned plugin state files;
 // never hand-edits ~/.codex/config.toml.
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, symlinkSync, renameSync, readlinkSync, realpathSync, chmodSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync, rmSync, symlinkSync, renameSync, readlinkSync, realpathSync, chmodSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { home, dataRoot, currentLink, ledgerPath, readJson, writeJson, hash, lin
 import { communicateCli } from "./paths.mjs";
 import { buildIntegration, removeIntegration } from "./integration.mjs";
 import { readCodexSettings, writeCodexSettings } from "./codex-settings.mjs";
-import { inspectBus, busSummary } from "./bus-setup.mjs";
+import { inspectBus, busSummary, busStateDir, stopBus } from "./bus-setup.mjs";
 
 const pkgDir = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const pkg = JSON.parse(readFileSync(path.join(pkgDir, "package.json"), "utf8"));
@@ -164,11 +164,27 @@ function checkClaudeOwnership(record, snapshot) {
     throw new Error("Claude plugin registration or enablement changed after setup; user changes are preserved. Reconcile the owned registration before setup, rollback or uninstall.");
 }
 
+// The plugins this release's marketplace provides. Another plugin enabled under
+// the same marketplace name stops resolving once that registration points here.
+const shippedPlugins = () => JSON.parse(readFileSync(path.join(pkgDir, "vendor/plugins/.claude-plugin/marketplace.json"), "utf8"))
+  .plugins.map((plugin) => `${plugin.name}@${MARKET_ID}`);
+
 function claudeInstall(dry, integration) {
   const marketRoot = integration ? path.join(integration.root, "plugins") : path.join(currentLink(), "vendor", "plugins");
   log(`Claude configuration: ${path.dirname(settingsPath())}${process.env.CLAUDE_CONFIG_DIR ? " (CLAUDE_CONFIG_DIR)" : ""}`);
   if (!executable("claude")) { log("Claude CLI unavailable; rerun com8 setup --claude after installing it."); return false; }
   const s = readSettings();
+  const previous = s.extraKnownMarketplaces?.[MARKET_ID]?.source;
+  const previousSource = previous?.path || previous?.repo || previous?.url;
+  if (previousSource && previousSource !== marketRoot) {
+    const shipped = new Set(shippedPlugins());
+    const stranded = Object.entries(s.enabledPlugins || {})
+      .filter(([id, enabled]) => enabled === true && id.endsWith(`@${MARKET_ID}`) && !shipped.has(id)).map(([id]) => id);
+    if (stranded.length)
+      log(`warning: ${dry ? "setup would replace" : "replacing"} the existing Claude marketplace "${MARKET_ID}" (${previousSource}). ` +
+        `These enabled plugins come from it and stop resolving while COM8 is installed: ${stranded.join(", ")}. ` +
+        `They stay enabled in ${settingsPath()}; com8 uninstall restores the previous marketplace.`);
+  }
   s.extraKnownMarketplaces = { ...(s.extraKnownMarketplaces || {}), [MARKET_ID]: { source: { source: "directory", path: marketRoot } } };
   s.enabledPlugins = { ...(s.enabledPlugins || {}), [PLUGIN_ID]: true };
   writeSettings(s, dry, `add extraKnownMarketplaces.${MARKET_ID} + enabledPlugins["${PLUGIN_ID}"]`);
@@ -414,13 +430,46 @@ function restoreService(record) {
   } else rmSync(record.path, { force: true });
 }
 
-export async function runSetup(argv) {
+// Uninstall keeps people's data; say exactly what stays and where.
+function remainingAfterUninstall() {
+  const lines = [];
+  const busDir = busStateDir();
+  if (existsSync(busDir)) {
+    const bus = inspectBus({ offline: true });
+    lines.push(bus.configured && !bus.local
+      ? `bus: this device stays enrolled at ${bus.hub}; its credential and registrations remain in ${busDir}. Its agents stay listed there until they leave or the hub administrator revokes this device.`
+      : `bus: local registrations and messages remain in ${busDir}`);
+  }
+  const models = process.env.COM8_MODEL_CONFIG || path.join(process.env.XDG_CONFIG_HOME || path.join(home(), ".config"), "com8/models");
+  if (existsSync(models)) lines.push(`model connections and their keys remain in ${models}`);
+  const claudeDir = path.dirname(settingsPath());
+  const backups = existsSync(claudeDir) ? readdirSync(claudeDir).filter((name) => name.startsWith("settings.json.communicate-backup-")).length : 0;
+  if (backups) lines.push(`${backups} private Claude settings backup${backups === 1 ? "" : "s"} remain in ${claudeDir} (settings.json.communicate-backup-*)`);
+  return lines;
+}
+
+// Plain `com8 setup` without a terminal applies its default selection, which
+// automation relies on. Say what that selection does before changing anything.
+function showDefaultPlan(f) {
+  const saved = readJson(ledgerPath());
+  log("No interactive terminal, so setup applies its default plan:");
+  log(`  - stage COM8 ${pkg.version} in ${dataRoot()} and make it current`);
+  if (f.claude) log(executable("claude") ? `  - register COM8 with Claude Code (${settingsPath()})` : "  - skip Claude Code: its CLI is not on PATH");
+  if (f.codex) log(executable("codex") ? `  - register COM8 with Codex (${codexHome()})` : "  - skip Codex: its CLI is not on PATH");
+  log(!f.noService && (f.service || saved.service) ? "  - refresh the installed daemon service" : "  - leave the daemon service unchanged");
+  log("Preview without changes: com8 setup --dry-run. Choose clients with --claude, --codex or --no-clients, or run com8 setup in a terminal for guided setup.");
+}
+
+export async function runSetup(argv, { narratePlan = false } = {}) {
   const f = parseFlags(argv);
   if (!f.uninstall && f.claude) assertManagedPath(settingsPath());
   if (!f.uninstall && f.codex) assertManagedPath(path.join(codexHome(), "config.toml"));
+  if (narratePlan && !f.dryRun && !f.uninstall) showDefaultPlan(f);
   if (f.dryRun) {
     if (f.uninstall) {
       log(`[dry-run] would remove only owned registrations and executable links; preserve ${stateRoot()}`);
+      if (!f.selective && existsSync(busStateDir()))
+        log("[dry-run] would stop the bus worker and any owned local broker; registrations and enrollment are kept");
       const saved = readJson(ledgerPath());
       if (!f.selective) await uninstallService(saved.service, true);
     } else {
@@ -445,6 +494,13 @@ export async function runSetup(argv) {
         delete saved.clients.codex; writeJson(ledgerPath(), saved);
       }
       if (!f.selective && await uninstallService(saved.service)) { delete saved.service; writeJson(ledgerPath(), saved); }
+      // An uninstalled machine must not keep polling a hub or delivering messages.
+      if (!f.selective) {
+        try {
+          const stopped = stopBus();
+          if (stopped) log(stopped === "stopped" ? "stopped the bus worker and any owned local broker" : "the bus worker and local broker are stopping");
+        } catch { log("warning: could not stop the bus worker; run com8 bus stop"); }
+      }
       if (!f.selective) for (const [file, target] of Object.entries(saved.links)) {
         try {
           if (readlinkSync(file) === target) { rmSync(file); delete saved.links[file]; }
@@ -491,6 +547,7 @@ export async function runSetup(argv) {
       writeJson(ledgerPath(), saved);
       log(`uninstalled owned integrations; identities, mail, credentials and configuration preserved at ${stateRoot()}`);
       if (!f.purge) log(`release payloads retained at ${dataRoot()} for rollback/reinstall`);
+      if (!f.selective) for (const line of remainingAfterUninstall()) log(line);
       return;
     }
     const previous = linkTarget();
