@@ -137,15 +137,15 @@ class DeviceMetadataTest(unittest.TestCase):
                 self.assertNotIn(field, request.call_args.kwargs)
 
     def test_connect_prefers_self_dns_label_and_preserves_explicit_name(self):
-        status = {"Self": {"HostName": "Aadarsh’s MacBook Air", "DNSName": "aadarshs-mac-air.tailb77680.ts.net."},
-                  "Peer": {"elsewhere": {"DNSName": "different-device.tailb77680.ts.net."}}}
+        status = {"Self": {"HostName": "Owner’s MacBook Air", "DNSName": "owners-mac-air.example.ts.net."},
+                  "Peer": {"elsewhere": {"DNSName": "different-device.example.ts.net."}}}
         card = base64.urlsafe_b64encode(json.dumps({"url": "https://fixture.example", "invite": "one-time"}).encode()).decode()
         response = {"ok": True, "token": "fixture-token", "principal": "fixture-device", "buses": ["general"]}
         completed = subprocess.CompletedProcess([], 0, json.dumps(status), "")
-        for options, expected in (([], "aadarshs-mac-air"), (["--device", "My explicit device"], "My explicit device")):
+        for options, expected in (([], "owners-mac-air"), (["--device", "My explicit device"], "My explicit device")):
             with self.subTest(options=options), mock.patch("bus.shutil.which", return_value="/fixture/tailscale"), \
                     mock.patch("bus.subprocess.run", return_value=completed) as discovery, \
-                    mock.patch("bus.socket.gethostname", return_value="DHCP-POOL-18-25-26-243.MIT.EDU"), \
+                    mock.patch("bus.socket.gethostname", return_value="DHCP-POOL-0-0-0-1.EXAMPLE.EDU"), \
                     mock.patch("bus.config", return_value={"connections": {}}), \
                     mock.patch("bus.save_connection"), mock.patch("bus.request", return_value=response) as request:
                 bus.run(bus.parser().parse_args(["connect", "commbus1." + card, *options]))
