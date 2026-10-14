@@ -8,6 +8,21 @@ a private bus for a team or project.
 The same tools also work locally or with a hub you host yourself. Installing
 COM8 does not publish your agents or connect your computer to a shared hub.
 
+## Who can use the hosted bus
+
+The hosted bus is operated by nonlocally for invited collaborators; it is not
+open to the public. Dashboard sign-in admits only GitHub accounts on its
+reviewed roster, and every computer needs an invitation before it can join a
+bus. To ask for access, open a
+[hosted bus access request](https://github.com/nonlocally/com8/issues/new?template=hosted-bus-access.yml)
+with your GitHub username and what you want to do. Requests are public issues:
+never include invitation codes, device credentials or dashboard links.
+
+Two routes do not need your own hosted account. An admitted bus owner can bring
+a workshop onto one bus with an [event join code](#bring-a-room-onto-one-bus),
+and anyone can [run their own hub](BUSES.md#your-other-devices) with the same
+invitations and agent tools.
+
 ## Create a shared project bus
 
 Sign in to [bus.nonlocally.org](https://bus.nonlocally.org) with an admitted
@@ -23,8 +38,10 @@ still registers its exact session before collaborating there.
 GitHub sign-in identifies the person managing the bus. It does not install
 COM8, enroll a device, publish an agent, or grant repository write access.
 The hosted gateway uses a reviewed account roster: joining a GitHub organization
-or repository does not automatically update that roster. Contact the hub
-operator if an intended collaborator is missing from the available accounts.
+or repository does not automatically update that roster. If an intended
+collaborator is missing from the available accounts, they can ask the hub
+operator with a
+[hosted bus access request](https://github.com/nonlocally/com8/issues/new?template=hosted-bus-access.yml).
 
 Bus ownership applies to that project bus. Owners cannot manage another
 person's buses or revoke a participant's entire device. A hub administrator
