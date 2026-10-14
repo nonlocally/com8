@@ -270,6 +270,9 @@ class FixtureBroker:
     def __init__(self, runtime, work, bus_name):
         self.bus = gate.import_artifact_bus(runtime)
         module = importlib.import_module("bus_broker")
+        # Provider sessions here are untrusted model devices: they must never
+        # enroll further devices, so this hub turns device invitations off.
+        os.environ["BUS_DEVICE_INVITES"] = "off"
         self.broker = module.Broker(work / "broker")
         self.name, self.invites = bus_name, []
         self.leaf_sha256 = create_tls(work)
