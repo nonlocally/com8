@@ -13,6 +13,8 @@ cleanup(){ jobs -p | xargs kill 2>/dev/null; rm -rf "$STATE"; rm -f "$SOCKDIR"/t
 trap cleanup EXIT
 # Sandbox the sessions dir so we neither read nor pollute the real bus.
 export CLAUDE_CONFIG_DIR="$STATE"
+# Sections 1-5 test the original behaviour; section 6 opts in to the grace period.
+export COMM_ASK_GRACE=0
 
 plant() { # <name> <socket> -> sidecar with live pid, numeric filename
   python3 - "$SESS" "$1" "$2" <<'P'
@@ -83,5 +85,25 @@ for i in $(seq 1 20); do [ -S "$SINK2" ] && break; sleep 0.2; done
 "$CLI" route "test-sink2-$$" --coach "coached broadcast" >/dev/null 2>&1
 wait %% 2>/dev/null
 grep -q "coached broadcast" "$GOT2" && grep -q "\[reply-to router" "$GOT2" && ok "route --coach appends coaching" || fail "route --coach: $(cat "$GOT2")"
+
+echo "6) a reply that misses the timeout is kept, not refused"
+LATE="$SOCKDIR/test-ask-late-$$.sock"; LBOX="$STATE/late-target.jsonl"; LERR="$STATE/late.err"
+plant "test-late-$$" "$LATE"
+python3 "$PY" mailbox --socket "$LATE" --name late --sessions-dir "$SESS" --mailbox "$LBOX" >/dev/null 2>&1 &
+for i in $(seq 1 20); do [ -S "$LATE" ] && break; sleep 0.2; done
+COMM_STATE="$STATE/state" COMM_ASK_GRACE=20 "$CLI" ask "test-late-$$" --timeout 2 --as late-asker "slow question" >/dev/null 2>"$LERR"
+[ $? -eq 2 ] && ok "late ask still times out honestly (exit 2)" || fail "late ask exit code"
+RSOCK="$(grep -o 'uds:[^ ]*\.sock' "$LBOX" | head -1 | cut -c5-)"
+LFILE="$(grep -o '/[^ ]*ask-late/[^ ]*' "$LERR" | head -1)"
+[ -n "$LFILE" ] && ok "timeout message names where a late answer will land" || fail "no late path in: $(cat "$LERR")"
+python3 "$PY" send --to "$RSOCK" --text "LATE-ANSWER" --from /tmp/x.sock --name slow-peer >/dev/null 2>&1 \
+  && ok "late reply is delivered (the reply socket is still listening)" || fail "late reply refused (socket gone)"
+for i in $(seq 1 20); do [ -s "$LFILE" ] && break; sleep 0.2; done
+grep -q "LATE-ANSWER" "$LFILE" 2>/dev/null && ok "late answer saved to $LFILE" || fail "late answer not saved"
+for i in $(seq 1 20); do [ -S "$RSOCK" ] || break; sleep 0.2; done
+[ -S "$RSOCK" ] && fail "late listener still bound after its one reply" || ok "late listener exits after one reply"
+NOGRACE_ERR="$STATE/nograce.err"
+COMM_STATE="$STATE/state" COMM_ASK_GRACE=0 "$CLI" ask "test-late-$$" --timeout 1 --as nograce "q" >/dev/null 2>"$NOGRACE_ERR"
+grep -q 'ask-late' "$NOGRACE_ERR" && fail "COMM_ASK_GRACE=0 still promised a late file" || ok "COMM_ASK_GRACE=0 keeps the old behaviour"
 
 [ "$fails" -eq 0 ] && echo "PASS: ask + in-band coaching, both lanes" || { echo "FAIL: $fails"; exit 1; }

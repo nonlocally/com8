@@ -26,6 +26,10 @@ sys.stdout.write(best or "")
 PY
 }
 
+# Stop a reply listener: with a grace period it runs inside a subshell, so its
+# python child is stopped by parent pid as well.
+_ask_stop() { pkill -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; }
+
 ask_cmd() {
   comm_need_python
   local name="${1:-}"; shift || true
@@ -54,14 +58,28 @@ ask_cmd() {
   fi
   [ -n "$lane" ] || die "no agent or local codex session named '$name' (see: communicate agents; codex sessions come from ~/.codex/session_index.jsonl)"
 
-  # The reply listener: ephemeral socket + planted numeric sidecar.
+  # The reply listener: ephemeral socket + planted numeric sidecar. It outlives
+  # the ask by COMM_ASK_GRACE seconds (0 = no grace), so an answer that misses
+  # the timeout is saved to a file instead of hitting a removed socket.
+  local grace="${COMM_ASK_GRACE:-600}"
+  case "$grace" in ''|*[!0-9]*) die "COMM_ASK_GRACE must be whole seconds, got '$grace'";; esac
   local rsock; rsock="$(comm_socket_dir)/ask-$$-$RANDOM.sock"
-  local out; out="$(mktemp)"
-  python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$timeout" --unwrap \
-    --plant-name "$asker" --sessions-dir "$(comm_sessions_dir)" >"$out" 2>/dev/null &
+  local out
+  if [ "$grace" -gt 0 ]; then
+    mkdir -p "$COMM_STATE/ask-late" && chmod 700 "$COMM_STATE/ask-late" 2>/dev/null
+    out="$(mktemp "$COMM_STATE/ask-late/$asker-XXXXXX")"
+    # Wrapped so a listener that never gets an answer leaves no empty file.
+    ( python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$((${timeout%.*} + grace))" --unwrap \
+        --plant-name "$asker" --sessions-dir "$(comm_sessions_dir)" >"$out" 2>/dev/null
+      [ -s "$out" ] || rm -f "$out" ) &
+  else
+    out="$(mktemp)"
+    python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$timeout" --unwrap \
+      --plant-name "$asker" --sessions-dir "$(comm_sessions_dir)" >"$out" 2>/dev/null &
+  fi
   local rpid=$!
   local i=0; while [ ! -S "$rsock" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
-  [ -S "$rsock" ] || { kill "$rpid" 2>/dev/null; rm -f "$out"; die "reply listener failed to start"; }
+  [ -S "$rsock" ] || { _ask_stop "$rpid"; rm -f "$out"; die "reply listener failed to start"; }
 
   local coached="$question
 
@@ -71,19 +89,30 @@ $(comm_coach_text "$asker" "$rsock")"
     claude)
       log "ask -> $name [claude] (reply listener: $asker)"
       python3 "$CC_PEER_PY" send --to "$sock" --text "$coached" --from "$rsock" --name "$asker" \
-        || { kill "$rpid" 2>/dev/null; rm -f "$out"; die "delivery failed"; };;
+        || { _ask_stop "$rpid"; rm -f "$out"; die "delivery failed"; };;
     codex)
       log "ask -> $name [codex session $thread] (reply listener: $asker)"
       codex_queue local "$thread" -- "$coached" >/dev/null \
-        || { kill "$rpid" 2>/dev/null; rm -f "$out"; die "codex queue failed"; };;
+        || { _ask_stop "$rpid"; rm -f "$out"; die "codex queue failed"; };;
   esac
 
-  local rc=0; wait "$rpid" || rc=$?
-  if [ "$rc" = 0 ] && [ -s "$out" ]; then
+  # Wait up to the timeout for the first reply; the listener may run on past it.
+  local ticks=$(( ${timeout%.*} * 5 )); i=0
+  while [ "$i" -lt "$ticks" ] && [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; do
+    sleep 0.2; i=$((i+1))
+  done
+  if [ -s "$out" ]; then
+    wait "$rpid" 2>/dev/null
     cat "$out"; echo
     rm -f "$out"; return 0
   fi
-  rm -f "$out"
-  log "no reply within ${timeout}s — the question WAS delivered; the answer may arrive later (codex: check that session's UI/history)"
+  if [ "$grace" -gt 0 ] && kill -0 "$rpid" 2>/dev/null; then
+    disown "$rpid" 2>/dev/null || true
+    log "no reply within ${timeout}s — the question WAS delivered; a reply in the next ${grace}s will be saved to $out"
+  else
+    _ask_stop "$rpid"; wait "$rpid" 2>/dev/null
+    rm -f "$out"
+    log "no reply within ${timeout}s — the question WAS delivered; the answer may arrive later (codex: check that session's UI/history)"
+  fi
   return 2
 }
