@@ -65,12 +65,13 @@ ask_cmd() {
   local grace="${COMM_ASK_GRACE:-600}"
   case "$grace" in ''|*[!0-9]*) die "COMM_ASK_GRACE must be whole seconds, got '$grace'";; esac
   local rsock; rsock="$(comm_socket_dir)/ask-$$-$RANDOM.sock"
-  local out
+  local out started
   if [ "$grace" -gt 0 ]; then
     local late_dir="$COMM_STATE/ask-late" tag="${asker//[^A-Za-z0-9._-]/_}" total
     mkdir -p "$late_dir" && chmod 700 "$late_dir" 2>/dev/null
     out="$(mktemp "$late_dir/$tag-XXXXXX")" || die "cannot create a late-reply file in $late_dir"
     total="$(awk -v t="$timeout" -v g="$grace" 'BEGIN { print t + g }')"
+    started=$SECONDS
     # Wrapped so a listener that never gets an answer leaves no empty file. Its
     # stdio is detached: a caller capturing this ask's output must not have to
     # wait out the grace period too.
@@ -109,9 +110,11 @@ $(comm_coach_text "$asker" "$rsock")"
       sleep 0.2; i=$((i+1))
     done
     if [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; then
-      # Timed out with the listener still up: leave it to save a late reply.
+      # Timed out with the listener still up: leave it to save a late reply. Its
+      # deadline runs from its start, so time spent delivering comes off the window.
       disown "$rpid" 2>/dev/null || true
-      log "no reply within ${timeout}s — the question WAS delivered; a reply in the next ${grace}s will be saved to $out"
+      local left; left="$(awk -v t="$total" -v e="$((SECONDS - started))" 'BEGIN { r = int(t - e); print (r > 0 ? r : 0) }')"
+      log "no reply within ${timeout}s — the question WAS delivered; a reply in the next ${left}s will be saved to $out"
       return 2
     fi
   fi

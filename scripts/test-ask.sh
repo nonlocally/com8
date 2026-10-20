@@ -13,7 +13,7 @@ cleanup(){ jobs -p | xargs kill 2>/dev/null; rm -rf "$STATE"; rm -f "$SOCKDIR"/t
 trap cleanup EXIT
 # Sandbox the sessions dir so we neither read nor pollute the real bus.
 export CLAUDE_CONFIG_DIR="$STATE"
-# Sections 1-5 test the original behaviour; sections 6-7 opt in to the grace period.
+# Sections 1-5 test the original behaviour; sections 6-8 opt in to the grace period.
 export COMM_ASK_GRACE=0
 # Late-reply files (and everything else under COMM_STATE) stay out of the real state dir.
 export COMM_STATE="$STATE/state"
@@ -109,17 +109,54 @@ COMM_ASK_GRACE=0 "$CLI" ask "test-late-$$" --timeout 1 --as nograce "q" >/dev/nu
 grep -q 'ask-late' "$NOGRACE_ERR" && fail "COMM_ASK_GRACE=0 still promised a late file" || ok "COMM_ASK_GRACE=0 keeps the old behaviour"
 
 echo "7) the grace listener is detached, and --timeout is honoured as given"
-FAST="$SOCKDIR/test-ask-fast-$$.sock"
-plant "test-fast-$$" "$FAST"
-python3 "$PY" respond --socket "$FAST" --reply "FAST-42" --name fast-peer --timeout 30 >/dev/null 2>&1 &
-for i in $(seq 1 20); do [ -S "$FAST" ] && break; sleep 0.2; done
 T0=$SECONDS
 CAP="$(COMM_ASK_GRACE=5 "$CLI" ask "test-late-$$" --timeout 1 --as "cap/tured" "q" 2>"$STATE/cap.err")"; RC=$?
 [ "$RC" -eq 2 ] && [ -z "$CAP" ] && [ $((SECONDS - T0)) -lt 4 ] \
   && ok "\$(ask ...) returns at the timeout, not after the grace period" || fail "captured ask: rc=$RC after $((SECONDS - T0))s, out='$CAP'"
 grep -q 'ask-late/cap_tured-' "$STATE/cap.err" && ok "late file name is safe for any --as name" || fail "late path: $(cat "$STATE/cap.err")"
-OUT="$(COMM_ASK_GRACE=5 "$CLI" ask "test-fast-$$" --timeout 0.5 "quick one" 2>/dev/null)"
-case "$OUT" in FAST-42*) ok "a decimal --timeout still collects a prompt reply";; *) fail "decimal timeout got: '$OUT'";; esac
-"$CLI" ask "test-fast-$$" --timeout 1.5.2 "x" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a malformed --timeout dies" || fail "malformed timeout exit code"
+# A peer that answers 0.3 s after the question lands: inside a 0.9 s timeout,
+# but too late for a wait that truncates 0.9 to 0.
+( for i in $(seq 1 100); do
+    S="$(grep -o 'reply-to decimal-check uds:[^ ]*\.sock' "$LBOX" | head -1 | sed 's/.*uds://')"
+    [ -n "$S" ] && break; sleep 0.05
+  done
+  sleep 0.3
+  python3 "$PY" send --to "$S" --text "SLOW-42" --from /tmp/x.sock --name slow-peer >/dev/null 2>&1 ) &
+OUT="$(COMM_ASK_GRACE=5 "$CLI" ask "test-late-$$" --timeout 0.9 --as decimal-check "slow one" 2>/dev/null)"
+case "$OUT" in SLOW-42*) ok "a decimal --timeout waits its full length";; *) fail "decimal timeout got: '$OUT'";; esac
+ERR="$(COMM_ASK_GRACE=5 "$CLI" ask "test-late-$$" --timeout 1.5.2 "x" 2>&1 >/dev/null)"; RC=$?
+[ "$RC" -eq 1 ] && grep -q -- '--timeout takes seconds' <<<"$ERR" && ok "a malformed --timeout dies" || fail "malformed timeout: rc=$RC, $ERR"
+
+echo "8) the late window is on by default, stopped on failure, and promised honestly"
+( unset COMM_ASK_GRACE; "$CLI" ask "test-late-$$" --timeout 1 --as default-grace "q" >/dev/null 2>"$STATE/default.err" )
+LEFT="$(grep -o 'next [0-9]*s' "$STATE/default.err" | tr -dc 0-9)"
+grep -q 'ask-late/default-grace-' "$STATE/default.err" && [ "${LEFT:-0}" -ge 595 ] && [ "$LEFT" -le 600 ] \
+  && ok "the grace period is on by default, for 600s" || fail "default grace: $(cat "$STATE/default.err")"
+# One reply ends that listener now rather than ten minutes from now.
+SOCK="$("$CLI" whereis default-grace 2>/dev/null | cut -f3)"
+[ -n "$SOCK" ] && python3 "$PY" send --to "$SOCK" --text "done" --from /tmp/x.sock --name t >/dev/null 2>&1
+plant "test-gone-$$" "$SOCKDIR/test-ask-gone-$$.sock"   # nothing listens there
+COMM_ASK_GRACE=5 "$CLI" ask "test-gone-$$" --timeout 1 --as stop-check "x" >/dev/null 2>&1; RC=$?
+SOCK="$("$CLI" whereis stop-check 2>/dev/null | cut -f3)"
+if [ "$RC" -eq 1 ] && ! { [ -n "$SOCK" ] && python3 "$PY" send --to "$SOCK" --text "x" --from /tmp/x.sock --name t >/dev/null 2>&1; }; then
+  ok "a failed delivery stops the grace listener"
+else
+  fail "failed delivery: rc=$RC, a listener still answers at '$SOCK'"
+fi
+[ -n "$SOCK" ] && rm -f "$SOCK"   # the stopped listener leaves its socket file behind
+mkdir -p "$STATE/slowbin"
+cat > "$STATE/slowbin/codex" <<'STUB'
+#!/usr/bin/env bash
+[ "${1:-}" = "--version" ] && { echo "codex-cli 0.151.0-stub"; exit 0; }
+sleep 3
+STUB
+chmod +x "$STATE/slowbin/codex"
+COMM_ASK_GRACE=20 COMM_CODEX_PATH="$STATE/slowbin" COMM_CODEX_INDEX="$IDX" \
+  "$CLI" ask cq-target --timeout 1 --as slow-lane "q" >/dev/null 2>"$STATE/slow.err"
+LEFT="$(grep -o 'next [0-9]*s' "$STATE/slow.err" | tr -dc 0-9)"
+[ "${LEFT:-99}" -ge 10 ] && [ "${LEFT:-99}" -le 18 ] \
+  && ok "the promised late window allows for a slow delivery" || fail "promised ${LEFT:-no}s of 21 after a 3 s delivery: $(cat "$STATE/slow.err")"
+SOCK="$("$CLI" whereis slow-lane 2>/dev/null | cut -f3)"
+[ -n "$SOCK" ] && python3 "$PY" send --to "$SOCK" --text "done" --from /tmp/x.sock --name t >/dev/null 2>&1
 
 [ "$fails" -eq 0 ] && echo "PASS: ask + in-band coaching, both lanes" || { echo "FAIL: $fails"; exit 1; }
