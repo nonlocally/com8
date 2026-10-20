@@ -28,6 +28,7 @@ bash "$ROOT/scripts/test-com8-adopt.sh"
 for suite in com8-seat-menu com8-core com8-seat com8-spawn com8-ask com8-link com8-seat-link com8-pair com8-connect; do
   bash "$ROOT/scripts/test-$suite.sh"
 done
+bash "$ROOT/scripts/test-ask.sh"
 bash "$ROOT/scripts/test-bus.sh"
 node "$ROOT/scripts/test-com8-mcp-interface.mjs"
 npm --prefix "$ROOT/packages/communicate" test

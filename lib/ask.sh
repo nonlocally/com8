@@ -45,6 +45,7 @@ ask_cmd() {
     esac
   done
   [ "${#msg[@]}" -gt 0 ] || die "empty question"
+  case "$timeout" in ''|.|*[!0-9.]*|*.*.*) die "--timeout takes seconds (whole or decimal), got '$timeout'";; esac
   local asker="${as:-ask-$$}"
   local question; question="$(printf '%s ' "${msg[@]}")"; question="${question% }"
 
@@ -66,12 +67,16 @@ ask_cmd() {
   local rsock; rsock="$(comm_socket_dir)/ask-$$-$RANDOM.sock"
   local out
   if [ "$grace" -gt 0 ]; then
-    mkdir -p "$COMM_STATE/ask-late" && chmod 700 "$COMM_STATE/ask-late" 2>/dev/null
-    out="$(mktemp "$COMM_STATE/ask-late/$asker-XXXXXX")"
-    # Wrapped so a listener that never gets an answer leaves no empty file.
-    ( python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$((${timeout%.*} + grace))" --unwrap \
+    local late_dir="$COMM_STATE/ask-late" tag="${asker//[^A-Za-z0-9._-]/_}" total
+    mkdir -p "$late_dir" && chmod 700 "$late_dir" 2>/dev/null
+    out="$(mktemp "$late_dir/$tag-XXXXXX")" || die "cannot create a late-reply file in $late_dir"
+    total="$(awk -v t="$timeout" -v g="$grace" 'BEGIN { print t + g }')"
+    # Wrapped so a listener that never gets an answer leaves no empty file. Its
+    # stdio is detached: a caller capturing this ask's output must not have to
+    # wait out the grace period too.
+    ( python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$total" --unwrap \
         --plant-name "$asker" --sessions-dir "$(comm_sessions_dir)" >"$out" 2>/dev/null
-      [ -s "$out" ] || rm -f "$out" ) &
+      [ -s "$out" ] || rm -f "$out" ) </dev/null >/dev/null 2>&1 &
   else
     out="$(mktemp)"
     python3 "$CC_PEER_PY" recv --socket "$rsock" --timeout "$timeout" --unwrap \
@@ -96,23 +101,29 @@ $(comm_coach_text "$asker" "$rsock")"
         || { _ask_stop "$rpid"; rm -f "$out"; die "codex queue failed"; };;
   esac
 
-  # Wait up to the timeout for the first reply; the listener may run on past it.
-  local ticks=$(( ${timeout%.*} * 5 )); i=0
-  while [ "$i" -lt "$ticks" ] && [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; do
-    sleep 0.2; i=$((i+1))
-  done
+  if [ "$grace" -gt 0 ]; then
+    # Wait up to the timeout for the first reply; the listener may run on past it.
+    local ticks; ticks="$(awk -v t="$timeout" 'BEGIN { n = int(t * 5); if (n < t * 5) n++; print n }')"
+    i=0
+    while [ "$i" -lt "$ticks" ] && [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; do
+      sleep 0.2; i=$((i+1))
+    done
+    if [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; then
+      # Timed out with the listener still up: leave it to save a late reply.
+      disown "$rpid" 2>/dev/null || true
+      log "no reply within ${timeout}s — the question WAS delivered; a reply in the next ${grace}s will be saved to $out"
+      return 2
+    fi
+  fi
+  # Without a grace period the listener exits by itself at the timeout; with one
+  # it has answered or died. Reap it, then read whatever it left: a reply that
+  # lands between the checks above is still the answer, not litter.
+  wait "$rpid" 2>/dev/null || true
   if [ -s "$out" ]; then
-    wait "$rpid" 2>/dev/null
     cat "$out"; echo
     rm -f "$out"; return 0
   fi
-  if [ "$grace" -gt 0 ] && kill -0 "$rpid" 2>/dev/null; then
-    disown "$rpid" 2>/dev/null || true
-    log "no reply within ${timeout}s — the question WAS delivered; a reply in the next ${grace}s will be saved to $out"
-  else
-    _ask_stop "$rpid"; wait "$rpid" 2>/dev/null
-    rm -f "$out"
-    log "no reply within ${timeout}s — the question WAS delivered; the answer may arrive later (codex: check that session's UI/history)"
-  fi
+  rm -f "$out"
+  log "no reply within ${timeout}s — the question WAS delivered; the answer may arrive later (codex: check that session's UI/history)"
   return 2
 }

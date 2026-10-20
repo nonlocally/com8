@@ -13,8 +13,10 @@ cleanup(){ jobs -p | xargs kill 2>/dev/null; rm -rf "$STATE"; rm -f "$SOCKDIR"/t
 trap cleanup EXIT
 # Sandbox the sessions dir so we neither read nor pollute the real bus.
 export CLAUDE_CONFIG_DIR="$STATE"
-# Sections 1-5 test the original behaviour; section 6 opts in to the grace period.
+# Sections 1-5 test the original behaviour; sections 6-7 opt in to the grace period.
 export COMM_ASK_GRACE=0
+# Late-reply files (and everything else under COMM_STATE) stay out of the real state dir.
+export COMM_STATE="$STATE/state"
 
 plant() { # <name> <socket> -> sidecar with live pid, numeric filename
   python3 - "$SESS" "$1" "$2" <<'P'
@@ -91,7 +93,7 @@ LATE="$SOCKDIR/test-ask-late-$$.sock"; LBOX="$STATE/late-target.jsonl"; LERR="$S
 plant "test-late-$$" "$LATE"
 python3 "$PY" mailbox --socket "$LATE" --name late --sessions-dir "$SESS" --mailbox "$LBOX" >/dev/null 2>&1 &
 for i in $(seq 1 20); do [ -S "$LATE" ] && break; sleep 0.2; done
-COMM_STATE="$STATE/state" COMM_ASK_GRACE=20 "$CLI" ask "test-late-$$" --timeout 2 --as late-asker "slow question" >/dev/null 2>"$LERR"
+COMM_ASK_GRACE=20 "$CLI" ask "test-late-$$" --timeout 2 --as late-asker "slow question" >/dev/null 2>"$LERR"
 [ $? -eq 2 ] && ok "late ask still times out honestly (exit 2)" || fail "late ask exit code"
 RSOCK="$(grep -o 'uds:[^ ]*\.sock' "$LBOX" | head -1 | cut -c5-)"
 LFILE="$(grep -o '/[^ ]*ask-late/[^ ]*' "$LERR" | head -1)"
@@ -103,7 +105,21 @@ grep -q "LATE-ANSWER" "$LFILE" 2>/dev/null && ok "late answer saved to $LFILE" |
 for i in $(seq 1 20); do [ -S "$RSOCK" ] || break; sleep 0.2; done
 [ -S "$RSOCK" ] && fail "late listener still bound after its one reply" || ok "late listener exits after one reply"
 NOGRACE_ERR="$STATE/nograce.err"
-COMM_STATE="$STATE/state" COMM_ASK_GRACE=0 "$CLI" ask "test-late-$$" --timeout 1 --as nograce "q" >/dev/null 2>"$NOGRACE_ERR"
+COMM_ASK_GRACE=0 "$CLI" ask "test-late-$$" --timeout 1 --as nograce "q" >/dev/null 2>"$NOGRACE_ERR"
 grep -q 'ask-late' "$NOGRACE_ERR" && fail "COMM_ASK_GRACE=0 still promised a late file" || ok "COMM_ASK_GRACE=0 keeps the old behaviour"
+
+echo "7) the grace listener is detached, and --timeout is honoured as given"
+FAST="$SOCKDIR/test-ask-fast-$$.sock"
+plant "test-fast-$$" "$FAST"
+python3 "$PY" respond --socket "$FAST" --reply "FAST-42" --name fast-peer --timeout 30 >/dev/null 2>&1 &
+for i in $(seq 1 20); do [ -S "$FAST" ] && break; sleep 0.2; done
+T0=$SECONDS
+CAP="$(COMM_ASK_GRACE=5 "$CLI" ask "test-late-$$" --timeout 1 --as "cap/tured" "q" 2>"$STATE/cap.err")"; RC=$?
+[ "$RC" -eq 2 ] && [ -z "$CAP" ] && [ $((SECONDS - T0)) -lt 4 ] \
+  && ok "\$(ask ...) returns at the timeout, not after the grace period" || fail "captured ask: rc=$RC after $((SECONDS - T0))s, out='$CAP'"
+grep -q 'ask-late/cap_tured-' "$STATE/cap.err" && ok "late file name is safe for any --as name" || fail "late path: $(cat "$STATE/cap.err")"
+OUT="$(COMM_ASK_GRACE=5 "$CLI" ask "test-fast-$$" --timeout 0.5 "quick one" 2>/dev/null)"
+case "$OUT" in FAST-42*) ok "a decimal --timeout still collects a prompt reply";; *) fail "decimal timeout got: '$OUT'";; esac
+"$CLI" ask "test-fast-$$" --timeout 1.5.2 "x" >/dev/null 2>&1; [ $? -eq 1 ] && ok "a malformed --timeout dies" || fail "malformed timeout exit code"
 
 [ "$fails" -eq 0 ] && echo "PASS: ask + in-band coaching, both lanes" || { echo "FAIL: $fails"; exit 1; }
