@@ -30,7 +30,9 @@
 #   communicate wake    stop <name|all> | wake ls
 #
 #   communicate ask <name> [--timeout SEC] [--as NAME] <question>
-#                                                sync ask of ANY agent (claude or local codex session)
+#                                                sync ask of ANY agent (claude or local codex session);
+#                                                a reply up to COMM_ASK_GRACE s (default 600, 0 = off)
+#                                                after the timeout is saved to the file the ask names
 #   communicate card {set|show|clear} <name|self> [--what T] [--ask-me-for T]
 #                                                self-described capability; roster DESCRIPTION prefers it
 #   communicate setup-repo [--claude] [--codex] [--dry-run] [--uninstall]
