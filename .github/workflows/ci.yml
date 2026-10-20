@@ -1,6 +1,10 @@
 name: COM8 qualification
 on:
-  # Read the trusted base workflow; only maintainer branches may execute code.
+  # Read the trusted base workflow; only branches of this repository may execute
+  # code. Pushing one takes write access, so the head's location is the trust
+  # signal. author_association is not: a member whose organization membership
+  # is private arrives as NONE in this event's payload, which skipped every
+  # job of PR #21 and failed its qualification.
   pull_request_target:
   push:
     branches: [main]
@@ -25,7 +29,7 @@ concurrency:
 
 jobs:
   core:
-    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +109,7 @@ jobs:
 
   dashboard:
     needs: core
-    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       group: nonlocally-public-disposable
       labels: [self-hosted, Linux, ARM64, isolated, disposable]
@@ -142,7 +146,7 @@ jobs:
           retention-days: 7
 
   systemd:
-    if: github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))
+    if: github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on:
       group: nonlocally-public-disposable
       labels: [self-hosted, Linux, ARM64, isolated, disposable]
@@ -181,7 +185,7 @@ jobs:
           retention-days: 7
 
   homebrew:
-    if: (github.event_name != 'pull_request_target' || (github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association))) && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/release/com8-public' || (github.event_name == 'workflow_dispatch' && inputs.release_qualification))
+    if: (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/release/com8-public' || (github.event_name == 'workflow_dispatch' && inputs.release_qualification))
     # Canonical install/uninstall requires a clean supported macOS guest.
     runs-on:
       group: nonlocally-public-disposable

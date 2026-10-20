@@ -54,8 +54,10 @@ for fresh evidence directories, absent COM8/provider commands and scoped service
 ownership. A signed claim does not replace provisioner teardown and isolation.
 
 PR checks use `pull_request_target` so a contributor cannot rewrite the admission
-workflow before it runs. Only same-repository PRs by an owner, member or
-collaborator execute their head commit. Forks and other untrusted PRs execute no
+workflow before it runs. Only PRs whose head branch lives in this repository
+execute their head commit: pushing such a branch takes write access, whereas
+`author_association` is not a usable signal because a member whose organization
+membership is private arrives as NONE. Forks and other untrusted PRs execute no
 contributor code automatically; the final `qualification` check fails because
 their qualification jobs did not run. They are unqualified, never a passing test.
 For a reviewed public contribution, a maintainer dispatches the trusted workflow
