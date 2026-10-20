@@ -26,9 +26,10 @@ sys.stdout.write(best or "")
 PY
 }
 
-# Stop a reply listener: with a grace period it runs inside a subshell, so its
-# python child is stopped by parent pid as well.
-_ask_stop() { pkill -P "$1" 2>/dev/null; kill "$1" 2>/dev/null; }
+# Stop a reply listener and, if given, the sleeper timing it: with a grace
+# period the listener runs inside a subshell, so its python child is stopped by
+# parent pid as well.
+_ask_stop() { pkill -P "$1" 2>/dev/null; kill "$1" ${2:+"$2"} 2>/dev/null; }
 
 ask_cmd() {
   comm_need_python
@@ -86,6 +87,10 @@ ask_cmd() {
   local rpid=$!
   local i=0; while [ ! -S "$rsock" ] && [ $i -lt 30 ]; do sleep 0.1; i=$((i+1)); done
   [ -S "$rsock" ] || { _ask_stop "$rpid"; rm -f "$out"; die "reply listener failed to start"; }
+  # A grace listener outlives the timeout, so a sleeper keeps the time instead.
+  # It starts before delivery, as the listener's own timeout does without a grace.
+  local spid=""
+  if [ "$grace" -gt 0 ]; then sleep "$timeout" </dev/null >/dev/null 2>&1 & spid=$!; fi
 
   local coached="$question
 
@@ -95,20 +100,19 @@ $(comm_coach_text "$asker" "$rsock")"
     claude)
       log "ask -> $name [claude] (reply listener: $asker)"
       python3 "$CC_PEER_PY" send --to "$sock" --text "$coached" --from "$rsock" --name "$asker" \
-        || { _ask_stop "$rpid"; rm -f "$out"; die "delivery failed"; };;
+        || { _ask_stop "$rpid" "$spid"; rm -f "$out"; die "delivery failed"; };;
     codex)
       log "ask -> $name [codex session $thread] (reply listener: $asker)"
       codex_queue local "$thread" -- "$coached" >/dev/null \
-        || { _ask_stop "$rpid"; rm -f "$out"; die "codex queue failed"; };;
+        || { _ask_stop "$rpid" "$spid"; rm -f "$out"; die "codex queue failed"; };;
   esac
 
   if [ "$grace" -gt 0 ]; then
-    # Wait up to the timeout for the first reply; the listener may run on past it.
-    local ticks; ticks="$(awk -v t="$timeout" 'BEGIN { n = int(t * 5); if (n < t * 5) n++; print n }')"
-    i=0
-    while [ "$i" -lt "$ticks" ] && [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; do
-      sleep 0.2; i=$((i+1))
+    # Wait for the first reply while the timeout lasts; the listener may run on past it.
+    while [ ! -s "$out" ] && kill -0 "$spid" 2>/dev/null && kill -0 "$rpid" 2>/dev/null; do
+      sleep 0.2
     done
+    kill "$spid" 2>/dev/null
     if [ ! -s "$out" ] && kill -0 "$rpid" 2>/dev/null; then
       # Timed out with the listener still up: leave it to save a late reply. Its
       # deadline runs from its start, so time spent delivering comes off the window.
