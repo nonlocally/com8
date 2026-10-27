@@ -73,6 +73,33 @@ def fixture_module(name):
     return module
 
 
+def start_tls_bridge(fixture, token, respond):
+    """Serve one authenticated fixture endpoint; respond(payload) chooses each JSON answer."""
+    received = []
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+        def do_POST(self):
+            if self.headers.get("Authorization") != "Bearer " + token:
+                self.send_error(401)
+                return
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            received.append(payload)
+            body = json.dumps(respond(payload)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ctx.load_cert_chain(fixture.temp / "cert.pem", fixture.temp / "key.pem")
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, received
+
+
 class Services(unittest.TestCase):
     def setUp(self):
         # The TLS fixture serves clients directly; only the chat helper enables
@@ -181,6 +208,39 @@ class Services(unittest.TestCase):
         with self.broker._connect() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE sender=?", (self.target,)).fetchone()[0], 1)
 
+    def test_answer_to_own_send_is_acknowledged_without_broker_reply(self):
+        self.call("ack", agent=self.target, id=self.envelope["id"], status="queued", lease=self.envelope["lease"])
+        peer = self.call("register", session_key="service:" + str(uuid4()), name="peer", kind="service")["id"]
+        sent = self.call("send", sender=self.target, target=peer, bus="general", message="lemma request")
+        request = self.call("poll", agent=peer)["messages"][0]
+        self.call("reply", sender=peer, id=request["id"], message="lemma answer", request_id="peer-key")
+        answer = self.call("poll", agent=self.target)["messages"][0]
+        # The broker's own correlation: authenticated original recipient, fixed conversation deadline, exact parent.
+        self.assertEqual(answer["sender"]["id"], peer)
+        self.assertEqual(answer["conversation_expires_at"], sent["conversation_expires_at"])
+        self.assertEqual(answer["in_reply_to"], sent["id"])
+        # Only the v2 contract has a terminal response without a reply; the older
+        # scoped consumed extension is not a contract for either version.
+        for version in (1, 2):
+            with self.assertRaises(service.ServiceError):
+                service.validate_response({"pending": False, "consumed": True}, version)
+        self.record["contract_version"] = 2
+        service.enqueue(self.root, self.record, answer)
+        operations = []
+        def acknowledge(record, job):
+            operations.append(job["operation"])
+            return {"pending": False, "disposition": "acknowledge"}
+        now = time.time()
+        self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
+                                         call_bridge=acknowledge, now=now), [])
+        self.assertEqual((self.row()["state"], self.row()["reply"], self.row()["receipt"]), ("acknowledged", None, None))
+        service.advance(self.root, self.registrations, self.connections, self.request,
+                        call_bridge=lambda *_: self.fail("acknowledged job must not be resubmitted"), now=now+6)
+        self.assertEqual(operations, ["deliver"])
+        with self.broker._connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE sender=? AND target=?",
+                                        (self.target, peer)).fetchone()[0], 1)
+
     def test_concurrent_reply_dedup_and_content_conflict(self):
         def reply(_):
             return self.call("reply", sender=self.target, id=self.envelope["id"], message="answer", request_id="stable-key")
@@ -283,34 +343,13 @@ class Services(unittest.TestCase):
         fixture_cls = module.BusClientTest
         fixture_cls.setUpClass()
         fixture = fixture_cls()
-        received = []
         token = "fixture-bridge-token-" + "x" * 40
-        class Handler(http.server.BaseHTTPRequestHandler):
-            def log_message(self, *_):
-                pass
-            def do_POST(self):
-                if self.headers.get("Authorization") != "Bearer " + token:
-                    self.send_error(401)
-                    return
-                payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-                received.append(payload)
-                if version == 2 and payload["envelope"]["in_reply_to"] is not None:
-                    result = {"pending": False, "disposition": "acknowledge"}
-                else:
-                    result = {"pending": True} if payload["op"] == "deliver" else {
-                        "pending": False, "reply": "Qualified fixture service result"}
-                body = json.dumps(result).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(fixture.temp / "cert.pem", fixture.temp / "key.pem")
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
+        def respond(payload):
+            if version == 2 and payload["envelope"]["in_reply_to"] is not None:
+                return {"pending": False, "disposition": "acknowledge"}
+            return {"pending": True} if payload["op"] == "deliver" else {
+                "pending": False, "reply": "Qualified fixture service result"}
+        server, thread, received = start_tls_bridge(fixture, token, respond)
         try:
             env = fixture.env("service-worker")
             self.payload_cli(module, fixture, env, "connect", fixture.code(user="service-account"))
@@ -374,6 +413,60 @@ class Services(unittest.TestCase):
                 with fixture.broker._connect() as db:
                     self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE conversation=?",
                                                 (sent["conversation_id"],)).fetchone()[0], 3)
+        finally:
+            fixture_cls.tearDownClass()
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+
+    def test_cli_service_to_service_exchange_ends_with_an_acknowledged_answer(self):
+        module = fixture_module("test-bus-client")
+        fixture_cls = module.BusClientTest
+        fixture_cls.setUpClass()
+        fixture = fixture_cls()
+        token = "fixture-peer-bridge-token-" + "y" * 40
+        controller_sid, peer_sid = str(uuid4()), str(uuid4())
+        def respond(payload):
+            if payload["service_id"] == peer_sid:
+                return {"pending": False, "reply": "peer answer: " + payload["envelope"]["message"]}
+            return {"pending": False, "disposition": "acknowledge"}
+        server, thread, received = start_tls_bridge(fixture, token, respond)
+        try:
+            env = fixture.env("service-peers")
+            fixture.cli(env, "connect", fixture.code(user="service-account"))
+            token_file = fixture.temp / "peers.token"
+            token_file.write_text(token)
+            token_file.chmod(0o600)
+            endpoint = "https://localhost:%d/bridge" % server.server_port
+            controller = fixture.cli(env, "register-service", "fixture-controller", "--service-id", controller_sid,
+                                     "--endpoint", endpoint, "--token-file", str(token_file), "--contract-version", "2", "--json")
+            peer = fixture.cli(env, "register-service", "fixture-peer", "--service-id", peer_sid,
+                               "--endpoint", endpoint, "--token-file", str(token_file), "--contract-version", "2", "--json")
+            sent = fixture.cli(env, "send", peer["id"], "--from", controller["id"], "--", "nonce-5e1f request")
+            state = Path(env["COMM_STATE"]) / "bus"
+            acknowledged, deadline = [], time.monotonic() + 25
+            while not acknowledged and time.monotonic() < deadline:
+                time.sleep(.2)
+                db = service.journal(state)
+                try:
+                    acknowledged = db.execute("SELECT id FROM jobs WHERE recipient=? AND state='acknowledged'",
+                                              (controller["id"],)).fetchall()
+                finally:
+                    db.close()
+            diagnostics = {name: (state / name).read_text()[-3000:] for name in ("worker.json", "worker.log") if (state / name).exists()}
+            self.assertEqual(len(acknowledged), 1, "answer was not acknowledged: " + repr((received, diagnostics)))
+            time.sleep(4.5)  # Two more worker cycles: nothing may answer the acknowledged answer.
+            ops = {sid: [item["op"] for item in received if item["service_id"] == sid] for sid in (controller_sid, peer_sid)}
+            self.assertEqual(ops, {controller_sid: ["deliver"], peer_sid: ["deliver"]})
+            request = next(item["envelope"] for item in received if item["service_id"] == peer_sid)
+            answer = next(item["envelope"] for item in received if item["service_id"] == controller_sid)
+            self.assertEqual((request["id"], request["sender"]["id"], request["in_reply_to"]), (sent["id"], controller["id"], None))
+            self.assertEqual((answer["sender"]["id"], answer["message"], answer["in_reply_to"]),
+                             (peer["id"], "peer answer: nonce-5e1f request", sent["id"]))
+            self.assertEqual(answer["conversation_expires_at"], sent["conversation_expires_at"])
+            with fixture.broker._connect() as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE sender IN (?,?) AND target IN (?,?)",
+                                            (controller["id"], peer["id"], controller["id"], peer["id"])).fetchone()[0], 2)
         finally:
             fixture_cls.tearDownClass()
             server.shutdown()

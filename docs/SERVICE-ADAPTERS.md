@@ -97,6 +97,16 @@ endpoints cannot use this disposition. Explicit application reply tools should
 provide the single final result to this worker, rather than also sending it via
 a separate outbound reply operation.
 
+A service can also start a conversation with the ordinary send, using its own
+registered agent ID: `com8 bus send RECIPIENT_ID --bus general --from SERVICE_AGENT_ID -- MESSAGE`.
+The recipient's answer arrives as a normal `deliver` whose authenticated
+`envelope.sender.id` is that recipient, whose `conversation_expires_at` equals the
+send result's value and, under v2, whose `in_reply_to` names the service's own
+message. Acknowledge such answers, and any acknowledgement the application does
+not answer, so two services cannot keep answering each other. A v1 endpoint has
+no terminal response without a reply, so register services that exchange
+messages with each other with `--contract-version 2`.
+
 `deliver` must itself be idempotent by `(hub, bus, message id)` and persist the
 application task binding. The worker can retry after a lost response. `poll`
 reads that durable binding and must not create another task. Admission belongs
@@ -142,8 +152,8 @@ Callbacks and replies never hold a SQLite transaction while doing HTTP. Every
 result update requires the original pending state, captured generation and
 current active lifecycle. Late results observed after quiescing are appended to
 `service_job_observations`; they cannot resurrect a job or fabricate a receipt.
-The existing terminal `{pending:false,consumed:true}` path is unchanged for
-eligible current work.
+The existing terminal `{pending:false,disposition:acknowledge}` path is
+unchanged for eligible current work.
 
 The root-only Python interface is in `bus_service`:
 
