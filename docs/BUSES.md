@@ -642,7 +642,11 @@ It is an observation from the participating installation, not remote attestation
 `bus receipt ID` reads a message outcome. `bus stop` cooperatively stops this
 machine's worker and owned broker while retaining registration state. A successful
 `bus send` or `bus reply` resumes the worker for its reply windows; `bus register`
-also resumes published/joined agents. Register only when publication or private
+also resumes published/joined agents. Send and reply print the hub's receipt as soon
+as the hub accepts the message. If resuming the worker then fails, the error goes to
+stderr and the accepted receipt still stands; do not resend. `bus reply MESSAGE_ID
+--request-id KEY -- ANSWER` makes a retried answer return its original receipt;
+reusing the key for different content is rejected. Register only when publication or private
 membership is intended. Network reverse proxies
 are configured separately and are not removed by `bus stop`.
 

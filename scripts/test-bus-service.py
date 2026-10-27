@@ -499,6 +499,63 @@ class Services(unittest.TestCase):
             server.server_close()
             thread.join(2)
 
+    def delivered_service_fixture(self, label):
+        """A CLI-registered service holding one delivered message its bridge leaves pending."""
+        module = fixture_module("test-bus-client")
+        fixture_cls = module.BusClientTest
+        fixture_cls.setUpClass()
+        fixture = fixture_cls()
+        token = "fixture-" + label + "-bridge-token-" + "w" * 40
+        server, thread, received = start_tls_bridge(fixture, token, lambda payload: {"pending": True})
+        def cleanup():
+            fixture_cls.tearDownClass()
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+        self.addCleanup(cleanup)
+        env = fixture.env(label)
+        fixture.cli(env, "connect", fixture.code(user="service-account"))
+        token_file = fixture.temp / (label + ".token")
+        token_file.write_text(token)
+        token_file.chmod(0o600)
+        registered = fixture.cli(env, "register-service", "fixture-" + label, "--service-id", self.sid,
+                                 "--endpoint", "https://localhost:%d/bridge" % server.server_port,
+                                 "--token-file", str(token_file), "--json")
+        requester = fixture.broker.handle(fixture.admin, {"op": "register", "session_key": "fixture-requester",
+                                                          "name": "fixture-requester", "kind": "codex"})["id"]
+        sent = fixture.broker.handle(fixture.admin, {"op": "send", "sender": requester, "bus": "general",
+                                                     "target": registered["id"], "message": "long task"})
+        deadline = time.monotonic() + 25
+        while not received and time.monotonic() < deadline:
+            time.sleep(.2)
+        self.assertTrue(received, "worker did not deliver the fixture message")
+        def replies():
+            with fixture.broker._connect() as db:
+                return [row[0] for row in db.execute("SELECT message FROM messages WHERE sender=? AND target=?",
+                                                     (registered["id"], requester))]
+        return module, fixture, env, registered, sent["id"], replies
+
+    def test_cli_reply_request_id_replays_and_rejects_changed_content(self):
+        _, fixture, env, registered, mid, replies = self.delivered_service_fixture("reply-key")
+        reply = ["reply", mid, "--from", registered["id"], "--request-id", "bridge-final-1", "--"]
+        first = fixture.cli(env, *reply, "final answer")
+        self.assertEqual(fixture.cli(env, *reply, "final answer")["id"], first["id"])
+        self.assertIn("different content", fixture.cli(env, *reply, "different answer", ok=False))
+        self.assertEqual(replies(), ["final answer"])
+
+    def test_cli_reply_reports_accepted_receipt_when_worker_maintenance_fails(self):
+        module, fixture, env, registered, mid, replies = self.delivered_service_fixture("reply-maintenance")
+        fixture.cli(env, "stop")
+        log = Path(env["COMM_STATE"]) / "bus" / "worker.log"
+        log.unlink()
+        log.mkdir()  # The worker can no longer be restarted after the hub accepts the reply.
+        proc = subprocess.run([str(module.ROOT / "bin/communicate"), "bus", "reply", mid, "--from", registered["id"],
+                               "--", "final answer"], env=env, text=True, capture_output=True, timeout=60)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(json.loads(proc.stdout)["id"].startswith("m_"))
+        self.assertIn("message accepted", proc.stderr)
+        self.assertEqual(replies(), ["final answer"])
+
     def test_cli_service_leave_stops_retrying_its_closed_conversations(self):
         module = fixture_module("test-bus-client")
         fixture_cls = module.BusClientTest

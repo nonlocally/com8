@@ -118,7 +118,10 @@ terminal answer before sending `reply` through the existing broker. The new
 optional `request_id` makes that broker operation atomic and idempotent for both
 agent and human replies: retries return the original receipt; reusing a key for
 different content is a conflict. Existing clients without a key retain existing
-behavior. Idempotency replays can return a past receipt but do not create a new
+behavior. A caller answering through the CLI gets the same guarantee with
+`com8 bus reply MESSAGE_ID --from SERVICE_AGENT_ID --request-id KEY -- ANSWER`,
+and the receipt is printed before any local worker maintenance.
+Idempotency replays can return a past receipt but do not create a new
 message or extend a conversation. Fixed destinations and the existing first-send
 ownership, membership and expiry checks remain in force.
 

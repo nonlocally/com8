@@ -1426,9 +1426,16 @@ def run(args):
                     selectors["request_id"] = args.request_id
                 result = request(conn, "send", sender=sender["id"], target=args.target, bus=args.bus,
                                  message=" ".join(args.message), **selectors)
-            retain_reply_adapter(sender, result.get("conversation_expires_at"))
-            start_worker()
-            return result
+            # The hub accepted the message. Emit its receipt before local maintenance so a
+            # failed or interrupted worker start cannot hide the outcome and invite a resend.
+            print(json.dumps(result, indent=2), flush=True)
+            try:
+                retain_reply_adapter(sender, result.get("conversation_expires_at"))
+                start_worker()
+            except (BusError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                print("communicate bus: message accepted; local worker maintenance failed: %s"
+                      % " ".join(str(exc).split())[:200], file=sys.stderr)
+            return None
     if cmd == "receipt":
         return request(conn, "receipt", id=args.id)
     if cmd == "invite":
