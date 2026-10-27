@@ -125,8 +125,11 @@ ownership, membership and expiry checks remain in force.
 Expired jobs do not execute or reply. Application results can remain available
 through a fresh, authorized status request. Leaving a bus or revoking membership
 still closes broker conversations; already delivered work cannot be retracted.
-Completed/expired local jobs are retained for two days; broker reply receipts
-use the existing seven-day retention. Keep journal and enrollment together when
+`com8 bus leave SERVICE_AGENT_ID --bus BUS` also marks that service's pending local
+jobs from that bus as closed, so the worker stops calling the endpoint for them;
+other services and buses are unaffected. Completed, acknowledged, closed and
+expired local jobs are retained for two days; broker reply receipts use the
+existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
 

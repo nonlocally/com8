@@ -1361,6 +1361,10 @@ def run(args):
                     if row["url"] == url and row["id"] == record["id"]:
                         row["buses"] = [b for b in row["buses"] if b != args.bus]
                 write_json(state_dir() / "registrations.json", regs)
+            if record.get("kind") == "service":
+                # The broker closed this adapter's conversations on that bus; stop retrying their jobs.
+                from bus_service import close
+                result["service_jobs_closed"] = close(state_dir(), record, args.bus)
             return result
     if cmd == "retire":
         try:

@@ -241,6 +241,32 @@ class Services(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE sender=? AND target=?",
                                         (self.target, peer)).fetchone()[0], 1)
 
+    def test_close_marks_only_that_recipients_pending_jobs_on_the_left_bus(self):
+        self.record["contract_version"] = 2
+        other = dict(self.record, id="a_" + "0" * 32, service_id=str(uuid4()))
+        service.enqueue(self.root, self.record, self.envelope)
+        service.enqueue(self.root, self.record, dict(self.envelope, id="m_campaign", reply_to="m_campaign", bus="campaign"))
+        service.enqueue(self.root, self.record, dict(self.envelope, id="m_done", reply_to="m_done"))
+        service.enqueue(self.root, other, dict(self.envelope, id="m_other", reply_to="m_other", target=other["id"]))
+        registrations = dict(self.registrations, other=other)
+        now = time.time()
+        service.advance(self.root, registrations, self.connections, self.request, now=now,
+                        call_bridge=lambda record, job: {"pending": False, "disposition": "acknowledge"}
+                        if job["id"] == "m_done" else {"pending": True})
+        self.assertEqual(service.close(self.root, self.record, "general"), 1)
+        self.assertEqual(service.close(self.root, self.record, "general"), 0)
+        db = service.journal(self.root)
+        try:
+            states = {row["id"]: row["state"] for row in db.execute("SELECT id,state FROM jobs")}
+        finally:
+            db.close()
+        self.assertEqual(states, {self.envelope["id"]: "closed", "m_campaign": "pending",
+                                  "m_done": "acknowledged", "m_other": "pending"})
+        called = []
+        service.advance(self.root, registrations, self.connections, self.request, now=now+6,
+                        call_bridge=lambda record, job: called.append(job["id"]) or {"pending": True})
+        self.assertEqual(sorted(called), ["m_campaign", "m_other"])
+
     def test_concurrent_reply_dedup_and_content_conflict(self):
         def reply(_):
             return self.call("reply", sender=self.target, id=self.envelope["id"], message="answer", request_id="stable-key")
@@ -467,6 +493,50 @@ class Services(unittest.TestCase):
             with fixture.broker._connect() as db:
                 self.assertEqual(db.execute("SELECT COUNT(*) FROM messages WHERE sender IN (?,?) AND target IN (?,?)",
                                             (controller["id"], peer["id"], controller["id"], peer["id"])).fetchone()[0], 2)
+        finally:
+            fixture_cls.tearDownClass()
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+
+    def test_cli_service_leave_stops_retrying_its_closed_conversations(self):
+        module = fixture_module("test-bus-client")
+        fixture_cls = module.BusClientTest
+        fixture_cls.setUpClass()
+        fixture = fixture_cls()
+        token = "fixture-leave-bridge-token-" + "z" * 40
+        server, thread, received = start_tls_bridge(fixture, token, lambda payload: {"pending": True})
+        try:
+            env = fixture.env("service-leave")
+            fixture.cli(env, "connect", fixture.code(user="service-account"))
+            token_file = fixture.temp / "leave.token"
+            token_file.write_text(token)
+            token_file.chmod(0o600)
+            registered = fixture.cli(env, "register-service", "fixture-leaving", "--service-id", self.sid,
+                                     "--endpoint", "https://localhost:%d/bridge" % server.server_port,
+                                     "--token-file", str(token_file), "--json")
+            requester = fixture.broker.handle(fixture.admin, {"op": "register", "session_key": "fixture-requester",
+                                                              "name": "fixture-requester", "kind": "codex"})["id"]
+            self.assertTrue(fixture.broker.handle(fixture.admin, {"op": "send", "sender": requester, "bus": "general",
+                                                                  "target": registered["id"], "message": "long task"})["ok"])
+            state = Path(env["COMM_STATE"]) / "bus"
+            def job_state():
+                db = service.journal(state)
+                try:
+                    return [tuple(row) for row in db.execute("SELECT state,operation FROM jobs")]
+                finally:
+                    db.close()
+            deadline = time.monotonic() + 25
+            while job_state() != [("pending", "poll")] and time.monotonic() < deadline:
+                time.sleep(.2)
+            self.assertEqual(job_state(), [("pending", "poll")], repr(received))
+            left = fixture.cli(env, "leave", registered["id"], "--bus", "general")
+            self.assertEqual(left.get("service_jobs_closed"), 1, repr(left))
+            time.sleep(1)  # Let any bridge call already in flight at leave time finish.
+            seen = len(received)
+            time.sleep(7.5)  # Longer than the five-second retry interval plus a worker cycle.
+            self.assertEqual(received[seen:], [])
+            self.assertEqual(job_state(), [("closed", "poll")])
         finally:
             fixture_cls.tearDownClass()
             server.shutdown()
