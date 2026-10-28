@@ -82,7 +82,7 @@ EOF
       printf 'com8: profiles are unavailable in this installation.\n' >&2
       exit 127
     fi
-    exec python3 "$root/profiles/manage.py" "$@"
+    exec python3 -B "$root/profiles/manage.py" "$@"
     ;;
   daemon)
     exec "$root/bin/communicate" com8 "$@"

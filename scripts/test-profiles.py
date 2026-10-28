@@ -101,6 +101,19 @@ class Profiles(unittest.TestCase):
         self.assertTrue(self.profile.migration()["read_only"])
         self.assertEqual(list(self.home.iterdir()), [])
 
+    def test_cli_preview_does_not_create_bytecode_in_fresh_home(self):
+        env = dict(self.env, PYTHONPYCACHEPREFIX=str(self.home / "forced-python-cache"))
+        env.pop("PYTHONDONTWRITEBYTECODE", None)
+        before = qualification.files(self.home)
+        result = self.run_tool(str(ROOT / "bin/com8"), "profile", "preview", "--terminal", "--mesh",
+                               "--accounts", "--box", "--snapshots", env=env)
+        preview = json.loads(result.stdout)
+        self.assertTrue(preview["read_only"])
+        self.assertTrue(preview["actions"])
+        # Force a new cache location: a prewarmed interpreter must not hide
+        # writes performed before profile code itself gets control.
+        self.assertEqual(qualification.files(self.home), before)
+
     def test_install_repeat_upgrade_uninstall_preserve_original_and_user_edits(self):
         rc = self.home / ".bashrc"
         rc.write_text("# my original, no trailing newline")
