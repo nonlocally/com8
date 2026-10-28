@@ -38,6 +38,37 @@ LIB = Path(__file__).resolve().parent
 # Captured once: a running worker must not mistake changed source for code it loaded.
 WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_service.py").read_bytes()).hexdigest()
 TAILSCALE_STATUS_TIMEOUT = 1.5
+# Retirement records kept per hub. A broker retains at most this many of one
+# device's registrations (MAX_RETAINED_AGENTS), retired or not.
+MAX_RETIREMENTS = 1024
+SERVICE_FENCE_PROTOCOL = "service-fence/epoch-v1"
+
+
+def service_epoch(record):
+    """Only explicitly negotiated services carry lifecycle selectors."""
+    if record.get("fence_protocol") != SERVICE_FENCE_PROTOCOL:
+        return None
+    epoch = record.get("epoch")
+    if record.get("kind") != "service" or type(epoch) is not int or not 0 <= epoch < 2**63 - 1:
+        raise BusError("invalid fenced service registration", "conflict")
+    return epoch
+
+
+@contextlib.contextmanager
+def service_effect(record):
+    """Hold the shared actor barrier across an outgoing SERVICE effect."""
+    if record.get("kind") != "service":
+        yield
+        return
+    from bus_service import lifecycle_lock, lifecycle_status
+    root = state_dir()
+    with lifecycle_lock(root, record["url"], record["id"], record["service_id"]):
+        life = lifecycle_status(root, record)
+        epoch = service_epoch(record)
+        if ((life is not None and (life["phase"] != "active" or epoch is None or life["epoch"] != epoch))
+                or (life is None and epoch is not None)):
+            raise BusError("service generation is quiescing or retired", "conflict")
+        yield
 
 
 class BusError(Exception):
@@ -251,6 +282,8 @@ def save_connection(connection, select=True):
 
 def spawn_daemon(command):
     root = state_dir()
+    if command == ["__worker"]:
+        command = [*command, "--comm-state", str(root.resolve().parent)]
     logfile = root / ("broker.log" if command[0] == "__serve" else "worker.log")
     with open(logfile, "a") as log:
         os.chmod(logfile, 0o600)
@@ -446,6 +479,10 @@ def registrations():
     return read_json(state_dir() / "registrations.json", {})
 
 
+def retirements():
+    return read_json(state_dir() / "retirements.json", {})
+
+
 def local_agent(conn, target="self"):
     records = [r for r in registrations().values() if r["url"] == conn["url"]]
     if target == "self":
@@ -465,10 +502,25 @@ def local_agent(conn, target="self"):
 
 
 def active_adapter(record):
+    if record.get("retired"):
+        return False
     return bool(record.get("buses")) or record.get("reply_until", 0) > time.time()
 
 
 def remember_adapter(conn, ident, result, description="", bus=None):
+    if result.get("fence_protocol") == SERVICE_FENCE_PROTOCOL:
+        if result.get("historical_replay"):
+            raise BusError("registration result belongs to a retired historical generation", "conflict")
+        from bus_service import activate_generation, lifecycle_lock
+        record = {**ident, "id": result["id"], "url": canonical_hub(config(), conn["url"]),
+                  "epoch": result["epoch"], "fence_protocol": SERVICE_FENCE_PROTOCOL}
+        with lifecycle_lock(state_dir(), record["url"], record["id"], record["service_id"]):
+            activate_generation(state_dir(), record)
+            return _remember_adapter(conn, ident, result, description, bus)
+    return _remember_adapter(conn, ident, result, description, bus)
+
+
+def _remember_adapter(conn, ident, result, description="", bus=None):
     with locked("registrations"):
         cfg = config()
         url = canonical_hub(cfg, conn["url"])
@@ -478,11 +530,29 @@ def remember_adapter(conn, ident, result, description="", bus=None):
         regs = registrations()
         key = url + "|" + ident["session_key"]
         previous = regs.get(key, {})
+        if previous.get("fence_protocol") == SERVICE_FENCE_PROTOCOL and result.get("fence_protocol") != SERVICE_FENCE_PROTOCOL:
+            raise BusError("service lifecycle protocol cannot be downgraded", "conflict")
+        # The broker's lifecycle epoch orders registration and retirement
+        # responses that arrive here out of order. Hubs without it cannot retire.
+        known = previous.get("epoch", 0) if previous.get("id") == result["id"] else 0
+        epoch = result.get("epoch", known)
+        if previous.get("id") == result["id"] and (epoch < known or (epoch == known and previous.get("retired"))):
+            if previous.get("retired"):
+                raise BusError("this registration was superseded by a later retirement; register again", "conflict")
+            return dict(previous)
+        # A retirement recorded without a local row (lost, or a first registration
+        # still in flight) also fences every response the broker issued before it.
+        fence = max((record["epoch"] for record in retirements().values()
+                     if record["agent"] == result["id"] and canonical_hub(cfg, record["url"]) == url), default=-1)
+        if epoch <= fence:
+            raise BusError("this registration was superseded by a later retirement; register again", "conflict")
         memberships = result.get("buses")
         if memberships is None:
             memberships = sorted(set(previous.get("buses", []) + ([bus] if bus else [])))
         ident.update({"id": result["id"], "url": url, "description": description,
-                      "buses": memberships, "reply_until": previous.get("reply_until", 0)})
+                      "buses": memberships, "reply_until": previous.get("reply_until", 0), "epoch": epoch})
+        if result.get("fence_protocol") == SERVICE_FENCE_PROTOCOL:
+            ident["fence_protocol"] = SERVICE_FENCE_PROTOCOL
         regs[key] = ident
         write_json(state_dir() / "registrations.json", regs)
     return ident
@@ -497,11 +567,39 @@ def retain_reply_adapter(record, expires_at):
         regs = registrations()
         changed = False
         for row in regs.values():
-            if row["url"] == url and row["id"] == record["id"] and expiry > row.get("reply_until", 0):
+            # A cached record from before a retirement must not reactivate the adapter.
+            if (row["url"] == url and row["id"] == record["id"] and not row.get("retired")
+                    and row.get("epoch", 0) == record.get("epoch", 0)
+                    and expiry > row.get("reply_until", 0)):
                 row["reply_until"] = expiry
                 changed = True
         if changed:
             write_json(state_dir() / "registrations.json", regs)
+
+
+def apply_retirement(conn, result):
+    """Record a confirmed retirement unless a later same-ID registration superseded it.
+
+    The record is kept even without a local row, so a delayed response to any
+    earlier registration, including the first, cannot recreate the adapter.
+    """
+    with locked("registrations"):
+        url = canonical_hub(config(), conn["url"])
+        regs = registrations()
+        rows = [row for row in regs.values() if row["url"] == url and row["id"] == result["agent"]]
+        epoch = result.get("epoch", max((row.get("epoch", 0) for row in rows), default=0) + 1)
+        # Write the record before the row: if interrupted, the record alone still fences.
+        key = url + "|" + result["agent"]
+        records = retirements()
+        prior = records.pop(key, {})
+        records[key] = {"url": url, "agent": result["agent"], "epoch": max(epoch, prior.get("epoch", 0))}
+        for stale in [k for k, record in records.items() if record["url"] == url][:-MAX_RETIREMENTS]:
+            del records[stale]
+        write_json(state_dir() / "retirements.json", records)
+        for row in rows:
+            if epoch >= row.get("epoch", 0):
+                row["buses"], row["reply_until"], row["retired"], row["epoch"] = [], 0, True, epoch
+        write_json(state_dir() / "registrations.json", regs)
 
 
 def identify_sender(conn):
@@ -617,6 +715,22 @@ def deliver(record, envelope):
     return "queued", "enqueued in the existing Codex thread; consumption/answer not confirmed"
 
 
+def worker_process_metadata(root):
+    """Best-effort publication; fenced retirement independently verifies the kernel token."""
+    result = {"comm_state": str(Path(root).resolve().parent)}
+    try:
+        from bus_service import consumer_process_identity
+        identity = consumer_process_identity(os.getpid())
+        if isinstance(identity, dict):
+            json.dumps(identity, allow_nan=False)
+            result["process_identity"] = identity
+    except Exception:
+        # Unsupported observation must not stop ordinary legacy/native delivery.
+        # Missing identity is deliberately unqualified for fenced retirement.
+        pass
+    return result
+
+
 def worker():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -635,7 +749,7 @@ def worker():
         status_lock = threading.Lock()
         state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "started_at": time.time(), "state": "starting",
                  "heartbeat_at": 0, "heartbeat_success_at": 0, "adapters": 0,
-                 "heartbeat_errors": [], "delivery_errors": [], "errors": []}
+                 "heartbeat_errors": [], "delivery_errors": [], "errors": [], **worker_process_metadata(root)}
 
         def publish(**updates):
             with status_lock:
@@ -654,7 +768,10 @@ def worker():
             for record in records:
                 if stopping():
                     return 0
-                entries.append({"id": record["id"], "status": current_status(record)})
+                entry = {"id": record["id"], "status": current_status(record)}
+                if service_epoch(record) is not None:
+                    entry["epoch"] = service_epoch(record)
+                entries.append(entry)
             for offset in range(0, len(entries), 128):
                 if stopping():
                     return 0
@@ -710,8 +827,9 @@ def worker():
             db.execute("INSERT OR REPLACE INTO delivered VALUES (?,?,?,?,?)",
                        (record["url"], envelope["id"], outcome, detail, time.time()))
             db.commit()
+            selectors = {"expected_epoch": service_epoch(record)} if service_epoch(record) is not None else {}
             request(conn, "ack", agent=record["id"], id=envelope["id"],
-                    status=outcome, detail=detail, lease=envelope["lease"])
+                    status=outcome, detail=detail, lease=envelope["lease"], **selectors)
 
         try:
             with ThreadPoolExecutor(max_workers=32, thread_name_prefix="bus-delivery") as delivery_pool:
@@ -734,7 +852,10 @@ def worker():
                                 break
                             try:
                                 requested = {aid: active[aid] for aid in ids[offset:offset + 128]}
-                                messages = request(conn, "poll_device", agents=list(requested)).get("messages", [])
+                                epochs = {ident: service_epoch(record) for ident, record in requested.items()
+                                          if service_epoch(record) is not None}
+                                selectors = {"service_epochs": epochs} if epochs else {}
+                                messages = request(conn, "poll_device", agents=list(requested), **selectors).get("messages", [])
                             except (BusError, OSError, ValueError, KeyError) as exc:
                                 errors.append({"hub": url, "error": " ".join(str(exc).split())[:200]})
                                 continue
@@ -972,6 +1093,16 @@ def parser():
     service.add_argument("--bus", default="general")
     service.add_argument("--description", default="")
     service.add_argument("--json", action="store_true")
+    service.add_argument("--expected-agent", help="exact known fenced registration ID")
+    service.add_argument("--expected-epoch", type=int)
+    service.add_argument("--request-id", help="stable idempotency key for this exact registration intent")
+    fence_status = commands.add_parser("service-fence-status", help="read exact owned SERVICE lifecycle capability")
+    fence_status.add_argument("agent")
+    fence_retire = commands.add_parser("service-fence-retire", help="explicit known-ID retirement and journal barrier")
+    fence_retire.add_argument("agent")
+    fence_retire.add_argument("--service-id", required=True)
+    fence_retire.add_argument("--expected-epoch", required=True, type=int)
+    fence_retire.add_argument("--request-id", required=True)
     for name in ("list", "agents", "status"):
         cmd = commands.add_parser(name)
         cmd.add_argument("--json", action="store_true")
@@ -984,12 +1115,20 @@ def parser():
     leave = commands.add_parser("leave")
     leave.add_argument("target", nargs="?", default="self")
     leave.add_argument("--bus", default="general")
+    retire = commands.add_parser("retire", help="leave every bus and release this device's registration quota; "
+                                 "history is kept and the same session can register again")
+    retire.add_argument("target", nargs="?", default="self")
     send = commands.add_parser("send")
     send.add_argument("target")
     send.add_argument("--bus", default="general")
     send.add_argument("--from", dest="sender", default="self")
+    send.add_argument("--expected-sender-epoch", type=int)
+    send.add_argument("--expected-recipient-epoch", type=int)
+    send.add_argument("--request-id")
     send.add_argument("message", nargs="*")
     reply = commands.add_parser("reply", help="reply to a received message within its fixed conversation")
+    reply.add_argument("--expected-sender-epoch", type=int)
+    reply.add_argument("--request-id")
     reply.add_argument("id", help="ID of the received message")
     reply.add_argument("--from", dest="sender", default="self")
     reply.add_argument("message", nargs="*")
@@ -1023,7 +1162,8 @@ def parser():
     for name in ("serve", "__serve"):
         service = commands.add_parser(name)
         service.add_argument("--port", type=int, default=int(os.environ.get("COMM_BUS_PORT", "7433")))
-    commands.add_parser("__worker")
+    internal_worker = commands.add_parser("__worker")
+    internal_worker.add_argument("--comm-state", dest="worker_comm_state", help=argparse.SUPPRESS)
     return p
 
 
@@ -1032,23 +1172,72 @@ def run(args):
     if cmd in ("serve", "__serve"):
         return serve_local(args.port)
     if cmd == "__worker":
+        selected = args.worker_comm_state
+        if selected is not None and (not Path(selected).is_absolute() or str(Path(selected).resolve()) != selected
+                                     or str(state_dir().resolve().parent) != selected):
+            raise BusError("worker scope differs from its configured state")
         return worker()
     if cmd == "stop":
         return stop_services()
     if cmd == "register":
         return register(args)
     if cmd == "register-service":
-        from bus_service import registration
+        from bus_service import credential, registration, lifecycle_lock, lifecycle_status
         ident = registration(args)
         conn = connection(hub=args.hub)
-        result = request(conn, "register", session_key=ident["session_key"], name=ident["name"],
-                         kind="service", description=args.description, bus=args.bus, status="queueable",
-                         device_metadata=device_metadata())
-        ident = remember_adapter(conn, ident, result, args.description, args.bus)
-        start_worker()
-        return {**attribution(result), "ok": True, "id": ident["id"], "name": ident["name"],
-                "bus": args.bus, "hub": ident["url"], "status": "queueable", "kind": "service",
-                "note": "Durable service queue configured; this is not a native session or runtime qualification."}
+        fields = (args.expected_agent, args.expected_epoch, args.request_id)
+        if any(value is not None for value in fields) and not all(value is not None for value in fields):
+            raise BusError("fenced registration requires exact agent, epoch and stable request id")
+        selectors = {"agent": args.expected_agent, "expected_epoch": args.expected_epoch,
+                     "request_id": args.request_id} if args.expected_agent is not None else {}
+        with contextlib.ExitStack() as stack:
+            if selectors:
+                record = {**ident, "id": args.expected_agent, "url": canonical_hub(config(), conn["url"])}
+                stack.enter_context(lifecycle_lock(state_dir(), record["url"], record["id"], record["service_id"]))
+                life = lifecycle_status(state_dir(), record)
+                if (life is None or life["phase"] not in ("active", "retired")
+                        or (life["epoch"] != args.expected_epoch and not
+                            (life["phase"] == "active" and life["epoch"] == args.expected_epoch + 1))):
+                    raise BusError("registration lifecycle precondition changed", "conflict")
+                selectors["service_config_hash"] = hashlib.sha256(json.dumps(
+                    {**{key: ident[key] for key in ("service_id", "endpoint", "token_file")},
+                     "contract_version": ident["contract_version"],
+                     "token_fingerprint": hashlib.sha256(credential(ident["token_file"]).encode()).hexdigest()},
+                    sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            else:
+                selectors["device_metadata"] = device_metadata()
+            result = request(conn, "register", session_key=ident["session_key"], name=ident["name"],
+                             kind="service", description=args.description, bus=args.bus, status="queueable", **selectors)
+            ident = remember_adapter(conn, ident, result, args.description, args.bus)
+            start_worker()
+            return {**attribution(result), "ok": True, "id": ident["id"], "name": ident["name"],
+                    "bus": args.bus, "hub": ident["url"], "status": "queueable", "kind": "service",
+                    **({"fence_protocol": SERVICE_FENCE_PROTOCOL, "epoch": result["epoch"]}
+                       if result.get("fence_protocol") == SERVICE_FENCE_PROTOCOL else {}),
+                    "note": "Durable service queue configured; this is not a native session or runtime qualification."}
+    if cmd == "service-fence-status":
+        conn = connection(hub=args.hub)
+        if not re.fullmatch(r"a_[0-9a-f]{32}", args.agent):
+            raise BusError("service fence status requires an exact registration ID")
+        return request(conn, "service_fence_status", agent=args.agent)
+    if cmd == "service-fence-retire":
+        from bus_service import retirement_barrier, complete_retirement
+        conn = connection(hub=args.hub)
+        if not re.fullmatch(r"a_[0-9a-f]{32}", args.agent):
+            raise BusError("service retirement requires an exact known registration ID")
+        # No newest/alias lookup or fabricated replacement for an unknown row.
+        record = local_agent(conn, args.agent)
+        if record.get("kind") != "service" or record.get("service_id") != args.service_id:
+            raise BusError("exact local service identity is unavailable", "conflict")
+        with retirement_barrier(state_dir(), record, expected_epoch=args.expected_epoch, request_id=args.request_id):
+            result = request(conn, "service_fence_retire", agent=args.agent, service_id=args.service_id,
+                             expected_epoch=args.expected_epoch, request_id=args.request_id)
+            if result.get("historical_replay"):
+                raise BusError("retirement result is historical; retain ownership for reconciliation", "conflict")
+            barrier = complete_retirement(state_dir(), record, result,
+                                          expected_epoch=args.expected_epoch, request_id=args.request_id)
+            apply_retirement(conn, result)
+        return {**result, "journal_barrier": barrier}
     if cmd == "connect":
         if getattr(args, "invite_stdin", False):
             if args.code is not None:
@@ -1162,15 +1351,40 @@ def run(args):
         return request(conn, "create", bus=args.bus)
     if cmd == "leave":
         record = local_agent(conn, args.target)
-        result = request(conn, "leave", agent=record["id"], bus=args.bus)
-        with locked("registrations"):
-            url = canonical_hub(config(), conn["url"])
-            regs = registrations()
-            for row in regs.values():
-                if row["url"] == url and row["id"] == record["id"]:
-                    row["buses"] = [b for b in row["buses"] if b != args.bus]
-            write_json(state_dir() / "registrations.json", regs)
-        return result
+        selectors = {"expected_epoch": service_epoch(record)} if service_epoch(record) is not None else {}
+        with service_effect(record):
+            result = request(conn, "leave", agent=record["id"], bus=args.bus, **selectors)
+            with locked("registrations"):
+                url = canonical_hub(config(), conn["url"])
+                regs = registrations()
+                for row in regs.values():
+                    if row["url"] == url and row["id"] == record["id"]:
+                        row["buses"] = [b for b in row["buses"] if b != args.bus]
+                write_json(state_dir() / "registrations.json", regs)
+            return result
+    if cmd == "retire":
+        try:
+            agent = local_agent(conn, args.target)["id"]
+        except BusError:
+            # The broker enforces ownership, so an exact ID can still retire this
+            # device's registration after its local record was lost.
+            if not re.fullmatch(r"a_[0-9a-f]{32}", args.target):
+                raise
+            agent = args.target
+        result = request(conn, "retire", agent=agent)
+        apply_retirement(conn, result)
+        # The broker cancels only unacknowledged deliveries. Service jobs already
+        # queued here stay pending in the local journal, neither cancelled nor answered.
+        pending = 0
+        if (state_dir() / "service-jobs.sqlite").exists():
+            from bus_service import journal
+            service_jobs = journal(state_dir())
+            try:
+                pending = service_jobs.execute("SELECT COUNT(*) FROM jobs WHERE hub=? AND recipient=? AND state='pending'",
+                                               (canonical_hub(config(), conn["url"]), agent)).fetchone()[0]
+            finally:
+                service_jobs.close()
+        return {**result, "local_service_jobs_pending": pending}
     if cmd in ("send", "reply"):
         if not args.message:
             raise BusError("empty message")
@@ -1188,14 +1402,29 @@ def run(args):
             # Refresh only exact self; never guess another local session.
             if cmd == "send" and args.bus == "general" and args.sender == "self" and not active_adapter(sender):
                 sender = identify_sender(conn)
-        if cmd == "reply":
-            result = request(conn, "reply", sender=sender["id"], id=args.id, message=" ".join(args.message))
-        else:
-            result = request(conn, "send", sender=sender["id"], target=args.target, bus=args.bus,
-                             message=" ".join(args.message))
-        retain_reply_adapter(sender, result.get("conversation_expires_at"))
-        start_worker()
-        return result
+        with service_effect(sender):
+            if cmd == "reply":
+                selectors = {}
+                epoch = args.expected_sender_epoch if args.expected_sender_epoch is not None else service_epoch(sender)
+                if epoch is not None:
+                    selectors["expected_sender_epoch"] = epoch
+                if args.request_id is not None:
+                    selectors["request_id"] = args.request_id
+                result = request(conn, "reply", sender=sender["id"], id=args.id, message=" ".join(args.message), **selectors)
+            else:
+                selectors = {}
+                epoch = args.expected_sender_epoch if args.expected_sender_epoch is not None else service_epoch(sender)
+                if epoch is not None:
+                    selectors["expected_sender_epoch"] = epoch
+                if args.expected_recipient_epoch is not None:
+                    selectors["expected_recipient_epoch"] = args.expected_recipient_epoch
+                if args.request_id is not None:
+                    selectors["request_id"] = args.request_id
+                result = request(conn, "send", sender=sender["id"], target=args.target, bus=args.bus,
+                                 message=" ".join(args.message), **selectors)
+            retain_reply_adapter(sender, result.get("conversation_expires_at"))
+            start_worker()
+            return result
     if cmd == "receipt":
         return request(conn, "receipt", id=args.id)
     if cmd == "invite":

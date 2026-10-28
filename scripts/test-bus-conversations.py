@@ -173,7 +173,16 @@ class ConversationTests(unittest.TestCase):
         self.deny(self.right["token"], "poll_device", agents=[])
         self.deny(self.right["token"], "poll_device", agents=[self.bob] * 129)
         self.deny(self.right["token"], "poll_device", agents=[{}])
-        batch = self.call(self.right["token"], "poll_device", agents=[self.bob, other, self.bob])["messages"]
+        self.deny(self.right["token"], "poll_device", agents=[self.bob, other, self.bob])
+        db = self.b._connect()
+        try:
+            rows = db.execute("SELECT status,lease FROM messages WHERE id IN (?,?,?)",
+                              (one["id"], two["id"], three["id"])).fetchall()
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(row["status"] == "accepted" and row["lease"] is None for row in rows))
+        finally:
+            db.close()
+        batch = self.call(self.right["token"], "poll_device", agents=[self.bob, other])["messages"]
         self.assertEqual({m["id"] for m in batch}, {one["id"], three["id"]})
         self.assertEqual(self.poll(self.right, self.bob), [])
         self.now[0] += LEASE_TTL + 1

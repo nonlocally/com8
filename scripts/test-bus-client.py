@@ -29,6 +29,41 @@ import bus
 from bus_broker import Broker, handler_factory
 
 
+class WorkerKernelScopeTest(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="worker-scope-")
+        self.addCleanup(self.temp.cleanup)
+        self.comm = Path(self.temp.name).resolve() / "comm"
+        patcher = mock.patch.dict(os.environ, {"COMM_STATE": str(self.comm)})
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def test_publication_uses_observed_kernel_token_and_resolved_scope(self):
+        root = bus.state_dir()
+        identity = {"kind": "fixture-kernel", "pid": os.getpid(), "start": 123}
+        with mock.patch("bus_service.consumer_process_identity", return_value=identity) as observe:
+            fields = bus.worker_process_metadata(root)
+        observe.assert_called_once_with(os.getpid())
+        self.assertEqual(fields, {"comm_state": str(self.comm), "process_identity": identity})
+
+    def test_unavailable_kernel_observation_does_not_stop_legacy_publication(self):
+        with mock.patch("bus_service.consumer_process_identity", side_effect=OSError("unsupported")):
+            self.assertEqual(bus.worker_process_metadata(bus.state_dir()), {"comm_state": str(self.comm)})
+
+    def test_spawned_worker_has_exact_nonsecret_scope_argv(self):
+        with mock.patch.object(bus.subprocess, "Popen") as start:
+            bus.spawn_daemon(["__worker"])
+        self.assertEqual(start.call_args.args[0], [sys.executable, str(bus.LIB / "bus.py"),
+                                                 "__worker", "--comm-state", str(self.comm)])
+
+    def test_private_scope_argument_validates_but_never_retargets_legacy_state(self):
+        with mock.patch.object(bus, "worker", return_value="fixture") as run:
+            self.assertEqual(bus.run(bus.parser().parse_args(["__worker", "--comm-state", str(self.comm)])), "fixture")
+            self.assertEqual(bus.run(bus.parser().parse_args(["__worker"])), "fixture")
+            with self.assertRaises(bus.BusError):
+                bus.run(bus.parser().parse_args(["__worker", "--comm-state", str(self.comm.parent / "other")]))
+            self.assertEqual(run.call_count, 2)
+
+
 class DeviceMetadataTest(unittest.TestCase):
     def test_without_tailscale_is_optional_and_does_not_claim_user(self):
         with mock.patch("bus.shutil.which", return_value=None), \
@@ -236,6 +271,315 @@ class InboundFramingTest(unittest.TestCase):
 
     def test_each_delivery_uses_a_fresh_boundary(self):
         self.assertNotEqual(self.boundary(self.delivered("same")), self.boundary(self.delivered("same")))
+
+
+class RetiredAdapterFenceTest(unittest.TestCase):
+    """An envelope fetched before retirement must not reactivate the local adapter."""
+
+    URL = "https://hub.fixture.invalid"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="cb-retire-")
+        patcher = mock.patch.dict(os.environ, {"COMM_STATE": self.temp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(self.temp.cleanup)
+        self.agent, self.key = "a_" + "1" * 32, self.URL + "|session-1"
+        bus.write_json(bus.state_dir() / "registrations.json", {self.key: {
+            "id": self.agent, "url": self.URL, "session_key": "session-1", "name": "fenced",
+            "kind": "claude", "buses": ["general"], "reply_until": 0}})
+        self.conn = {"url": self.URL, "token": "fixture-token"}
+
+    def row(self):
+        return bus.registrations()[self.key]
+
+    def retire(self):
+        with mock.patch.object(bus, "connection", return_value=self.conn), \
+                mock.patch.object(bus, "request", return_value={"agent": self.agent, "retired": True, "epoch": 1}) as call:
+            bus.run(bus.parser().parse_args(["retire", self.agent]))
+        call.assert_called_once_with(self.conn, "retire", agent=self.agent)
+
+    def test_stale_envelope_cannot_restore_a_retired_adapter_or_win_after_reregistration(self):
+        stale = dict(self.row())  # the worker's cached record while an envelope is in flight
+        self.retire()
+        self.assertFalse(bus.active_adapter(self.row()))
+        bus.retain_reply_adapter(stale, time.time() + 60)
+        self.assertEqual((self.row()["buses"], self.row()["reply_until"]), ([], 0))
+        self.assertFalse(bus.active_adapter(self.row()))
+        # Only a confirmed registration reactivates; the stale generation still cannot extend it.
+        bus.remember_adapter(self.conn, {"session_key": "session-1", "name": "fenced", "kind": "claude"},
+                             {"id": self.agent, "buses": ["general"], "epoch": 2})
+        self.assertTrue(bus.active_adapter(self.row()))
+        bus.retain_reply_adapter(stale, time.time() + 60)
+        self.assertEqual(self.row()["reply_until"], 0)
+        current = dict(self.row())
+        bus.retain_reply_adapter(current, time.time() + 60)
+        self.assertGreater(self.row()["reply_until"], time.time())
+
+
+class RetireOrderingRaceTest(unittest.TestCase):
+    """Broker responses applied out of order must not invert the broker's lifecycle."""
+
+    URL = "https://hub.fixture.invalid"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="cb-race-")
+        self.addCleanup(self.temp.cleanup)
+        for patcher in (mock.patch.dict(os.environ, {"COMM_STATE": self.temp.name + "/state"}),
+                        mock.patch.object(bus, "request", side_effect=self.request),
+                        mock.patch.object(bus, "connection", side_effect=lambda **_: self.conn)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.broker = Broker(self.temp.name + "/hub")
+        invite = self.broker.handle(self.broker.admin_token, {"op": "invite", "bus": "general"})
+        self.token = self.broker.handle("", {"op": "redeem", "invite": invite["invite"], "device": "race"})["token"]
+        self.conn = {"url": self.URL, "token": self.token}
+
+    def request(self, conn, op, **payload):
+        result = self.broker.handle(self.token, {"op": op, **payload})
+        if not result.get("ok"):
+            raise bus.BusError(result["error"], result.get("code"))
+        return result
+
+    def registration(self):
+        return bus.request(self.conn, "register", session_key="session-race", name="race",
+                           kind="claude", bus="general", status="live")
+
+    def remember(self, result):
+        ident = {"session_key": "session-race", "name": "race", "kind": "claude", "status": "live"}
+        return bus.remember_adapter(self.conn, ident, result, "", "general")
+
+    def row(self):
+        return bus.registrations()[self.URL + "|session-race"]
+
+    def published(self):
+        snapshot = self.broker.handle(self.token, {"op": "snapshot"})
+        return [a["id"] for a in next(b for b in snapshot["buses"] if b["name"] == "general")["agents"]]
+
+    def test_stale_registration_response_cannot_reactivate_after_retirement(self):
+        agent = self.remember(self.registration())["id"]
+        stale = self.registration()  # obtained before the retirement, applied after it
+        bus.run(bus.parser().parse_args(["retire", agent]))
+        with self.assertRaises(bus.BusError):
+            self.remember(stale)
+        self.assertTrue(self.row()["retired"])
+        self.assertFalse(bus.active_adapter(self.row()))
+        self.assertNotIn(agent, self.published())
+
+    def test_stale_retirement_response_cannot_drop_a_same_id_reregistration(self):
+        agent = self.remember(self.registration())["id"]
+        retired = bus.request(self.conn, "retire", agent=agent)  # applied locally only later
+        again = self.remember(self.registration())
+        self.assertEqual(again["id"], agent)
+        bus.apply_retirement(self.conn, retired)
+        self.assertFalse(self.row().get("retired"))
+        self.assertTrue(bus.active_adapter(self.row()))
+        self.assertIn(agent, self.published())
+        # An envelope cached at the original epoch still cannot extend the reactivated adapter.
+        bus.retain_reply_adapter({**self.row(), "epoch": 0}, time.time() + 60)
+        self.assertEqual(self.row().get("reply_until", 0), 0)
+
+    def test_delayed_first_registration_cannot_recreate_a_retired_adapter(self):
+        first = self.registration()  # committed by the broker; applied locally only after retirement
+        retired = bus.run(bus.parser().parse_args(["retire", first["id"]]))
+        self.assertEqual((retired["epoch"], bus.registrations()), (1, {}))
+        with self.assertRaises(bus.BusError):
+            self.remember(first)
+        self.assertEqual(bus.registrations(), {})
+        self.assertNotIn(first["id"], self.published())
+        # A genuine same-ID reactivation is newer than the retirement and still applies.
+        # The stale first response is then ignored, as for any older response.
+        again = self.remember(self.registration())
+        self.assertEqual((again["id"], again["epoch"]), (first["id"], 2))
+        self.assertEqual(self.remember(first)["epoch"], 2)
+        self.assertTrue(bus.active_adapter(self.row()))
+        self.assertIn(first["id"], self.published())
+
+    def test_retirement_records_are_bounded_per_hub(self):
+        with mock.patch.object(bus, "MAX_RETIREMENTS", 2):
+            for n in range(3):
+                bus.apply_retirement(self.conn, {"agent": "a_%032x" % n, "retired": True, "epoch": 1})
+            bus.apply_retirement({"url": "https://other.fixture.invalid"},
+                                 {"agent": "a_%032x" % 0, "retired": True, "epoch": 1})
+        self.assertEqual([(record["url"], record["agent"]) for record in bus.retirements().values()],
+                         [(self.URL, "a_%032x" % 1), (self.URL, "a_%032x" % 2),
+                          ("https://other.fixture.invalid", "a_%032x" % 0)])
+
+    def test_retirement_record_follows_a_completed_rehome_alias(self):
+        first = self.registration()
+        bus.run(bus.parser().parse_args(["retire", first["id"]]))
+        moved = "https://moved.fixture.invalid"
+        bus.write_json(bus.state_dir() / "client.json", {"connections": {}, "default": moved,
+                                                          "aliases": {self.URL: moved}})
+        ident = {"session_key": "session-race", "name": "race", "kind": "claude", "status": "live"}
+        with self.assertRaises(bus.BusError):
+            bus.remember_adapter({**self.conn, "url": moved}, ident, first, "", "general")
+        self.assertEqual(bus.registrations(), {})
+
+    def test_retirement_reports_but_does_not_settle_fetched_service_jobs(self):
+        agent = self.remember(self.registration())["id"]
+        from bus_service import journal
+        jobs = journal(bus.state_dir())
+        with jobs:
+            jobs.execute("""INSERT INTO jobs(hub,id,recipient,service_id,envelope,request_hash,expires,updated)
+                            VALUES(?,?,?,?,?,?,?,?)""", (self.URL, "m_" + "0" * 32, agent, str(uuid.uuid4()),
+                                                         "{}", "0" * 64, time.time() + 60, time.time()))
+        jobs.close()
+        result = bus.run(bus.parser().parse_args(["retire", agent]))
+        self.assertEqual(result["local_service_jobs_pending"], 1)
+        jobs = journal(bus.state_dir())
+        self.assertEqual(jobs.execute("SELECT state FROM jobs").fetchone()[0], "pending")
+        jobs.close()
+
+
+class ServiceFenceClientTest(unittest.TestCase):
+    """CLI selectors against the real synthetic broker; no worker or HTTP call."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="service-fence-cli-")
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.broker = Broker(root / "broker")
+        invite = self.broker.handle(self.broker.admin_token, {"op": "invite", "bus": "general"})
+        self.token = self.broker.handle("", {"op": "redeem", "invite": invite["invite"], "device": "fixture"})["token"]
+        self.conn = {"url": "https://fixture.invalid", "token": self.token}
+        self.calls = []
+        for patcher in (mock.patch.dict(os.environ, {"COMM_STATE": str(root / "client")}),
+                        mock.patch.object(bus, "connection", return_value=self.conn),
+                        mock.patch.object(bus, "request", side_effect=self.request),
+                        mock.patch.object(bus, "device_metadata", return_value={}),
+                        mock.patch.object(bus, "start_worker"),
+                        mock.patch("bus_service.assert_consumer_proof", return_value={"fixture_only": True})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.secret = root / "synthetic-token"
+        self.secret.write_text("x" * 48)
+        self.secret.chmod(0o600)
+        self.sid = str(uuid.uuid4())
+        self.arguments = ["register-service", "fixture", "--service-id", self.sid,
+                          "--endpoint", "https://127.0.0.1:1/bridge", "--token-file", str(self.secret)]
+
+    def request(self, conn, op, **payload):
+        self.calls.append({"op": op, **payload})
+        result = self.broker.handle(self.token, {"op": op, **payload})
+        if not result["ok"]:
+            raise bus.BusError(result["error"], result.get("code"))
+        return result
+
+    def run_cli(self, *arguments):
+        return bus.run(bus.parser().parse_args(arguments))
+
+    def ready(self):
+        original = self.run_cli(*self.arguments)
+        retired = self.run_cli("service-fence-retire", original["id"], "--service-id", self.sid,
+                               "--expected-epoch", "0", "--request-id", "fixture-retire")
+        current = self.run_cli(*self.arguments, "--expected-agent", original["id"],
+                               "--expected-epoch", "1", "--request-id", "fixture-reactivate")
+        self.assertTrue(retired["journal_barrier"])
+        self.assertEqual((current["id"], current["epoch"], current["fence_protocol"]),
+                         (original["id"], 2, "service-fence/epoch-v1"))
+        return current
+
+    def test_explicit_fenced_cli_reactivation_and_send_preserve_exact_key_and_epoch(self):
+        current = self.ready()
+        native = self.request(self.conn, "register", session_key="native:fixture", name="native", kind="codex", bus="general")
+        first = self.run_cli("send", native["id"], "--from", current["id"], "--expected-sender-epoch", "2",
+                             "--request-id", "same-send", "--", "content")
+        again = self.run_cli("send", native["id"], "--from", current["id"], "--expected-sender-epoch", "2",
+                             "--request-id", "same-send", "--", "content")
+        self.assertEqual(first, again)
+        wire = [row for row in self.calls if row["op"] == "send"]
+        self.assertEqual(wire, [wire[0], wire[0]])
+        self.assertEqual((wire[0]["expected_sender_epoch"], wire[0]["request_id"]), (2, "same-send"))
+
+    def test_fenced_registration_rejects_missing_selectors_and_does_not_downgrade_local_row(self):
+        current = self.ready()
+        with self.assertRaises(bus.BusError):
+            self.run_cli(*self.arguments)
+        row = bus.local_agent(self.conn, current["id"])
+        self.assertEqual((row["epoch"], row["fence_protocol"]), (2, "service-fence/epoch-v1"))
+        with self.assertRaises(bus.BusError):
+            bus.remember_adapter(self.conn, dict(row), {"id": current["id"], "epoch": 2, "buses": ["general"]})
+        self.secret.write_text("y" * 48)
+        with self.assertRaises(bus.BusError):
+            self.run_cli(*self.arguments, "--expected-agent", current["id"], "--expected-epoch", "1",
+                         "--request-id", "fixture-reactivate")
+
+    def test_missing_consumer_proof_fails_before_broker_effect(self):
+        original = self.run_cli(*self.arguments)
+        import bus_service
+        before = len(self.calls)
+        with mock.patch.object(bus_service, "assert_consumer_proof", side_effect=bus_service.ServiceError("unproved consumer")):
+            with self.assertRaises(bus_service.ServiceError):
+                self.run_cli("service-fence-retire", original["id"], "--service-id", self.sid,
+                             "--expected-epoch", "0", "--request-id", "blocked")
+        self.assertEqual(len(self.calls), before)
+
+    def test_actor_barrier_blocks_reactivation_before_http_until_guard_releases(self):
+        import concurrent.futures
+        import bus_service
+        original = self.run_cli(*self.arguments)
+        self.run_cli("service-fence-retire", original["id"], "--service-id", self.sid,
+                     "--expected-epoch", "0", "--request-id", "retire-lock")
+        record = bus.local_agent(self.conn, original["id"])
+        real_lock, entered = bus_service.lifecycle_lock, threading.Event()
+        def observed_lock(*args, **kwargs):
+            entered.set()
+            return real_lock(*args, **kwargs)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            with real_lock(bus.state_dir(), record["url"], record["id"], self.sid):
+                before = len(self.calls)
+                with mock.patch.object(bus_service, "lifecycle_lock", side_effect=observed_lock):
+                    future = pool.submit(self.run_cli, *self.arguments, "--expected-agent", original["id"],
+                                         "--expected-epoch", "1", "--request-id", "reactivate-lock")
+                    self.assertTrue(entered.wait(timeout=2))
+                    self.assertEqual(len(self.calls), before)
+                self.assertFalse(future.done())
+            self.assertEqual(future.result(timeout=3)["epoch"], 2)
+
+    def test_actor_barrier_blocks_send_and_quiesce_prevents_new_rpc(self):
+        import concurrent.futures
+        import bus_service
+        current = self.ready()
+        native = self.request(self.conn, "register", session_key="native:lock", name="native", kind="codex", bus="general")
+        record = bus.local_agent(self.conn, current["id"])
+        real_lock, entered = bus_service.lifecycle_lock, threading.Event()
+        def observed_lock(*args, **kwargs):
+            entered.set()
+            return real_lock(*args, **kwargs)
+        arguments = ("send", native["id"], "--from", current["id"], "--expected-sender-epoch", "2",
+                     "--request-id", "locked-send", "--", "content")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            with real_lock(bus.state_dir(), record["url"], record["id"], self.sid):
+                before = len(self.calls)
+                with mock.patch.object(bus_service, "lifecycle_lock", side_effect=observed_lock):
+                    future = pool.submit(self.run_cli, *arguments)
+                    self.assertTrue(entered.wait(timeout=2))
+                    self.assertEqual(len(self.calls), before)
+            future.result(timeout=3)
+        bus_service.quiesce(bus.state_dir(), record, expected_epoch=2, request_id="quiesce-send")
+        before = len(self.calls)
+        with self.assertRaises(bus.BusError):
+            self.run_cli(*arguments)
+        self.assertEqual(len(self.calls), before)
+
+    def test_stale_legacy_record_cannot_adopt_current_epoch_from_arguments(self):
+        current = self.ready()
+        native = self.request(self.conn, "register", session_key="native:stale", name="native", kind="codex", bus="general")
+        stale = dict(bus.local_agent(self.conn, current["id"]))
+        stale.pop("fence_protocol")
+        before = len(self.calls)
+        with mock.patch.object(bus, "local_agent", return_value=stale), self.assertRaises(bus.BusError):
+            self.run_cli("send", native["id"], "--from", current["id"], "--expected-sender-epoch", "2",
+                         "--request-id", "no-adoption", "--", "content")
+        self.assertEqual(len(self.calls), before)
+
+    def test_public_service_contract_version_is_part_of_the_generation_configuration(self):
+        current = self.ready()
+        with self.assertRaises(bus.BusError):
+            self.run_cli(*self.arguments, "--contract-version", "2", "--expected-agent", current["id"],
+                         "--expected-epoch", "2", "--request-id", "version-retarget")
+        self.assertEqual(bus.local_agent(self.conn, current["id"])["contract_version"], 1)
 
 
 class BusClientTest(unittest.TestCase):
@@ -659,6 +1003,33 @@ authorityKeyIdentifier = keyid:always
                                env=self.env("stdin-invite"), text=True, capture_output=True, timeout=30)
         self.assertEqual(piped.returncode, 0, piped.stderr + piped.stdout)
         self.assertNotIn("--invite-stdin", piped.stderr)
+
+    def test_17_retire_releases_this_device_quota_and_local_adapter(self):
+        env, other = self.env("retire"), self.env("retire-other")
+        self.attach_claude(env, "retire-one")
+        self.attach_claude(other, "retire-foreign")
+        self.cli(env, "connect", self.code(), "--device", "retire-device")
+        self.cli(other, "connect", self.code(), "--device", "retire-other-device")
+        first = self.cli(env, "register")
+        foreign = self.cli(other, "register")
+        self.attach_claude(env, "retire-two")
+        with mock.patch("bus_broker.MAX_AGENTS", 1):
+            self.assertIn("registration limit", self.cli(env, "register", ok=False))
+            self.assertIn("unknown or unavailable agent", self.cli(env, "retire", foreign["id"], ok=False))
+            retired = self.cli(env, "retire", first["id"])
+            self.assertEqual((retired["agent"], retired["retired"]), (first["id"], True))
+            second = self.cli(env, "register")
+        self.assertNotEqual(second["id"], first["id"])
+        record = next(r for r in json.loads((Path(env["COMM_STATE"]) / "bus/registrations.json").read_text()).values()
+                      if r["id"] == first["id"])
+        self.assertEqual((record["buses"], record.get("reply_until", 0)), ([], 0))
+        self.assertTrue(record["retired"])
+        self.assertFalse(bus.active_adapter(record))
+        roster = [a["id"] for a in next(b for b in self.cli(env, "agents", "--bus", "general", "--json")["buses"]
+                                        if b["name"] == "general")["agents"]]
+        self.assertNotIn(first["id"], roster)
+        self.assertIn(second["id"], roster)
+        self.assertIn(foreign["id"], roster)
 
     def test_15_first_use_status_does_not_create_or_restart_local_hub(self):
         env = self.env("read-only-status")

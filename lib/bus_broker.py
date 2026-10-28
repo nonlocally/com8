@@ -31,6 +31,13 @@ MAX_MESSAGE = 32768
 MAX_PENDING = 256
 MAX_AGENTS = 128
 MAX_TOTAL_AGENTS = 4096
+# Active caps count unretired registrations. Retired rows keep their message
+# history until it expires; these separately bound the rows retained meanwhile.
+MAX_RETAINED_AGENTS = 1024
+MAX_TOTAL_RETAINED_AGENTS = 32768
+SERVICE_FENCE_PROTOCOL = "service-fence/epoch-v1"
+MAX_SERVICE_REQUESTS = 20000
+MAX_SERVICE_REQUESTS_PER_GENERATION = 1024
 MAX_PRINCIPALS = 1024
 MAX_BUSES = 256
 MAX_ACCOUNT_BUSES = 32
@@ -291,6 +298,15 @@ class Broker:
                 CREATE TABLE IF NOT EXISTS outbound_queue(
                   ordering INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT NOT NULL UNIQUE,
                   target TEXT NOT NULL REFERENCES agents(id));
+                CREATE TABLE IF NOT EXISTS service_fences(
+                  principal TEXT NOT NULL, session_key TEXT NOT NULL, agent TEXT UNIQUE NOT NULL,
+                  service_id TEXT NOT NULL, epoch INTEGER NOT NULL, state TEXT NOT NULL, config_hash TEXT,
+                  PRIMARY KEY(principal,session_key));
+                CREATE TABLE IF NOT EXISTS service_requests(
+                  principal TEXT NOT NULL, actor TEXT NOT NULL, operation TEXT NOT NULL,
+                  request_id TEXT NOT NULL, payload_hash TEXT NOT NULL, result TEXT NOT NULL,
+                  guards TEXT NOT NULL, anchor TEXT NOT NULL, epoch INTEGER NOT NULL,
+                  created_at REAL NOT NULL, PRIMARY KEY(principal,actor,operation,request_id));
             """)
             # Upgrade existing hubs without changing credentials or guessing the
             # owner of an enrolled device from its self-reported display name.
@@ -301,7 +317,13 @@ class Broker:
                                               ("invites", "issuer_user", "TEXT"),
                                               ("messages", "conversation", "TEXT REFERENCES conversations(id)"),
                                               ("messages", "in_reply_to", "TEXT"),
-                                              ("messages", "correlation_version", "INTEGER NOT NULL DEFAULT 0")):
+                                              ("messages", "correlation_version", "INTEGER NOT NULL DEFAULT 0"),
+                                              ("agents", "retired_at", "REAL"),
+                                              ("agents", "epoch", "INTEGER NOT NULL DEFAULT 0"),
+                                              ("messages", "sender_epoch", "INTEGER"),
+                                              ("messages", "target_epoch", "INTEGER"),
+                                              ("conversations", "initiator_epoch", "INTEGER"),
+                                              ("conversations", "published_epoch", "INTEGER")):
                 columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
                 if name not in columns:
                     db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, declaration))
@@ -309,7 +331,7 @@ class Broker:
             # while giving upgraded receivers the same scoped reply operation.
             for message in db.execute("SELECT * FROM messages WHERE conversation IS NULL").fetchall():
                 conversation = "c_legacy_" + message["id"]
-                db.execute("INSERT OR IGNORE INTO conversations VALUES(?,?,?,?,?,0)",
+                db.execute("INSERT OR IGNORE INTO conversations(id,initiator,published,bus,expires_at,closed) VALUES(?,?,?,?,?,0)",
                            (conversation, message["sender"], message["target"], message["bus"], message["expires_at"]))
                 db.execute("UPDATE messages SET conversation=? WHERE id=?", (conversation, message["id"]))
             db.execute("INSERT OR IGNORE INTO outbound_queue(message,target) SELECT id,target FROM messages ORDER BY rowid")
@@ -598,6 +620,10 @@ class Broker:
     def _conversation_valid(self, db, conversation, now):
         if conversation is None or conversation["closed"] or conversation["expires_at"] <= now:
             return False
+        for column, epoch_column in (("initiator", "initiator_epoch"), ("published", "published_epoch")):
+            fence = self._service_fence(db, conversation[column])
+            if fence is not None and (fence["state"] != "active" or conversation[epoch_column] != fence["epoch"]):
+                return False
         bus = conversation["bus"]
         if not self._member(db, conversation["published"], bus):
             return False
@@ -958,6 +984,123 @@ class Broker:
                        (json.dumps(_device_metadata(r["device_metadata"])), p["id"]))
         return {"principal": p["id"], **self._device_info(db.execute("SELECT * FROM principals WHERE id=?", (p["id"],)).fetchone())}
 
+    @staticmethod
+    def _epoch(value):
+        if type(value) is not int or not 0 <= value < 2**63 - 1:
+            raise BusError("a nonnegative service epoch is required", "conflict")
+        return value
+
+    @staticmethod
+    def _service_id(agent):
+        if agent["kind"] != "service" or not agent["session_key"].startswith("service:"):
+            raise BusError("unknown or unavailable service", "not_found")
+        try:
+            value = agent["session_key"][8:]
+            if str(uuid.UUID(value)) != value:
+                raise ValueError()
+        except (ValueError, TypeError, AttributeError):
+            raise BusError("unknown or unavailable service", "not_found") from None
+        return value
+
+    @staticmethod
+    def _service_fence(db, agent):
+        return db.execute("SELECT * FROM service_fences WHERE agent=?", (agent,)).fetchone()
+
+    def _expect_service_epoch(self, db, agent, value):
+        fence = self._service_fence(db, agent["id"])
+        if fence is not None:
+            epoch = self._epoch(value)
+            if (epoch != fence["epoch"] or epoch != agent["epoch"]
+                    or fence["state"] != ("retired" if agent["retired_at"] is not None else "active")):
+                raise BusError("service epoch is stale", "conflict")
+        return fence
+
+    @staticmethod
+    def _service_payload_hash(request):
+        return _digest(json.dumps(request, sort_keys=True, separators=(",", ":"), allow_nan=False))
+
+    def _service_request(self, db, p, request, actor, guards, now):
+        """Cache effects, not guesses: active-generation entries are never evicted."""
+        key = _text(request.get("request_id"), "service request id", 128)
+        digest = self._service_payload_hash(request)
+        old = db.execute("SELECT * FROM service_requests WHERE principal=? AND actor=? AND operation=? AND request_id=?",
+                         (p["id"], actor, request["op"], key)).fetchone()
+        if old is not None:
+            if old["payload_hash"] != digest:
+                raise BusError("service request id was reused with different content", "conflict")
+            result = json.loads(old["result"])
+            original = json.loads(old["guards"])
+            if any((fence := self._service_fence(db, ident)) is None or fence["epoch"] != epoch
+                   for ident, epoch in original.items()):
+                result = {**result, "historical_replay": True}
+            return result, (actor, key, digest, guards)
+        anchor = actor if actor in guards else sorted(guards)[0]
+        if db.execute("SELECT COUNT(*) FROM service_requests WHERE anchor=? AND epoch=?",
+                      (anchor, guards[anchor])).fetchone()[0] >= MAX_SERVICE_REQUESTS_PER_GENERATION:
+            raise BusError("service generation request limit reached", "limit")
+        if db.execute("SELECT COUNT(*) FROM service_requests").fetchone()[0] >= MAX_SERVICE_REQUESTS:
+            # Only a permanently stale CAS can make a replay record dispensable.
+            # No time-based or LRU removal of an active generation is allowed.
+            for row in db.execute("SELECT rowid,guards FROM service_requests").fetchall():
+                protected = json.loads(row["guards"])
+                if protected and all((fence := self._service_fence(db, ident)) is not None
+                                     and fence["epoch"] > epoch for ident, epoch in protected.items()):
+                    db.execute("DELETE FROM service_requests WHERE rowid=?", (row["rowid"],))
+            if db.execute("SELECT COUNT(*) FROM service_requests").fetchone()[0] >= MAX_SERVICE_REQUESTS:
+                raise BusError("service request history limit reached", "limit")
+        return None, (actor, key, digest, guards)
+
+    def _service_finish(self, db, p, request, context, result, now, guards=None):
+        actor, key, digest, original = context
+        guards = original if guards is None else guards
+        anchor = actor if actor in guards else sorted(guards)[0]
+        db.execute("INSERT INTO service_requests VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (p["id"], actor, request["op"], key, digest, json.dumps(result),
+                    json.dumps(guards, sort_keys=True), anchor, guards[anchor], now))
+        return result
+
+    def _op_service_fence_status(self, db, p, r, now):
+        agent = self._owned(db, p, r.get("agent"))
+        service_id = self._service_id(agent)
+        fence = self._service_fence(db, agent["id"])
+        if fence is not None:
+            self._expect_service_epoch(db, agent, agent["epoch"])
+        return {"protocol": SERVICE_FENCE_PROTOCOL, "enabled": fence is not None,
+                "agent": agent["id"], "service_id": service_id, "epoch": agent["epoch"],
+                "retired": agent["retired_at"] is not None, "principal": p["id"], "server_id": self.server_id}
+
+    def _op_service_fence_retire(self, db, p, r, now):
+        agent = self._owned(db, p, r.get("agent"))
+        service_id = self._service_id(agent)
+        if r.get("service_id") != service_id:
+            raise BusError("service identity differs from its exact registration", "conflict")
+        expected = self._epoch(r.get("expected_epoch"))
+        cached, context = self._service_request(db, p, r, agent["id"], {agent["id"]: expected + 1}, now)
+        if cached is not None:
+            return cached
+        if expected != agent["epoch"]:
+            raise BusError("service epoch is stale", "conflict")
+        fence = self._service_fence(db, agent["id"])
+        if fence is not None:
+            self._expect_service_epoch(db, agent, expected)
+        if fence is None:
+            if (db.execute("SELECT COUNT(*) FROM service_fences WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
+                    or db.execute("SELECT COUNT(*) FROM service_fences").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
+                raise BusError("service fence limit reached", "limit")
+            db.execute("INSERT INTO service_fences VALUES(?,?,?,?,?,'retired',NULL)",
+                       (p["id"], agent["session_key"], agent["id"], service_id, expected + 1))
+        else:
+            db.execute("UPDATE service_fences SET epoch=?,state='retired' WHERE agent=?", (expected + 1, agent["id"]))
+        db.execute("DELETE FROM memberships WHERE agent=?", (agent["id"],))
+        db.execute("UPDATE conversations SET closed=1 WHERE initiator=? OR published=?", (agent["id"], agent["id"]))
+        db.execute("UPDATE agents SET status='offline',retired_at=?,epoch=? WHERE id=?", (now, expected + 1, agent["id"]))
+        self._cancel_invalid(db, now)
+        result = {"protocol": SERVICE_FENCE_PROTOCOL, "agent": agent["id"], "service_id": service_id,
+                  "previous_epoch": expected, "epoch": expected + 1, "retired_epoch": expected + 1,
+                  "retired": True, "principal": p["id"], "server_id": self.server_id,
+                  "request_id": r["request_id"], "payload_hash": context[2]}
+        return self._service_finish(db, p, r, context, result, now)
+
     def _op_register(self, db, p, r, now):
         bus = _bus(r.get("bus", "general"))
         if not self._granted(db, p["id"], bus) or not db.execute("SELECT 1 FROM buses WHERE name=?", (bus,)).fetchone():
@@ -974,9 +1117,6 @@ class Broker:
     def _identify(self, db, p, r, now, publish=None):
         if p["browser_reader"] is not None:
             raise BusError("agents connect through an enrolled device", "forbidden")
-        if "device_metadata" in r:
-            db.execute("UPDATE principals SET device_metadata=? WHERE id=?",
-                       (json.dumps(_device_metadata(r["device_metadata"])), p["id"]))
         session_key = _text(r.get("session_key"), "session_key", 256)
         name = _text(r.get("name"), "name", 128)
         kind = r.get("kind", "claude")
@@ -986,35 +1126,97 @@ class Broker:
         status = r.get("status", "queueable" if kind == "codex" else "live")
         if status not in ("live", "queueable", "offline"):
             raise BusError("status must be live, queueable, or offline")
-        existing = db.execute("SELECT id FROM agents WHERE principal=? AND session_key=?", (p["id"], session_key)).fetchone()
-        if existing:
-            agent = existing[0]
-            db.execute("UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=? WHERE id=?",
-                       (name, kind, description, status, now, agent))
-        else:
-            count = db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0]
-            if count >= MAX_AGENTS or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= MAX_TOTAL_AGENTS:
+        existing = db.execute("SELECT * FROM agents WHERE principal=? AND session_key=?",
+                              (p["id"], session_key)).fetchone()
+        fence = db.execute("SELECT * FROM service_fences WHERE principal=? AND session_key=?",
+                           (p["id"], session_key)).fetchone()
+        service_context = None
+        if fence is None and any(key in r for key in ("agent", "expected_epoch", "service_config_hash")):
+            raise BusError("service lifecycle must be enabled for the exact known registration first", "conflict")
+        if fence is not None:
+            if existing is None or existing["id"] != fence["agent"]:
+                raise BusError("known fenced service registration is unavailable", "not_found")
+            if kind != "service" or r.get("agent") != existing["id"]:
+                raise BusError("fenced registration requires its exact service identity", "conflict")
+            expected = self._epoch(r.get("expected_epoch"))
+            config_hash = r.get("service_config_hash")
+            if not isinstance(config_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", config_hash):
+                raise BusError("fenced registration requires its local configuration hash", "conflict")
+            result_epoch = expected + (1 if existing["retired_at"] is not None else 0)
+            cached, service_context = self._service_request(db, p, r, existing["id"],
+                                                           {existing["id"]: result_epoch}, now)
+            if cached is not None:
+                return cached
+            self._expect_service_epoch(db, existing, expected)
+            if existing["retired_at"] is None and config_hash != fence["config_hash"]:
+                raise BusError("retire the service before changing its configuration", "conflict")
+            if publish is None and existing["retired_at"] is not None:
+                raise BusError("reactivation requires explicit service registration", "conflict")
+        if "device_metadata" in r:
+            db.execute("UPDATE principals SET device_metadata=? WHERE id=?",
+                       (json.dumps(_device_metadata(r["device_metadata"])), p["id"]))
+        if existing is None or existing["retired_at"] is not None:
+            # A new or reactivated registration re-enters the active quota.
+            active = "SELECT COUNT(*) FROM agents WHERE retired_at IS NULL"
+            if (db.execute(active + " AND principal=?", (p["id"],)).fetchone()[0] >= MAX_AGENTS
+                    or db.execute(active).fetchone()[0] >= MAX_TOTAL_AGENTS):
                 raise BusError("agent registration limit reached", "limit")
-            agent = "a_" + uuid.uuid4().hex
-            db.execute("INSERT INTO agents VALUES(?,?,?,?,?,?,?,?)",
-                       (agent, p["id"], session_key, name, kind, description, status, now))
+        if existing:
+            # The same exact session keeps its agent ID, including after retirement.
+            # Reactivation advances the epoch, so clients can order lifecycle responses.
+            agent = existing[0]
+            epoch = existing["epoch"] + (1 if existing["retired_at"] is not None else 0)
+            db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?
+                          WHERE id=?""", (name, kind, description, status, now, epoch, agent))
+        else:
+            if (db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
+                    or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
+                raise BusError("agent registration limit reached", "limit")
+            agent, epoch = "a_" + uuid.uuid4().hex, 0
+            db.execute("""INSERT INTO agents(id,principal,session_key,name,kind,description,status,last_seen)
+                          VALUES(?,?,?,?,?,?,?,?)""", (agent, p["id"], session_key, name, kind, description, status, now))
         if publish:
             db.execute("INSERT OR IGNORE INTO memberships VALUES(?,?)", (agent, publish))
         buses = [b[0] for b in db.execute("SELECT bus FROM memberships WHERE agent=? ORDER BY bus", (agent,))]
-        return {"id": agent, "agent": agent, "name": name, "bus": publish, "buses": buses,
+        result = {"id": agent, "agent": agent, "name": name, "bus": publish, "buses": buses, "epoch": epoch,
                 "principal": p["id"], "status": status, "last_seen": now, "server_id": self.server_id,
                 **self._device_info(db.execute("SELECT * FROM principals WHERE id=?", (p["id"],)).fetchone())}
+        if fence is not None:
+            db.execute("UPDATE service_fences SET epoch=?,state='active',config_hash=? WHERE agent=?", (epoch, config_hash, agent))
+            result.update(protocol=SERVICE_FENCE_PROTOCOL, fence_protocol=SERVICE_FENCE_PROTOCOL,
+                          service_id=fence["service_id"], service_config_hash=config_hash)
+            return self._service_finish(db, p, r, service_context, result, now, {agent: epoch})
+        return result
 
     def _op_heartbeat(self, db, p, r, now):
         rows = r.get("agents")
         if not isinstance(rows, list) or len(rows) > MAX_AGENTS:
             raise BusError("agents must be a bounded list")
+        validated = []
         for entry in rows:
             if not isinstance(entry, dict) or entry.get("status") not in ("live", "queueable", "offline"):
                 raise BusError("invalid heartbeat")
             agent = self._owned(db, p, entry.get("id"))
-            db.execute("UPDATE agents SET status=?,last_seen=? WHERE id=?", (entry["status"], now, agent["id"]))
-        return {"updated": len(rows), "ts": now}
+            if "epoch" in entry:
+                self._epoch(entry["epoch"])
+            validated.append((entry, agent))
+        refused = []
+        updated = 0
+        for entry, agent in validated:
+            if self._service_fence(db, agent["id"]) is not None:
+                try:
+                    self._expect_service_epoch(db, agent, entry.get("epoch"))
+                except BusError:
+                    refused.append({"agent": agent["id"], "code": "service_epoch_required" if "epoch" not in entry else "stale_service_epoch"})
+                    continue
+            # A stale adapter's heartbeat never revives a retired registration.
+            db.execute("UPDATE agents SET status=?,last_seen=? WHERE id=? AND retired_at IS NULL",
+                       (entry["status"], now, agent["id"]))
+            updated += 1
+        result = {"updated": updated, "ts": now}
+        if refused:
+            result["refusals"] = refused
+        return result
 
     def _op_snapshot(self, db, p, r, now):
         allowed = self._visible_buses(db, p)
@@ -1040,6 +1242,8 @@ class Broker:
                     row["device_metadata"] = json.loads(a["device_metadata"])
                 if p["is_admin"]:
                     row["principal"] = a["principal"]
+                if self._service_fence(db, a["id"]) is not None:
+                    row.update(fence_protocol=SERVICE_FENCE_PROTOCOL, epoch=a["epoch"])
                 agents.append(row)
             role = self._bus_role(db, p, definition)
             account_owned = definition["owner_user"] is not None and bus != "general"
@@ -1210,13 +1414,16 @@ class Broker:
                             (chat["id"], chat["read_seq"])).fetchone()[0]
         return {"id": chat["id"], "bus": chat["bus"], "agent": public,
                 "created_at": chat["created_at"], "updated_at": chat["updated_at"],
-                "unread": unread, "can_send": self._member(db, chat["agent"], chat["bus"])}
+                "unread": unread, "can_send": self._member(db, chat["agent"], chat["bus"])
+                    and self._service_fence(db, chat["agent"]) is None}
 
     def _op_chat_open(self, db, p, r, now):
         identity, buses = self._chat_access(db, p)
         bus, agent = _bus(r.get("bus")), r.get("agent")
         if bus not in buses or not isinstance(agent, str) or not self._member(db, agent, bus):
             raise BusError("unknown or unavailable recipient", "not_found")
+        if self._service_fence(db, agent) is not None:
+            raise BusError("fenced services require an epoch-aware agent message", "conflict")
         chat = db.execute("SELECT * FROM human_chats WHERE identity=? AND bus=? AND agent=?", (identity, bus, agent)).fetchone()
         if chat is None:
             if (db.execute("SELECT COUNT(*) FROM human_chats").fetchone()[0] >= MAX_CHATS
@@ -1301,6 +1508,8 @@ class Broker:
 
     def _op_chat_send(self, db, p, r, now):
         chat = self._chat_owned(db, p, r.get("chat"))
+        if self._service_fence(db, chat["agent"]) is not None:
+            raise BusError("fenced services require an epoch-aware agent message", "conflict")
         request_id, content = r.get("request_id"), self._message_content(r.get("message"))
         if not _canonical_uuid(request_id):
             raise BusError("request_id must be a canonical UUID")
@@ -1358,10 +1567,17 @@ class Broker:
         db.execute("UPDATE human_chat_messages SET status=?,detail=?,updated_at=? WHERE id=?", (status, detail, now, mid))
         return {"id": mid, "status": status}
 
+    @staticmethod
+    def _unretired(agent):
+        if agent["retired_at"] is not None:
+            raise BusError("agent is retired; register its session again to reactivate it", "conflict")
+        return agent
+
     def _op_send(self, db, p, r, now):
-        sender = self._owned(db, p, r.get("sender"))
+        sender = self._unretired(self._owned(db, p, r.get("sender")))
         if any(field in r for field in ("conversation_id", "in_reply_to", "correlation_version")):
             raise BusError("message correlation is assigned by the broker")
+        sender_fence = self._expect_service_epoch(db, sender, r.get("expected_sender_epoch"))
         bus = _bus(r.get("bus", "general"))
         target = _text(r.get("target"), "target", 128)
         if not self._granted(db, p["id"], bus) or (bus != "general" and not self._member(db, sender["id"], bus)):
@@ -1377,12 +1593,30 @@ class Broker:
             raise BusError("recipient name is ambiguous; use its agent id", "ambiguous")
         self._cancel_invalid(db, now)
         target = ids[0]
+        target_row = db.execute("SELECT * FROM agents WHERE id=?", (target,)).fetchone()
+        target_fence = self._expect_service_epoch(db, target_row, r.get("expected_recipient_epoch"))
+        if target_fence is not None and r.get("target") != target:
+            raise BusError("fenced recipient requires its exact registration id", "conflict")
+        guards = {}
+        if sender_fence is not None:
+            guards[sender["id"]] = sender_fence["epoch"]
+        if target_fence is not None:
+            guards[target] = target_fence["epoch"]
+        context = None
+        if guards:
+            cached, context = self._service_request(db, p, r, sender["id"], guards, now)
+            if cached is not None:
+                return cached
         if db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] >= MAX_RECORDS:
             raise BusError("conversation limit reached", "limit")
         conversation = "c_" + uuid.uuid4().hex
         expires_at = now + MESSAGE_TTL
-        db.execute("INSERT INTO conversations VALUES(?,?,?,?,?,0)", (conversation, sender["id"], target, bus, expires_at))
-        return self._enqueue(db, sender["id"], target, bus, r.get("message"), conversation, expires_at, now)
+        db.execute("INSERT INTO conversations(id,initiator,published,bus,expires_at,closed,initiator_epoch,published_epoch) VALUES(?,?,?,?,?,0,?,?)",
+                   (conversation, sender["id"], target, bus, expires_at,
+                    sender_fence["epoch"] if sender_fence is not None else None,
+                    target_fence["epoch"] if target_fence is not None else None))
+        result = self._enqueue(db, sender["id"], target, bus, r.get("message"), conversation, expires_at, now)
+        return self._service_finish(db, p, r, context, result, now) if context is not None else result
 
     def _op_reply(self, db, p, r, now):
         # Atomic with enqueue: a lost HTTP response must not duplicate an answer.
@@ -1391,6 +1625,22 @@ class Broker:
         if any(field in r for field in ("target", "bus", "conversation", "chat", "identity",
                                        "conversation_id", "in_reply_to", "correlation_version")):
             raise BusError("reply destination and bus are fixed by the original message")
+        sender_fence = self._expect_service_epoch(db, sender, r.get("expected_sender_epoch"))
+        guards = {sender["id"]: sender_fence["epoch"]} if sender_fence is not None else {}
+        previous_message = db.execute("SELECT * FROM messages WHERE id=? AND target=?",
+                                      (r.get("id"), sender["id"])).fetchone()
+        if previous_message is not None:
+            receiver_fence = self._service_fence(db, previous_message["sender"])
+            if receiver_fence is not None:
+                if previous_message["sender_epoch"] != receiver_fence["epoch"] or receiver_fence["state"] != "active":
+                    raise BusError("reply recipient service epoch is stale", "conflict")
+                guards[receiver_fence["agent"]] = receiver_fence["epoch"]
+        if guards:
+            cached, context = self._service_request(db, p, r, sender["id"], guards, now)
+            if cached is not None:
+                return cached
+            result = self._reply(db, p, r, now)
+            return self._service_finish(db, p, r, context, result, now)
         key = r.get("request_id")
         if key is None:
             return self._reply(db, p, r, now)
@@ -1409,7 +1659,8 @@ class Broker:
         return result
 
     def _reply(self, db, p, r, now):
-        sender = self._owned(db, p, r.get("sender"))
+        # A stored reply_requests result still replays above; nothing new is sent.
+        sender = self._unretired(self._owned(db, p, r.get("sender")))
         mid = _text(r.get("id"), "message id", 128)
         if mid.startswith("hm_"):
             return self._chat_reply(db, sender, mid, r, now)
@@ -1433,9 +1684,12 @@ class Broker:
         if pending >= MAX_PENDING or db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= MAX_RECORDS:
             raise BusError("recipient queue is full", "limit")
         mid = "m_" + uuid.uuid4().hex
+        source_fence, target_fence = self._service_fence(db, sender), self._service_fence(db, target)
         db.execute("""INSERT INTO messages(id,sender,target,bus,message,status,created_at,expires_at,updated_at,conversation,
-                      in_reply_to,correlation_version) VALUES(?,?,?,?,?,'accepted',?,?,?,?,?,1)""",
-                   (mid, sender, target, bus, message, now, expires_at, now, conversation, in_reply_to))
+                      in_reply_to,correlation_version,sender_epoch,target_epoch) VALUES(?,?,?,?,?,'accepted',?,?,?,?,?,1,?,?)""",
+                   (mid, sender, target, bus, message, now, expires_at, now, conversation, in_reply_to,
+                    source_fence["epoch"] if source_fence is not None else None,
+                    target_fence["epoch"] if target_fence is not None else None))
         db.execute("INSERT INTO outbound_queue(message,target) VALUES(?,?)", (mid, target))
         return {"id": mid, "status": "accepted", "target": target, "expires_at": expires_at,
                 "conversation_expires_at": expires_at, "correlation_version": 1,
@@ -1446,15 +1700,37 @@ class Broker:
         # a client already has the message. Revocation blocks future fetches
         # and acknowledgments; it cannot undo a delivery already in progress.
         agent = self._owned(db, p, r.get("agent"))
+        self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         return self._poll(db, [agent["id"]], now, limit=1)
 
     def _op_poll_device(self, db, p, r, now):
         agents = r.get("agents")
         if not isinstance(agents, list) or not 1 <= len(agents) <= MAX_AGENTS:
             raise BusError("agents must be a nonempty bounded list of agent ids")
+        if any(not isinstance(agent, str) for agent in agents) or len(set(agents)) != len(agents):
+            raise BusError("poll agents must be unique exact registration ids")
         # Validate all ownership before leasing anything; no partial fetch.
         owned = list(dict.fromkeys(self._owned(db, p, agent)["id"] for agent in agents))
-        return self._poll(db, owned, now, limit=32)
+        epochs = r.get("service_epochs", {})
+        if (not isinstance(epochs, dict) or set(epochs) - set(owned)
+                or len(epochs) > MAX_AGENTS):
+            raise BusError("invalid service epoch selectors")
+        for value in epochs.values():
+            self._epoch(value)
+        eligible, refused = [], []
+        for ident in owned:
+            agent = self._owned(db, p, ident)
+            if self._service_fence(db, ident) is not None:
+                try:
+                    self._expect_service_epoch(db, agent, epochs.get(ident))
+                except BusError:
+                    refused.append({"agent": ident, "code": "service_epoch_required" if ident not in epochs else "stale_service_epoch"})
+                    continue
+            eligible.append(ident)
+        result = self._poll(db, eligible, now, limit=32) if eligible else {"messages": [], "lease_seconds": LEASE_TTL}
+        if refused:
+            result["refusals"] = refused
+        return result
 
     def _poll(self, db, agents, now, limit):
         self._cancel_invalid(db, now)
@@ -1478,6 +1754,9 @@ class Broker:
             if queued["message"].startswith("hm_"):
                 m = db.execute("""SELECT m.*,c.bus,c.agent FROM human_chat_messages m JOIN human_chats c ON c.id=m.chat
                                   WHERE m.id=?""", (queued["message"],)).fetchone()
+                if self._service_fence(db, m["agent"]) is not None:
+                    db.execute("UPDATE human_chat_messages SET status='cancelled',detail='service epoch changed',updated_at=? WHERE id=?", (now, m["id"]))
+                    continue
                 db.execute("UPDATE human_chat_messages SET status='leased',lease=?,lease_until=?,updated_at=? WHERE id=?",
                            (lease, now + LEASE_TTL, now, m["id"]))
                 messages.append({"id": m["id"], "sender": {"id": "human." + m["identity"], "name": m["identity"],
@@ -1488,19 +1767,28 @@ class Broker:
                                  "correlation_version": 1, "conversation_id": m["chat"], "in_reply_to": None})
                 continue
             m = db.execute("SELECT * FROM messages WHERE id=?", (queued["message"],)).fetchone()
+            target_fence = self._service_fence(db, m["target"])
+            if target_fence is not None and (m["target_epoch"] != target_fence["epoch"] or target_fence["state"] != "active"):
+                db.execute("UPDATE messages SET status='cancelled',detail='service epoch changed',updated_at=? WHERE id=?", (now, m["id"]))
+                continue
             db.execute("UPDATE messages SET status='leased',lease=?,lease_until=?,updated_at=? WHERE id=?",
                        (lease, now + LEASE_TTL, now, m["id"]))
             sender = db.execute("SELECT a.id,a.name,a.kind,p.device,p.user,p.id AS device_id FROM agents a JOIN principals p ON a.principal=p.id WHERE a.id=?",
                                 (m["sender"],)).fetchone()
-            messages.append({"id": m["id"], "sender": dict(sender), "target": m["target"], "bus": m["bus"],
+            item = {"id": m["id"], "sender": dict(sender), "target": m["target"], "bus": m["bus"],
                              "message": m["message"], "created_at": m["created_at"], "expires_at": m["expires_at"], "lease": lease,
                              "reply_to": m["id"], "conversation_expires_at": m["expires_at"],
                              "correlation_version": m["correlation_version"],
-                             "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]})
+                             "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]}
+            if m["sender_epoch"] is not None or m["target_epoch"] is not None:
+                item.update(protocol=SERVICE_FENCE_PROTOCOL, recipient_epoch=m["target_epoch"])
+                item["sender"]["epoch"] = m["sender_epoch"]
+            messages.append(item)
         return {"messages": messages, "lease_seconds": LEASE_TTL}
 
     def _op_ack(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"))
+        fenced = self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         status = r.get("status")
         if status not in ("delivered", "queued", "failed"):
             raise BusError("invalid delivery status")
@@ -1512,6 +1800,8 @@ class Broker:
         m = db.execute("SELECT * FROM messages WHERE id=? AND target=?", (mid, agent["id"])).fetchone()
         if m is None or not m["lease"] or not secrets.compare_digest(m["lease"], lease):
             raise BusError("unknown or unavailable message", "not_found")
+        if fenced is not None and m["target_epoch"] != agent["epoch"]:
+            raise BusError("delivery service epoch is stale", "conflict")
         self._cancel_invalid(db, now)
         m = db.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone()
         if m["status"] in ("delivered", "queued", "failed") and m["status"] == status:
@@ -1542,12 +1832,29 @@ class Broker:
 
     def _op_leave(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"), admin=True)
+        self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         bus = _bus(r.get("bus", "general"))
         db.execute("DELETE FROM memberships WHERE agent=? AND bus=?", (agent["id"], bus))
         db.execute("UPDATE conversations SET closed=1 WHERE bus=? AND (initiator=? OR published=?)",
                    (bus, agent["id"], agent["id"]))
         self._cancel_invalid(db, now)
         return {"agent": agent["id"], "bus": bus, "left": True}
+
+    def _op_retire(self, db, p, r, now):
+        # Owner-only, unlike leave: it releases this device's active quota. The
+        # row and its history remain until ordinary expiry, so receipts survive
+        # and the same exact session can reactivate its ID.
+        agent = self._owned(db, p, r.get("agent"))
+        if self._service_fence(db, agent["id"]) is not None:
+            raise BusError("fenced service retirement requires service_fence_retire and exact epoch", "conflict")
+        epoch = agent["epoch"]
+        if agent["retired_at"] is None:
+            epoch += 1
+            db.execute("DELETE FROM memberships WHERE agent=?", (agent["id"],))
+            db.execute("UPDATE conversations SET closed=1 WHERE initiator=? OR published=?", (agent["id"], agent["id"]))
+            db.execute("UPDATE agents SET status='offline',retired_at=?,epoch=? WHERE id=?", (now, epoch, agent["id"]))
+            self._cancel_invalid(db, now)
+        return {"agent": agent["id"], "retired": True, "epoch": epoch}
 
     def _op_revoke(self, db, p, r, now):
         self._admin(p)

@@ -342,6 +342,86 @@ run by the local owner, and requires a prior invitation on a remote installation
 Leaving a bus removes this session's membership; device revocation is the owner
 control that prevents that device from re-registering with the same credential.
 
+Each device may hold 128 active registrations. Leaving keeps a registration
+active. When a session or per-run service is finished for good, retire it:
+
+```sh
+communicate bus retire            # this session
+communicate bus retire a_<id>     # another registration owned by this device
+```
+
+Retirement leaves every bus, closes its conversations, cancels undelivered
+messages and releases its quota. Existing receipts and replies remain available
+until ordinary expiry. Registering the same exact session again restores its
+original ID, subject to the active limit. Only the owning device can retire a
+registration. Retired rows count against a separate retained-row limit until
+their history expires.
+
+Retirement cancels only deliveries that no adapter has acknowledged. A request
+that a service adapter already acknowledged as queued keeps that receipt, and
+its job stays pending in this device's service journal: retirement neither
+cancels nor answers it. The job waits for its reply deadline. If the same session
+registers again before then, the service endpoint can be asked about it again,
+but its reply fails because retirement closed the conversation. The `retire`
+result reports these jobs as `local_service_jobs_pending`. A retirement receipt
+therefore does not show that the endpoint's work stopped or that its resources
+may be reused.
+
+### Explicit service generation fences (prototype)
+
+`service-fence/epoch-v1` is a separate, permanent opt-in for exact known service
+registration IDs. It does not opt in native Claude/Codex sessions, guess a missing
+registration, or update another worker. An owning-device caller can inspect the
+capability with `communicate bus service-fence-status a_<id>`. An old hub's unknown
+operation response is not qualification or a successful retirement.
+
+An explicit `service-fence-retire a_<id> --service-id UUID --expected-epoch E
+--request-id KEY` first requires independently observed proof of the updated
+scoped consumer and absence of its old process, then quiesces that actor under
+a process-shared journal lock. It retires the exact broker generation with a
+compare-and-swap, saves the authenticated receipt and marks remaining journal
+work `abandoned_retired`. That disposition preserves unknown message epochs and
+uncertain outcomes; it is neither `consumed` nor `sent`. It proves no SDK stop or
+application consumption. Resource and lease recovery require independent checks.
+See [service adapters](SERVICE-ADAPTERS.md) for the consumer proof and barrier.
+
+Reactivation uses `register-service` with `--expected-agent a_<id>`,
+`--expected-epoch RETIRED_EPOCH` and a stable `--request-id`. Only a newer exact
+broker generation can activate the local journal. The broker also binds an
+opaque hash of the local endpoint/token-file configuration: an active generation
+cannot be silently retargeted. No token bytes or endpoint path are sent in this
+hash. A missing known registration remains an error, not permission to allocate
+a replacement identity. The process-shared actor lock covers the registration
+HTTP request as well as local activation and registration recording. Outgoing
+service sends, replies and leave updates use the same barrier, so a recovery
+guard holding that lock through a pool transaction cannot be raced by a local
+reactivation request already sent outside the lock.
+
+For opted-in senders, `send`/`reply` require their captured sender epoch; the
+updated client carries its local record or the explicit `--expected-sender-epoch`.
+Every send to an opted-in recipient, including a native sender, additionally
+requires `--expected-recipient-epoch` captured before dispatch. The send target
+must be the exact opted-in registration ID; a mutable alias is insufficient
+even when its replacement happens to have the same epoch. Reply routing
+validates the immutable original participant generation. A stable `--request-id`
+is required for these effects. Use the identical key and body only to recover
+its own lost response; never resend an older uncertain operation with a new key.
+The broker retains active-generation deduplication keys regardless of age. The
+fixed per-generation/global quotas refuse overflow instead of evicting a key
+and executing it twice. Garbage collection requires permanently stale epochs.
+
+Polling adds `service_epochs` selectors without changing the legacy `agents`
+list. After validating all ownership and selector shapes, the broker skips only
+owned opted-in services whose selectors are missing or stale. Unrelated native
+deliveries and heartbeat updates continue. Skipped services get no lease or
+status change, and additive refusal metadata does not require restarting an old
+default worker. Human-chat delivery to opted-in services is refused until that
+route has an equivalent generation protocol; other human chats are unchanged.
+
+This source prototype is not an installed or hosted release. Its broker, client,
+journal and caller must pass matching artifact and race qualification before
+operation. Do not replace a newer public source tree wholesale with a backport.
+
 Account owners can create project buses, issue scoped invitations and manage
 their collaborators in the dashboard. Hub administrators can also manage legacy
 buses and revoke entire devices. Regular members see only their authorized buses.
