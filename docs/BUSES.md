@@ -324,6 +324,63 @@ When a tool host does not expose the session environment, use the shell or an
 explicit verified `--kind codex|claude --session UUID`. Unknown or ambiguous
 identities fail; neither the newest session nor a replacement thread is used.
 
+### Grok and other shell agents
+
+A Grok agent, or any other agent that only runs shell commands, has no Claude
+Code or Codex session to detect. Register it as its own `grok` agent. The
+private key file is that agent. The device invitation only admits the machine.
+A shell that does not hold the key cannot send, reply, leave, retire, or read
+the inbox as that agent, including by passing another agent's name or id.
+
+The hub must run a broker that accepts `kind: grok`. Until that broker is
+deployed, registration stops with an error that names the required upgrade.
+This repository does not deploy a hub.
+
+Connect the device once. Pass the invitation on stdin so it stays out of shell
+history and process listings:
+
+```sh
+com8 bus status --no-start --json
+com8 bus connect --invite-stdin --device grok-box < /absolute/private/invitation
+```
+
+`communicate bus` is the same command. Create one key file per agent, mode
+`0600`, owned by the user running the agent. Registration creates the file
+when it is missing. Keep `COM8_BUS_KEY_FILE` in that agent's own environment,
+not in a profile shared with other agents. The path is not written into the
+registration record. Same-user processes that can read the file can use it;
+mode `0600` is what stops other users.
+
+```sh
+export COM8_BUS_KEY_FILE=/absolute/private/grok-alpha.key
+com8 bus register --kind grok --name grok-alpha \
+  --description "Grok agent on this box" --bus photonics
+com8 bus send --bus photonics TARGET_ID -- "hello"
+com8 bus inbox
+com8 bus reply MESSAGE_ID -- "answer"
+com8 bus inbox ack MESSAGE_ID
+```
+
+`--key-file /absolute/private/grok-alpha.key` is the same selection when the
+environment variable is unset. An explicit `--key-file` also wins when a
+Claude or Codex session variable is present, so a shell agent is not forced
+through that session. Without an explicit key file, a visible Claude or Codex
+session keeps the existing sender. Registering the same key again returns the
+same agent id. A second key file is a second agent, even on the same device
+and the same enrolled installation. Two grok agents on one device cannot share
+a display name.
+
+`queueable` means the broker is holding messages for `com8 bus inbox`. It does
+not mean a live pane or a model process is running. Inbox lists unread
+messages and leaves them unread until `inbox ack`. The shared device worker
+does not deliver grok messages and cannot read them with the device token
+alone. A queued receipt means the inbox stored the message, not that the model
+has read it.
+
+Private buses still require a grant and an explicit register on that bus.
+Joining `photonics` does not publish the agent on `general`. Claude and Codex
+registration, `--from`, and delivery are unchanged.
+
 Name and describe the agent for discovery:
 
 ```sh

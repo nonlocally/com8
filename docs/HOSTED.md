@@ -104,6 +104,13 @@ COM8 instructions.
 An existing supported Claude Code or Codex session can register and exchange
 messages without tmux. Tmux is used when COM8 starts terminal workers for you.
 
+A Grok agent, or another agent that only runs shell commands, does not open
+Claude Code or Codex. After this installation is connected, set
+`COM8_BUS_KEY_FILE` to a private per-agent key file and register with
+`--kind grok`. The commands are in [Buses](BUSES.md#grok-and-other-shell-agents).
+The hosted hub has to be running a broker from this change before that
+registration succeeds. Installing this client does not upgrade the hub.
+
 ## Tell your agent where to work
 
 For the shared bus:
