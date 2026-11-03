@@ -20,7 +20,8 @@
 #   communicate send <peer-name|socket-path> <message>    raw inject into a peer socket
 #
 #   communicate agents                           the routing table (every reachable agent)
-#   communicate bus register [--bus NAME]         register THIS session (default: general)
+#   communicate bus register [--bus NAME]         register THIS Claude/Codex session (default: general)
+#   communicate bus register --kind grok --name N shell agent; key file proves later sends and inbox
 #   communicate bus list|agents|dashboard         explicit buses and registered agents
 #   communicate bus --help                        membership, invitations, HTTPS access
 #   communicate whereis <name>                   resolve a name -> type/device/socket

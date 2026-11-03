@@ -2,7 +2,14 @@
 """Explicit bus client and outbound local-session adapter. Stdlib only.
 
 Local state belongs to one OS user. The broker never receives socket paths,
-working directories, transcripts, shell commands, or local session credentials.
+working directories, transcripts, shell commands, or Claude/Codex session
+credentials. A grok agent key is sent only as a one-request bearer proof; the
+broker checks it and does not store or return it.
+
+Shell agents such as Grok have no Claude or Codex session. Register one with
+--kind grok --name NAME and a private --key-file (or COM8_BUS_KEY_FILE). That
+key proves later sends and inbox reads. Queueable means messages wait in
+`bus inbox` until the key reads them.
 """
 import argparse
 import base64
@@ -422,6 +429,143 @@ def slug(value):
     return re.sub(r"[^a-z0-9._-]+", "-", value.lower()).strip("-.")[:64]
 
 
+def grok_key_file(args):
+    value = getattr(args, "key_file", None)
+    if isinstance(value, str) and value:
+        return value
+    value = os.environ.get("COM8_BUS_KEY_FILE")
+    return value if isinstance(value, str) and value else None
+
+
+def grok_key_location(path):
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = Path.cwd() / candidate
+    return candidate
+
+
+def read_grok_key(path):
+    """Read a regular private owner file without following a final symlink."""
+    location = grok_key_location(path)
+    if location.is_symlink():
+        raise BusError("grok key file must not be a symlink")
+    try:
+        fd = os.open(location, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise BusError("grok key file is missing; pass --key-file or set COM8_BUS_KEY_FILE") from None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise BusError("grok key file must be a private file owned by this user")
+        if info.st_nlink != 1:
+            raise BusError("grok key file must not have extra hard links")
+        if not 32 <= info.st_size <= 4096:
+            raise BusError("grok key file has an invalid size")
+        try:
+            secret = os.read(fd, 4097).decode("ascii").strip()
+        except UnicodeError:
+            raise BusError("grok key file has invalid contents") from None
+        if not 32 <= len(secret) <= 4096 or any(ch.isspace() or ord(ch) < 33 or ord(ch) > 126 for ch in secret):
+            raise BusError("grok key file has invalid contents")
+        return secret
+    finally:
+        os.close(fd)
+
+
+def create_grok_key(path):
+    location = grok_key_location(path)
+    if location.is_symlink():
+        raise BusError("grok key file must not be a symlink")
+    if location.exists():
+        read_grok_key(location)
+        return str(location)
+    location.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    secret = secrets.token_urlsafe(32)
+    try:
+        fd = os.open(location, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    except FileExistsError:
+        read_grok_key(location)
+        return str(location)
+    try:
+        os.write(fd, (secret + "\n").encode("ascii"))
+        os.fsync(fd)
+        os.fchmod(fd, 0o600)
+    finally:
+        os.close(fd)
+    read_grok_key(location)
+    return str(location)
+
+
+def grok_session_key(secret):
+    return "grok:" + hashlib.sha256(secret.encode("ascii")).hexdigest()
+
+
+def grok_binding(path, create=False):
+    location = create_grok_key(path) if create else str(grok_key_location(path))
+    secret = read_grok_key(location)
+    return location, secret, grok_session_key(secret)
+
+
+def load_grok_record(conn, session_key):
+    url = canonical_hub(config(), conn["url"])
+    matches = [row for row in registrations().values()
+               if row.get("url") == url and row.get("kind") == "grok"
+               and row.get("session_key") == session_key and not row.get("retired")]
+    if len(matches) != 1:
+        raise BusError("grok key is not registered on this hub")
+    return dict(matches[0])
+
+
+def with_grok_key(record, secret):
+    bound = dict(record)
+    bound["agent_key"] = secret
+    return bound
+
+
+def native_self_visible():
+    return bool(os.environ.get("CODEX_THREAD_ID") or os.environ.get("CLAUDE_CODE_MESSAGING_SOCKET"))
+
+
+def resolve_grok_actor(conn, args, target):
+    """Select a grok agent by key. None keeps the existing Claude/Codex resolution."""
+    explicit = getattr(args, "key_file", None)
+    if isinstance(explicit, str) and explicit:
+        _location, secret, session_key = grok_binding(explicit)
+        record = load_grok_record(conn, session_key)
+        if target not in ("self", record["id"], record["name"]):
+            raise BusError("grok key does not match --from")
+        return with_grok_key(record, secret)
+    env_path = os.environ.get("COM8_BUS_KEY_FILE")
+    env_path = env_path if isinstance(env_path, str) and env_path else None
+    if target != "self":
+        url = canonical_hub(config(), conn["url"])
+        matches = [row for row in registrations().values()
+                   if row.get("url") == url and target in (row.get("id"), row.get("name"))
+                   and not row.get("retired")]
+        if any(row.get("kind") == "grok" for row in matches):
+            if not env_path:
+                raise BusError("grok agent requires its key file; pass --key-file or set COM8_BUS_KEY_FILE")
+            _location, secret, session_key = grok_binding(env_path)
+            record = load_grok_record(conn, session_key)
+            if target not in (record["id"], record["name"]):
+                raise BusError("grok key does not match --from")
+            return with_grok_key(record, secret)
+        return None
+    if native_self_visible() or not env_path:
+        return None
+    _location, secret, session_key = grok_binding(env_path)
+    return with_grok_key(load_grok_record(conn, session_key), secret)
+
+
+def agent_proof(record):
+    if record.get("kind") != "grok":
+        return {}
+    secret = record.get("agent_key")
+    if not isinstance(secret, str):
+        raise BusError("grok agent requires its key file; pass --key-file or set COM8_BUS_KEY_FILE")
+    return {"agent_key": secret}
+
+
 def identity(target="self", session=None, kind=None, name=None):
     rows = sidecars()
     thread = session if kind == "codex" else None
@@ -472,7 +616,8 @@ def identity(target="self", session=None, kind=None, name=None):
         if len(matches) > 1:
             raise BusError("ambiguous Codex name; specify --kind codex --session UUID")
     raise BusError("cannot identify this session; run in the agent's shell, or supply "
-                   "--kind codex|claude --session EXACT_UUID (never choose the newest session)")
+                   "--kind codex|claude --session EXACT_UUID (never choose the newest session). "
+                   "A shell agent such as Grok uses --kind grok --name NAME --key-file PATH")
 
 
 def registrations():
@@ -521,6 +666,8 @@ def remember_adapter(conn, ident, result, description="", bus=None):
 
 
 def _remember_adapter(conn, ident, result, description="", bus=None):
+    ident.pop("agent_key", None)
+    ident.pop("key_file", None)
     with locked("registrations"):
         cfg = config()
         url = canonical_hub(cfg, conn["url"])
@@ -645,7 +792,147 @@ def start_worker():
         raise BusError("outbound worker failed to start; inspect %s" % (root / "worker.log"))
 
 
+def public_grok_message(envelope):
+    sender = envelope.get("sender") if isinstance(envelope.get("sender"), dict) else {}
+    return {"id": envelope.get("id"), "bus": envelope.get("bus"),
+            "sender": {"id": sender.get("id"), "name": sender.get("name"), "kind": sender.get("kind")},
+            "message": envelope.get("message"), "reply_to": envelope.get("reply_to"),
+            "conversation_id": envelope.get("conversation_id"), "in_reply_to": envelope.get("in_reply_to"),
+            "expires_at": envelope.get("expires_at"),
+            "conversation_expires_at": envelope.get("conversation_expires_at")}
+
+
+def grok_inbox_db():
+    path = state_dir() / "grok-inbox.sqlite"
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1
+                or info.st_mode & 0o077):
+            raise BusError("invalid grok inbox")
+    finally:
+        os.close(fd)
+    db = sqlite3.connect(path, timeout=15)
+    db.row_factory = sqlite3.Row
+    db.execute("PRAGMA synchronous=FULL")
+    db.execute("""CREATE TABLE IF NOT EXISTS messages(
+        hub TEXT NOT NULL, id TEXT NOT NULL, agent TEXT NOT NULL, envelope TEXT NOT NULL,
+        lease TEXT NOT NULL DEFAULT '', broker_acked INTEGER NOT NULL DEFAULT 0,
+        read_at REAL, at REAL NOT NULL, PRIMARY KEY(hub,id))""")
+    return db
+
+
+def pull_grok_inbox(conn, record, secret):
+    url = canonical_hub(config(), conn["url"])
+    proof = {"agent_key": secret}
+    db = grok_inbox_db()
+    try:
+        pending = db.execute("SELECT id, lease FROM messages WHERE hub=? AND agent=? AND broker_acked=0",
+                             (url, record["id"])).fetchall()
+        for row in pending:
+            if not row["lease"]:
+                continue
+            try:
+                request(conn, "ack", agent=record["id"], id=row["id"], status="queued",
+                        detail="stored in the grok inbox; reading is separate", lease=row["lease"], **proof)
+            except BusError:
+                continue
+            db.execute("UPDATE messages SET broker_acked=1, lease='' WHERE hub=? AND id=?", (url, row["id"]))
+            db.commit()
+        for _ in range(32):
+            batch = request(conn, "poll", agent=record["id"], **proof)
+            envelopes = batch.get("messages") or []
+            if not envelopes:
+                break
+            for envelope in envelopes:
+                if envelope.get("target") != record["id"] or not isinstance(envelope.get("id"), str):
+                    continue
+                lease = envelope.get("lease") or ""
+                db.execute("""INSERT OR IGNORE INTO messages(hub,id,agent,envelope,lease,broker_acked,at)
+                              VALUES(?,?,?,?,?,0,?)""",
+                           (url, envelope["id"], record["id"], json.dumps(public_grok_message(envelope)),
+                            lease, time.time()))
+                db.commit()
+                if not lease:
+                    continue
+                try:
+                    request(conn, "ack", agent=record["id"], id=envelope["id"], status="queued",
+                            detail="stored in the grok inbox; reading is separate", lease=lease, **proof)
+                except BusError:
+                    continue
+                db.execute("UPDATE messages SET broker_acked=1, lease='' WHERE hub=? AND id=?",
+                           (url, envelope["id"]))
+                db.commit()
+        db.execute("DELETE FROM messages WHERE read_at IS NOT NULL AND read_at<?", (time.time() - 172800,))
+        db.commit()
+        rows = db.execute("""SELECT envelope FROM messages WHERE hub=? AND agent=? AND read_at IS NULL
+                             ORDER BY at, id""", (url, record["id"])).fetchall()
+        return [public_grok_message(json.loads(row["envelope"])) for row in rows]
+    finally:
+        db.close()
+
+
+def inbox(args):
+    path = grok_key_file(args)
+    if not path:
+        raise BusError("grok inbox requires --key-file or COM8_BUS_KEY_FILE")
+    _location, secret, session_key = grok_binding(path)
+    conn = connection(hub=args.hub)
+    record = load_grok_record(conn, session_key)
+    url = canonical_hub(config(), conn["url"])
+    selector = list(getattr(args, "selector", []) or [])
+    if selector:
+        if selector[0] != "ack" or len(selector) != 2 or not selector[1]:
+            raise BusError("usage: communicate bus inbox [ack MESSAGE_ID]")
+        message_id = selector[1]
+        db = grok_inbox_db()
+        try:
+            row = db.execute("SELECT read_at FROM messages WHERE hub=? AND agent=? AND id=?",
+                             (url, record["id"], message_id)).fetchone()
+            if row is None:
+                raise BusError("unknown inbox message")
+            if row["read_at"] is None:
+                db.execute("UPDATE messages SET read_at=? WHERE hub=? AND agent=? AND id=?",
+                           (time.time(), url, record["id"], message_id))
+                db.commit()
+        finally:
+            db.close()
+        return {"ok": True, "id": message_id, "read": True}
+    return {"ok": True, "id": record["id"], "name": record["name"],
+            "messages": pull_grok_inbox(conn, record, secret)}
+
+
+def register_grok(args):
+    if not isinstance(args.name, str) or not args.name.strip():
+        raise BusError("grok registration requires --name")
+    path = grok_key_file(args)
+    if not path:
+        raise BusError("grok registration requires --key-file or COM8_BUS_KEY_FILE")
+    location, secret, session_key = grok_binding(path, create=True)
+    ident = {"session_key": session_key, "kind": "grok", "name": args.name, "status": "queueable"}
+    conn = connection(hub=args.hub)
+    if args.bus != "general" and conn.get("local"):
+        request(conn, "create", bus=args.bus)
+    desc = args.description or ""
+    try:
+        result = request(conn, "register", session_key=session_key, name=args.name, kind="grok",
+                         description=desc, bus=args.bus, status="queueable", agent_key=secret,
+                         device_metadata=device_metadata())
+    except BusError as exc:
+        if "kind must be" in str(exc):
+            raise BusError("this hub does not accept grok agents; deploy a broker that supports them before registering") from None
+        raise
+    ident = remember_adapter(conn, ident, result, desc, args.bus)
+    start_worker()
+    return {**attribution(result), "ok": True, "id": ident["id"], "name": ident["name"], "bus": args.bus,
+            "status": "queueable", "kind": "grok", "key_file": location, "hub": ident["url"],
+            "note": "Registered grok agent. Queueable means messages wait in the inbox until this key reads them; it does not mean a live session is running."}
+
+
 def register(args):
+    if args.kind == "grok":
+        return register_grok(args)
     ident = identity(args.target, args.session, args.kind, args.name)
     conn = connection(hub=args.hub)
     if args.bus != "general" and conn.get("local"):
@@ -663,6 +950,8 @@ def register(args):
 
 
 def current_status(record):
+    if record["kind"] == "grok":
+        return "queueable"
     if record["kind"] == "service":
         from bus_service import configured
         return "queueable" if configured(record) else "offline"
@@ -680,6 +969,8 @@ def current_status(record):
 
 
 def deliver(record, envelope):
+    if record["kind"] == "grok":
+        raise BusError("grok messages stay queued until communicate bus inbox reads them")
     if record["kind"] == "service":
         from bus_service import enqueue
         return enqueue(state_dir(), record, envelope)
@@ -845,7 +1136,7 @@ def worker():
                             break
                         conn = cfg["connections"][url]
                         active = {record["id"]: record for record in records
-                                  if current_status(record) != "offline"}
+                                  if record.get("kind") != "grok" and current_status(record) != "offline"}
                         ids = list(active)
                         for offset in range(0, len(ids), 128):
                             if stopping():
@@ -1080,7 +1371,11 @@ def parser():
     reg.add_argument("--bus", default="general")
     reg.add_argument("--name")
     reg.add_argument("--session")
-    reg.add_argument("--kind", choices=["claude", "codex"])
+    reg.add_argument("--kind", choices=["claude", "codex", "grok"],
+                     help="claude or codex selects an existing session; grok registers a shell agent")
+    reg.add_argument("--key-file",
+                     help="private grok key file, mode 0600, created if missing; "
+                          "COM8_BUS_KEY_FILE is the same path and keeps it off the command line")
     reg.add_argument("--description")
     reg.add_argument("--json", action="store_true")
     service = commands.add_parser("register-service", help="publish a fixed authenticated service adapter")
@@ -1115,13 +1410,16 @@ def parser():
     leave = commands.add_parser("leave")
     leave.add_argument("target", nargs="?", default="self")
     leave.add_argument("--bus", default="general")
+    leave.add_argument("--key-file", help="grok key file; COM8_BUS_KEY_FILE is equivalent")
     retire = commands.add_parser("retire", help="leave every bus and release this device's registration quota; "
                                  "history is kept and the same session can register again")
     retire.add_argument("target", nargs="?", default="self")
+    retire.add_argument("--key-file", help="grok key file; COM8_BUS_KEY_FILE is equivalent")
     send = commands.add_parser("send")
     send.add_argument("target")
     send.add_argument("--bus", default="general")
     send.add_argument("--from", dest="sender", default="self")
+    send.add_argument("--key-file", help="grok key file; COM8_BUS_KEY_FILE is equivalent when no native session is visible")
     send.add_argument("--expected-sender-epoch", type=int)
     send.add_argument("--expected-recipient-epoch", type=int)
     send.add_argument("--request-id")
@@ -1131,7 +1429,13 @@ def parser():
     reply.add_argument("--request-id")
     reply.add_argument("id", help="ID of the received message")
     reply.add_argument("--from", dest="sender", default="self")
+    reply.add_argument("--key-file", help="grok key file; COM8_BUS_KEY_FILE is equivalent when no native session is visible")
     reply.add_argument("message", nargs="*")
+    inbox_cmd = commands.add_parser("inbox", help="read queued messages for a grok agent key")
+    # One catch-all positional. Separate optional positionals make argparse
+    # reject the `-- message` separator used by send and reply.
+    inbox_cmd.add_argument("selector", nargs="*", help="ack MESSAGE_ID marks one stored message read")
+    inbox_cmd.add_argument("--key-file", help="private grok key file; COM8_BUS_KEY_FILE is equivalent")
     receipt = commands.add_parser("receipt")
     receipt.add_argument("id")
     invite = commands.add_parser("invite")
@@ -1350,10 +1654,10 @@ def run(args):
     if cmd == "create":
         return request(conn, "create", bus=args.bus)
     if cmd == "leave":
-        record = local_agent(conn, args.target)
+        record = resolve_grok_actor(conn, args, args.target) or local_agent(conn, args.target)
         selectors = {"expected_epoch": service_epoch(record)} if service_epoch(record) is not None else {}
         with service_effect(record):
-            result = request(conn, "leave", agent=record["id"], bus=args.bus, **selectors)
+            result = request(conn, "leave", agent=record["id"], bus=args.bus, **selectors, **agent_proof(record))
             with locked("registrations"):
                 url = canonical_hub(config(), conn["url"])
                 regs = registrations()
@@ -1364,14 +1668,24 @@ def run(args):
             return result
     if cmd == "retire":
         try:
-            agent = local_agent(conn, args.target)["id"]
+            row = local_agent(conn, args.target)
         except BusError:
             # The broker enforces ownership, so an exact ID can still retire this
             # device's registration after its local record was lost.
             if not re.fullmatch(r"a_[0-9a-f]{32}", args.target):
                 raise
-            agent = args.target
-        result = request(conn, "retire", agent=agent)
+            row = {"id": args.target}
+        fields = {}
+        explicit_key = getattr(args, "key_file", None)
+        if row.get("kind") == "grok" or (row.get("kind") is None and explicit_key):
+            path = explicit_key or (os.environ.get("COM8_BUS_KEY_FILE") if row.get("kind") == "grok" else None)
+            if not path:
+                raise BusError("grok agent requires its key file; pass --key-file or set COM8_BUS_KEY_FILE")
+            _location, secret, session_key = grok_binding(path)
+            if row.get("session_key") and session_key != row["session_key"]:
+                raise BusError("grok key does not match --from")
+            fields = {"agent_key": secret}
+        result = request(conn, "retire", agent=row["id"], **fields)
         apply_retirement(conn, result)
         # The broker cancels only unacknowledged deliveries. Service jobs already
         # queued here stay pending in the local journal, neither cancelled nor answered.
@@ -1381,27 +1695,34 @@ def run(args):
             service_jobs = journal(state_dir())
             try:
                 pending = service_jobs.execute("SELECT COUNT(*) FROM jobs WHERE hub=? AND recipient=? AND state='pending'",
-                                               (canonical_hub(config(), conn["url"]), agent)).fetchone()[0]
+                                               (canonical_hub(config(), conn["url"]), row["id"])).fetchone()[0]
             finally:
                 service_jobs.close()
         return {**result, "local_service_jobs_pending": pending}
+    if cmd == "inbox":
+        return inbox(args)
     if cmd in ("send", "reply"):
         if not args.message:
             raise BusError("empty message")
-        try:
-            sender = local_agent(conn, args.sender)
-        except BusError:
-            if cmd == "send" and args.bus == "general" and args.sender == "self":
-                sender = identify_sender(conn)
-            elif cmd == "send" and args.bus != "general":
-                raise BusError("private-bus sending requires membership; run communicate bus register --bus " + args.bus) from None
-            else:
-                raise
+        actor = resolve_grok_actor(conn, args, args.sender)
+        if actor is not None:
+            sender = actor
         else:
-            # Hidden identities may be pruned after their conversations expire.
-            # Refresh only exact self; never guess another local session.
-            if cmd == "send" and args.bus == "general" and args.sender == "self" and not active_adapter(sender):
-                sender = identify_sender(conn)
+            try:
+                sender = local_agent(conn, args.sender)
+            except BusError:
+                if cmd == "send" and args.bus == "general" and args.sender == "self":
+                    sender = identify_sender(conn)
+                elif cmd == "send" and args.bus != "general":
+                    raise BusError("private-bus sending requires membership; run communicate bus register --bus " + args.bus) from None
+                else:
+                    raise
+            else:
+                # Hidden identities may be pruned after their conversations expire.
+                # Refresh only exact self; never guess another local session.
+                if cmd == "send" and args.bus == "general" and args.sender == "self" and not active_adapter(sender):
+                    sender = identify_sender(conn)
+        proof = agent_proof(sender)
         with service_effect(sender):
             if cmd == "reply":
                 selectors = {}
@@ -1410,7 +1731,8 @@ def run(args):
                     selectors["expected_sender_epoch"] = epoch
                 if args.request_id is not None:
                     selectors["request_id"] = args.request_id
-                result = request(conn, "reply", sender=sender["id"], id=args.id, message=" ".join(args.message), **selectors)
+                result = request(conn, "reply", sender=sender["id"], id=args.id, message=" ".join(args.message),
+                                 **selectors, **proof)
             else:
                 selectors = {}
                 epoch = args.expected_sender_epoch if args.expected_sender_epoch is not None else service_epoch(sender)
@@ -1421,7 +1743,7 @@ def run(args):
                 if args.request_id is not None:
                     selectors["request_id"] = args.request_id
                 result = request(conn, "send", sender=sender["id"], target=args.target, bus=args.bus,
-                                 message=" ".join(args.message), **selectors)
+                                 message=" ".join(args.message), **selectors, **proof)
             retain_reply_adapter(sender, result.get("conversation_expires_at"))
             start_worker()
             return result

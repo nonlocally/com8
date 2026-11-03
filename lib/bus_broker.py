@@ -82,6 +82,14 @@ def _digest(value):
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _grok_digest(value):
+    """Hash a presented grok key. The raw key is never stored."""
+    if (not isinstance(value, str) or not 32 <= len(value) <= 4096
+            or any(ch.isspace() or ord(ch) < 33 or ord(ch) > 126 for ch in value)):
+        raise BusError("grok agent requires its agent key", "forbidden")
+    return hashlib.sha256(value.encode("ascii")).hexdigest()
+
+
 def _text(value, label, limit, optional=False):
     if not isinstance(value, str) or len(value.encode("utf-8")) > limit:
         raise BusError("invalid %s" % label)
@@ -590,6 +598,18 @@ class Broker:
         if row is None or (row["principal"] != p["id"] and not (admin and p["is_admin"])):
             raise BusError("unknown or unavailable agent", "not_found")
         return row
+
+    @staticmethod
+    def _require_grok_actor(agent, presented):
+        """A device token names the machine. Only the grok key acts as that agent."""
+        if agent["kind"] != "grok":
+            if presented is not None:
+                raise BusError("agent_key is only accepted for grok agents")
+            return
+        digest = _grok_digest(presented)
+        expected = agent["session_key"][5:] if str(agent["session_key"]).startswith("grok:") else ""
+        if len(expected) != len(digest) or not secrets.compare_digest(expected, digest):
+            raise BusError("grok agent key does not match this registration", "forbidden")
 
     def _expire(self, db, now):
         db.execute("DELETE FROM reply_requests WHERE created_at<?", (now - RECEIPT_RETENTION,))
@@ -1120,12 +1140,24 @@ class Broker:
         session_key = _text(r.get("session_key"), "session_key", 256)
         name = _text(r.get("name"), "name", 128)
         kind = r.get("kind", "claude")
-        if kind not in ("claude", "codex", "service"):
-            raise BusError("kind must be claude, codex or service")
+        if kind not in ("claude", "codex", "service", "grok"):
+            raise BusError("kind must be claude, codex, service or grok")
         description = _text(r.get("description", ""), "description", 2048, optional=True)
-        status = r.get("status", "queueable" if kind == "codex" else "live")
+        status = r.get("status", "queueable" if kind in ("codex", "grok") else "live")
         if status not in ("live", "queueable", "offline"):
             raise BusError("status must be live, queueable, or offline")
+        if kind == "grok" or session_key.startswith("grok:"):
+            if kind != "grok" or not re.fullmatch(r"grok:[0-9a-f]{64}", session_key):
+                raise BusError("invalid grok registration", "forbidden")
+            if status != "queueable":
+                raise BusError("grok agents are queueable")
+            digest = _grok_digest(r.get("agent_key"))
+            if not secrets.compare_digest(session_key[5:], digest):
+                raise BusError("grok agent key does not match this registration", "forbidden")
+            clash = db.execute("""SELECT 1 FROM agents WHERE principal=? AND name=? AND session_key!=?
+                                  AND retired_at IS NULL""", (p["id"], name, session_key)).fetchone()
+            if clash:
+                raise BusError("grok agent name is already in use on this device", "conflict")
         existing = db.execute("SELECT * FROM agents WHERE principal=? AND session_key=?",
                               (p["id"], session_key)).fetchone()
         fence = db.execute("SELECT * FROM service_fences WHERE principal=? AND session_key=?",
@@ -1575,6 +1607,7 @@ class Broker:
 
     def _op_send(self, db, p, r, now):
         sender = self._unretired(self._owned(db, p, r.get("sender")))
+        self._require_grok_actor(sender, r.get("agent_key"))
         if any(field in r for field in ("conversation_id", "in_reply_to", "correlation_version")):
             raise BusError("message correlation is assigned by the broker")
         sender_fence = self._expect_service_epoch(db, sender, r.get("expected_sender_epoch"))
@@ -1622,6 +1655,7 @@ class Broker:
         # Atomic with enqueue: a lost HTTP response must not duplicate an answer.
         # Existing clients omit request_id and retain their original semantics.
         sender = self._owned(db, p, r.get("sender"))
+        self._require_grok_actor(sender, r.get("agent_key"))
         if any(field in r for field in ("target", "bus", "conversation", "chat", "identity",
                                        "conversation_id", "in_reply_to", "correlation_version")):
             raise BusError("reply destination and bus are fixed by the original message")
@@ -1700,6 +1734,7 @@ class Broker:
         # a client already has the message. Revocation blocks future fetches
         # and acknowledgments; it cannot undo a delivery already in progress.
         agent = self._owned(db, p, r.get("agent"))
+        self._require_grok_actor(agent, r.get("agent_key"))
         self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         return self._poll(db, [agent["id"]], now, limit=1)
 
@@ -1720,6 +1755,11 @@ class Broker:
         eligible, refused = [], []
         for ident in owned:
             agent = self._owned(db, p, ident)
+            if agent["kind"] == "grok":
+                # The shared device poll must not carry grok payloads. The agent
+                # key is presented only to the single-agent poll used by inbox.
+                refused.append({"agent": ident, "code": "grok_key_required"})
+                continue
             if self._service_fence(db, ident) is not None:
                 try:
                     self._expect_service_epoch(db, agent, epochs.get(ident))
@@ -1788,6 +1828,7 @@ class Broker:
 
     def _op_ack(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"))
+        self._require_grok_actor(agent, r.get("agent_key"))
         fenced = self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         status = r.get("status")
         if status not in ("delivered", "queued", "failed"):
@@ -1832,6 +1873,7 @@ class Broker:
 
     def _op_leave(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"), admin=True)
+        self._require_grok_actor(agent, r.get("agent_key"))
         self._expect_service_epoch(db, agent, r.get("expected_epoch"))
         bus = _bus(r.get("bus", "general"))
         db.execute("DELETE FROM memberships WHERE agent=? AND bus=?", (agent["id"], bus))
@@ -1845,6 +1887,7 @@ class Broker:
         # row and its history remain until ordinary expiry, so receipts survive
         # and the same exact session can reactivate its ID.
         agent = self._owned(db, p, r.get("agent"))
+        self._require_grok_actor(agent, r.get("agent_key"))
         if self._service_fence(db, agent["id"]) is not None:
             raise BusError("fenced service retirement requires service_fence_retire and exact epoch", "conflict")
         epoch = agent["epoch"]

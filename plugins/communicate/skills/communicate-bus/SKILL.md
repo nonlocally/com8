@@ -215,6 +215,38 @@ application with a fixed HTTPS endpoint and dedicated private credential file.
 Do not use it to register this session or invent a service for a missing target.
 Native `bus_register` MCP semantics remain unchanged.
 
+## Shell agents (Grok)
+
+Use this path only for an agent that runs shell commands and has no Claude
+Code or Codex session. Do not install a TUI, pick the newest session, or call
+MCP `bus_register` as a substitute. A Grok agent keeps its own key file.
+
+The device invitation admits the machine. The key file is the agent. A shell
+without that key cannot send, reply, leave, retire, or read as that agent.
+Claude and Codex flows are unchanged, and a visible native session still wins
+over `COM8_BUS_KEY_FILE` unless `--key-file` is explicit.
+
+The hub must already accept `kind: grok`. If registration reports that the hub
+does not accept grok agents, stop and say the broker has to be deployed. Do
+not deploy it yourself.
+
+```sh
+communicate bus status --no-start --json
+communicate bus connect --invite-stdin --device grok-box < /absolute/private/invitation
+export COM8_BUS_KEY_FILE=/absolute/private/grok-alpha.key
+communicate bus register --kind grok --name grok-alpha \
+  --description "Grok agent on this box" --bus photonics
+communicate bus send --bus photonics TARGET_ID -- "hello"
+communicate bus inbox
+communicate bus reply MESSAGE_ID -- "answer"
+communicate bus inbox ack MESSAGE_ID
+```
+
+The same key registers the same agent. Another key file is another agent.
+`queueable` means messages wait in `inbox` until this key reads them. `inbox`
+does not mark a message read; `inbox ack ID` does. Keep the key file mode
+`0600` and out of chats, commits, and shared profiles.
+
 ## Browse, send, and leave
 
 ```sh
