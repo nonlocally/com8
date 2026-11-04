@@ -37,6 +37,19 @@ _LOCK_PID = os.getpid()
 SOURCE_AT_IMPORT = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
+def _user_agent():
+    try:
+        version = (Path(__file__).resolve().parent.parent / "VERSION").read_text().strip()
+    except OSError:
+        version = "0"
+    return "com8-bus-worker/" + version
+
+
+# The worker names itself on bridge requests: an endpoint behind an edge proxy (Cloudflare's browser integrity
+# check answers 403 "error code: 1010" to urllib's default signature) could otherwise never be reached.
+USER_AGENT = _user_agent()
+
+
 def contract_version(value):
     if type(value) is not int or value not in (1, 2):
         raise ServiceError("unsupported service contract version")
@@ -650,7 +663,8 @@ def bridge(record, job):
     if len(body) > MAX_BODY:
         raise ServiceError("service request exceeds limit")
     req = urllib.request.Request(endpoint(record["endpoint"]), data=body, method="POST", headers={
-        "Authorization": "Bearer " + credential(record["token_file"]), "Content-Type": "application/json"})
+        "Authorization": "Bearer " + credential(record["token_file"]), "Content-Type": "application/json",
+        "User-Agent": USER_AGENT})
     context = ssl.create_default_context()
     # Match the broker client: Apple's Python can ignore SSL_CERT_FILE in
     # load_default_certs. Explicitly honor operator-installed CAs, never skip TLS.

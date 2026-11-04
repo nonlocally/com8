@@ -310,6 +310,7 @@ class Services(unittest.TestCase):
             req = opener.open.call_args.args[0]
             self.assertEqual(req.full_url, self.record["endpoint"])
             self.assertTrue(req.headers["Authorization"].startswith("Bearer "))
+            self.assertRegex(req.get_header("User-agent"), r"^com8-bus-worker/\d")
             payload = json.loads(req.data)
             self.assertEqual(payload["envelope"]["sender"]["user"], self.envelope["sender"]["user"])
             self.assertEqual(payload["service_id"], self.sid)
