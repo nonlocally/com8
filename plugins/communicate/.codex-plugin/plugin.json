@@ -1,6 +1,6 @@
 {
   "name": "communicate",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "COM8: durable agent identities, native Claude/Codex messaging, shared buses and explicit terminal seats.",
   "author": {
     "name": "Aadarsh Agarwal",

@@ -29,7 +29,7 @@ body:
     attributes:
       label: COM8 version
       description: Output of `com8 version`.
-      placeholder: COM8 0.6.0 (...)
+      placeholder: COM8 0.6.1 (...)
     validations:
       required: true
   - type: input
