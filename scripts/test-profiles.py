@@ -21,6 +21,34 @@ qualification = importlib.util.module_from_spec(qualification_spec)
 qualification_spec.loader.exec_module(qualification)
 
 
+def fixture_processes(root, pids):
+    """Live processes a fixture left behind: recorded PIDs, or any command naming the fixture root."""
+    roots = {str(root), str(Path(root).resolve())}
+    rows = subprocess.run(["ps", "-eo", "pid=,stat=,args="], capture_output=True, text=True, check=True).stdout
+    found = []
+    for row in rows.splitlines():
+        parts = row.split(None, 2)
+        if len(parts) < 2 or not parts[0].isdigit():
+            continue
+        pid, state, args = int(parts[0]), parts[1], parts[2] if len(parts) > 2 else ""
+        if pid == os.getpid() or state.startswith("Z"):
+            continue
+        if pid in pids or any(marker in args for marker in roots):
+            found.append((pid, args))
+    return found
+
+
+def join_fixture_processes(root, pids, timeout):
+    """Wait until the fixture's processes have finished; return the ones still running."""
+    pids = set(pids)
+    deadline = time.monotonic() + timeout
+    while True:
+        left = fixture_processes(root, pids)
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
 class Profiles(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="com8-profile-")
@@ -32,7 +60,10 @@ class Profiles(unittest.TestCase):
             self.env.pop(key, None)
 
     def tearDown(self):
+        # Nothing started from this home may still be running while it is removed.
+        left = join_fixture_processes(self.temp.name, [], timeout=5)
         self.temp.cleanup()
+        self.assertEqual(left, [], f"fixture processes outlived the test: {left!r}")
 
     def install(self, modules=None):
         self.profile.install(modules or ["terminal", "mesh"])
@@ -462,6 +493,25 @@ class Profiles(unittest.TestCase):
         result = self.run_tool(mesh, "host", "add", "bad", "u@$(touch bad)", check=False)
         self.assertNotEqual(result.returncode, 0)
 
+    def test_fixture_processes_are_joined_before_the_home_is_removed(self):
+        # Whatever a fixture starts must finish before its home is deleted; a
+        # process that lingers is named, instead of surfacing later as a
+        # half-removed directory. Processes are found by the recorded PID or by
+        # a command line naming the fixture root; exited-but-unreaped ones are done.
+        quick = subprocess.Popen([BASH, "-c", "sleep 0.2; exit 0", str(self.home / "marker")],
+                                 stdin=subprocess.DEVNULL)
+        self.addCleanup(quick.wait)
+        started = time.monotonic()
+        self.assertEqual(join_fixture_processes(self.temp.name, [], timeout=5), [])
+        self.assertGreaterEqual(time.monotonic() - started, 0.15)
+        self.assertIsNotNone(quick.poll())
+        slow = subprocess.Popen([BASH, "-c", "sleep 30"], stdin=subprocess.DEVNULL)
+        self.addCleanup(slow.wait)
+        self.addCleanup(slow.kill)
+        left = join_fixture_processes(self.temp.name, [slow.pid], timeout=0.3)
+        self.assertEqual([pid for pid, _ in left], [slow.pid])
+        self.assertIn("sleep 30", left[0][1])
+
     @unittest.skipUnless(shutil.which("tmux"), "tmux unavailable")
     def test_isolated_tmux_profile_navigation_and_snapshots(self):
         self.install(["terminal", "mesh", "snapshots"])
@@ -555,6 +605,10 @@ class Profiles(unittest.TestCase):
                     client.wait(timeout=3)
                     client.stdin.close()
             finally:
+                # The server's exit reparents its pane shells and the hook jobs that
+                # closing the session starts (`bar`, `tile retile`); they are joined
+                # below, before the home is removed.
+                panes = self.run_tool(*tm, "list-panes", "-a", "-F", "#{pane_pid}", check=False).stdout.split()
                 subprocess.run(tm + ["kill-server"], env=self.env, capture_output=True, timeout=5)
                 try:
                     server.wait(timeout=5)
@@ -566,7 +620,9 @@ class Profiles(unittest.TestCase):
                     server_log.seek(0)
                     errors = server_log.read()
                     server_log.close()
+                left = join_fixture_processes(self.temp.name, [int(p) for p in panes if p.isdigit()], timeout=5)
                 self.assertEqual(server.returncode, 0, errors)
+                self.assertEqual(left, [], f"fixture processes outlived the tmux server: {left!r}")
 
 
 if __name__ == "__main__":

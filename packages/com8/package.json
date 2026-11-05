@@ -1,6 +1,6 @@
 {
   "name": "@aadarwal/com8",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "com8 \u2014 durable agent identity, mailboxes, and store-and-forward messaging for AI agents, as an MCP server. Two faces (CLI + MCP), one kernel.",
   "type": "module",
   "mcpName": "io.github.aadarwal/com8",

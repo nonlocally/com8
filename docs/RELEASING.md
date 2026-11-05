@@ -106,6 +106,6 @@ carry the COM8 name. Its release notes must include the upgrade paragraph from
 [docs/INSTALL.md](INSTALL.md) and the list of renamed MCP tools (`com8_*`). The
 hosted bus protocol is unchanged, so hosted devices need not re-enroll.
 
-This repository's kernel reports a semantic version (`COM8_VERSION` `"0.6.0"`),
+This repository's kernel reports a semantic version (`COM8_VERSION` `"0.6.1"`),
 while the private development repository's kernel uses a date-based value; the
 private branch must adopt the public scheme before any cross-build `pair`.

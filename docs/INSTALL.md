@@ -14,7 +14,7 @@ open a fresh session and ask your agent to create peers, send messages, or
 coordinate work. See the [Quickstart](QUICKSTART.md) for examples and
 [Homebrew](#homebrew) below for upgrades and removal.
 
-You can also install from the [COM8 0.6.0 release archive](https://github.com/nonlocally/com8/releases/tag/v0.6.0).
+You can also install from the [COM8 0.6.1 release archive](https://github.com/nonlocally/com8/releases/tag/v0.6.1).
 
 ## Requirements
 
@@ -43,10 +43,10 @@ The release provides `com8-VERSION.tar.gz` and its matching `.sha256` file.
 Download both, then verify the archive before extracting it:
 
 ```sh
-curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz
-curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.0/com8-0.6.0.tar.gz.sha256
-shasum -a 256 -c com8-0.6.0.tar.gz.sha256
-tar -xzf com8-0.6.0.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.1/com8-0.6.1.tar.gz
+curl -fLO https://github.com/nonlocally/com8/releases/download/v0.6.1/com8-0.6.1.tar.gz.sha256
+shasum -a 256 -c com8-0.6.1.tar.gz.sha256
+tar -xzf com8-0.6.1.tar.gz
 ```
 
 The archive contains the CLI, the MCP server, the plugin, the daemon, and its
@@ -60,7 +60,7 @@ to a machine over SSH installs exactly like a downloaded one.
 For Homebrew, run `com8 setup`. From an extracted archive, use:
 
 ```sh
-./com8-0.6.0/bin/com8 setup
+./com8-0.6.1/bin/com8 setup
 ```
 
 With no flags in an interactive terminal, `setup` guides you through the clients,
@@ -73,13 +73,13 @@ For automation or a selection you already know, use explicit flags:
 
 ```sh
 # Preview only: no downloads, login, package installation or configuration writes.
-./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
+./com8-0.6.1/bin/com8 setup --install-missing --claude --codex --terminal --mesh --dry-run
 
 # Apply that selection; omit either client or profile you do not want.
-./com8-0.6.0/bin/com8 setup --install-missing --claude --codex --terminal --mesh --yes
+./com8-0.6.1/bin/com8 setup --install-missing --claude --codex --terminal --mesh --yes
 
 # CLI-only configuration, including on a server:
-./com8-0.6.0/bin/com8 setup --no-clients --no-service
+./com8-0.6.1/bin/com8 setup --no-clients --no-service
 ```
 
 Add `--ghostty` on macOS to select the application, the configured Nerd Font,
@@ -256,7 +256,7 @@ If you installed optional profiles, remove their configuration separately with
 `com8 profile uninstall` before removing COM8 itself.
 
 ```sh
-/path/to/com8-0.6.0/bin/com8 update     # from the newly verified archive
+/path/to/com8-0.6.1/bin/com8 update     # from the newly verified archive
 com8 rollback --dry-run
 com8 rollback
 com8 uninstall --claude                 # remove only this client's registration
