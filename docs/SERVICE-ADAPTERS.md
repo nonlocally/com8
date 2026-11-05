@@ -97,6 +97,16 @@ endpoints cannot use this disposition. Explicit application reply tools should
 provide the single final result to this worker, rather than also sending it via
 a separate outbound reply operation.
 
+A service can also start a conversation with the ordinary send, using its own
+registered agent ID: `com8 bus send RECIPIENT_ID --bus general --from SERVICE_AGENT_ID -- MESSAGE`.
+The recipient's answer arrives as a normal `deliver` whose authenticated
+`envelope.sender.id` is that recipient, whose `conversation_expires_at` equals the
+send result's value and, under v2, whose `in_reply_to` names the service's own
+message. Acknowledge such answers, and any acknowledgement the application does
+not answer, so two services cannot keep answering each other. A v1 endpoint has
+no terminal response without a reply, so register services that exchange
+messages with each other with `--contract-version 2`.
+
 `deliver` must itself be idempotent by `(hub, bus, message id)` and persist the
 application task binding. The worker can retry after a lost response. `poll`
 reads that durable binding and must not create another task. Admission belongs
@@ -108,15 +118,21 @@ terminal answer before sending `reply` through the existing broker. The new
 optional `request_id` makes that broker operation atomic and idempotent for both
 agent and human replies: retries return the original receipt; reusing a key for
 different content is a conflict. Existing clients without a key retain existing
-behavior. Idempotency replays can return a past receipt but do not create a new
+behavior. A caller answering through the CLI gets the same guarantee with
+`com8 bus reply MESSAGE_ID --from SERVICE_AGENT_ID --request-id KEY -- ANSWER`,
+and the receipt is printed before any local worker maintenance.
+Idempotency replays can return a past receipt but do not create a new
 message or extend a conversation. Fixed destinations and the existing first-send
 ownership, membership and expiry checks remain in force.
 
 Expired jobs do not execute or reply. Application results can remain available
 through a fresh, authorized status request. Leaving a bus or revoking membership
 still closes broker conversations; already delivered work cannot be retracted.
-Completed/expired local jobs are retained for two days; broker reply receipts
-use the existing seven-day retention. Keep journal and enrollment together when
+`com8 bus leave SERVICE_AGENT_ID --bus BUS` also marks that service's pending local
+jobs from that bus as closed, so the worker stops calling the endpoint for them;
+other services and buses are unaffected. Completed, acknowledged, closed and
+expired local jobs are retained for two days; broker reply receipts use the
+existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
 
@@ -142,8 +158,8 @@ Callbacks and replies never hold a SQLite transaction while doing HTTP. Every
 result update requires the original pending state, captured generation and
 current active lifecycle. Late results observed after quiescing are appended to
 `service_job_observations`; they cannot resurrect a job or fabricate a receipt.
-The existing terminal `{pending:false,consumed:true}` path is unchanged for
-eligible current work.
+The existing terminal `{pending:false,disposition:acknowledge}` path is
+unchanged for eligible current work.
 
 The root-only Python interface is in `bus_service`:
 

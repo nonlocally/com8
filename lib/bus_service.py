@@ -583,6 +583,24 @@ def enqueue(root,record,envelope):
         return _enqueue_locked(root,record,envelope)
 
 
+def close(root, record, bus):
+    """Mirror a broker leave: this actor's pending jobs from that bus can never be answered."""
+    actor = _actor(record)
+    with lifecycle_lock(root, *actor):
+        db = journal(root)
+        try:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                rows = db.execute("SELECT id,envelope FROM jobs WHERE hub=? AND recipient=? AND service_id=? AND state='pending'",
+                                  actor).fetchall()
+                ids = [row["id"] for row in rows if json.loads(row["envelope"])["bus"] == bus]
+                db.executemany("UPDATE jobs SET state='closed',updated=? WHERE hub=? AND id=? AND state='pending'",
+                               [(time.time(), actor[0], mid) for mid in ids])
+            return len(ids)
+        finally:
+            db.close()
+
+
 def _enqueue_locked(root, record, envelope):
     if envelope["target"] != record["id"] or envelope["reply_to"] != envelope["id"]:
         raise ServiceError("service delivery identity mismatch")
