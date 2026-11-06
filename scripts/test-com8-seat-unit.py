@@ -188,6 +188,23 @@ CMD_PREVIEW = ("\n⏺ Bash(echo 'I trust this folder')\n\n"
                "   3. No, and tell Claude what to do differently (esc)\n"
                "\n"
                " Esc to cancel · Tab to amend")
+# A Bash approval whose heredoc preview contains BOTH dialog rows, verbatim,
+# as lines of their own: an approval prompt, never the trust dialog.
+HEREDOC = ("\n⏺ Bash(cat <<'EOF' > note.txt\n"
+           "─────────────────────────────────────────────────────────\n"
+           " Bash command\n"
+           " cat <<'EOF' > note.txt\n"
+           " Accessing workspace:\n"
+           " Yes, I trust this folder\n"
+           " No, exit\n"
+           " EOF\n"
+           " Write the dialog's rows to note.txt\n"
+           " Do you want to proceed?\n"
+           " ❯ 1. Yes\n"
+           "   2. Yes, and don't ask again for cat commands in this project\n"
+           "   3. No, and tell Claude what to do differently (esc)\n"
+           "\n"
+           " Esc to cancel · Tab to amend")
 IDLE = ("\n ▐▛███▛█   Claude Code v2.1.318\n"
         "▝▜██████▀  Opus 5.5 with high effort\n"
         " ▝▝   ▝▝   ~/project\n" + "\n" * 24 +
@@ -292,6 +309,18 @@ if cp.state("%1") == "approval" and cp.trust_prompt("%1") is None:
     ok("a command preview containing 'trust this folder' is not the trust dialog")
 else:
     bad("command preview: state=%s trust=%s" % (cp.state("%1"), cp.trust_prompt("%1")))
+# ...nor is a heredoc preview carrying both rows (and the header) as whole
+# lines: only rows of the parsed menu block count, and adoption must not
+# answer that approval at all.
+hd = Pane(HEREDOC)
+kind = hd.trust_prompt("%1")
+res = com8_seat.rename_when_ready(hd, "%1", "w", boot_wait=1)
+pressed = [k[-1] for k in hd.keys if k[:1] == ("send-keys",)]
+if (hd.state("%1") == "approval" and kind is None and not res.get("ok")
+        and not pressed and hd.screen == HEREDOC):
+    ok("a heredoc preview quoting both rows is not the trust dialog; nothing is pressed")
+else:
+    bad("heredoc preview: kind=%s res=%s keys=%s" % (kind, res, pressed))
 
 # allow drives the affirmative row: Down off "No, exit", verify, Enter.
 r = p.respond("%1", "allow")
@@ -318,9 +347,10 @@ else:
 res = com8_seat.rename_when_ready(w, "%1", "w", boot_wait=2)
 pressed = [k[-1] for k in w.keys if k[:1] == ("send-keys",)]
 if (not res.get("ok") and res.get("state") == "approval" and not pressed
-        and not w.widened and w.exists and "pre-approve" in (res.get("err") or "")):
+        and not w.widened and w.exists and "without asking" in (res.get("err") or "")
+        and "added directories" in (res.get("err") or "")):
     ok("adoption leaves the pre-approval dialog to a human: seat alive, nothing widened, "
-       "no /rename, the reason reported")
+       "no /rename, the reason naming every cause the dialog can carry")
 else:
     bad("adoption on the pre-approval dialog: %s keys=%s widened=%s exists=%s"
         % (res, pressed, w.widened, w.exists))

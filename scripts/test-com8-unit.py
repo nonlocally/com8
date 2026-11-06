@@ -403,7 +403,7 @@ else:
 res, drv, sends = spawn_with(["approval"], trust="widen")
 if (res.get("ok") and res.get("adopted") is False and not sends
         and not [c for c in drv.calls if c[0] == "respond"]
-        and "pre-approve" in (res.get("adopt_err") or "")):
+        and "without asking" in (res.get("adopt_err") or "")):
     ok("the pre-approval dialog is left to a human: no answer, no /rename, adopt_err says why")
 else:
     bad("pre-approval dialog: res=%s calls=%s" % (res, drv.calls))

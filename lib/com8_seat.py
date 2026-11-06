@@ -51,18 +51,19 @@ _PERM_ASK = re.compile(
     r"held message|deliver this message|drop it and tell the sender", re.I)
 _AFFORD = re.compile(r"❯\s*\d|›\s*\d|^\s*\d[.)]\s|\(y/n\)|\[y/n\]|\by/n\b"
                      r"|^\s*[❯›]\s+\S", re.M)  # bare highlighted row (unnumbered menus)
-# Claude Code's workspace-trust dialog, recognized by its OWN rows ("Yes, I
-# trust this folder" with "No, exit" — or "No, continue without these
-# permissions"), never by those words elsewhere on screen (a command preview
-# can quote them). Its highlighted default row is "No, exit" (2.1.318,
-# measured 2026-11-05), so the bare Enter that submits any typed text exits
-# the CLI. When the folder pre-approves tool permissions (.claude/settings.json
-# allow rules, added directories, a headersHelper) the dialog says so, and the
-# same Yes also enables every one of them.
-_TRUST_YES = re.compile(r"^\s*[❯›]?\s*Yes, I trust this folder\s*$", re.M)
-_TRUST_NO = re.compile(r"^\s*[❯›]?\s*No, (exit|continue without these permissions)\s*$", re.M)
-_TRUST_CONTINUE = re.compile(r"^\s*[❯›]?\s*No, continue without these permissions\s*$", re.M)
-_TRUST_WIDEN = re.compile(r"pre-approves \d+ tool permissions?|will apply without asking", re.I)
+# Claude Code's workspace-trust dialog, recognized by its OWN menu rows ("Yes,
+# I trust this folder" with "No, exit" — or "No, continue without these
+# permissions") as the parsed menu block reports them, never by those words
+# elsewhere on screen: a command or heredoc preview can quote both rows, and
+# the header, as whole lines. Its highlighted default row is "No, exit"
+# (2.1.318, measured 2026-11-05), so the bare Enter that submits any typed
+# text exits the CLI. When the folder's .claude/settings.json pre-approves
+# tool permissions, adds directories or names a headersHelper, the dialog
+# says "These will apply without asking", and the same Yes applies them all.
+_TRUST_YES = "Yes, I trust this folder"
+_TRUST_NO = ("No, exit", "No, continue without these permissions")
+_TRUST_WIDEN = re.compile(r"will apply without asking|pre-approves \d+ tool permissions?"
+                          r"|adds \d+ director(y|ies)", re.I)
 # Choosing a menu row. An "allow" must be the plain, one-shot affirmative: never a row that would
 # widen permissions beyond this one action. Claude Code 2.1.278 offers "Yes, and switch to accept
 # edits (auto-approve file edits ... for this session)" as option 2 of a Write prompt; the older
@@ -84,17 +85,21 @@ def choose_option(menu, decision="allow"):
                  and not _NEG.search(r["text"])), None)
 
 
-def trust_dialog(text):
-    """Pure: None when the workspace-trust dialog is not on screen; "trust"
-    for the plain one (Yes / No, exit); "widen" when the folder pre-approves
-    tool permissions and the only other row exits; "widen-continue" when that
-    dialog offers "No, continue without these permissions", the row that
-    keeps the seat without enabling anything."""
-    if not (_TRUST_YES.search(text) and _TRUST_NO.search(text)):
+def trust_dialog(lines):
+    """Pure, over captured screen lines: None when the workspace-trust dialog
+    is not up; "trust" for the plain one (Yes / No, exit); "widen" when the
+    folder's settings would apply without asking and the only other row
+    exits; "widen-continue" when that dialog offers "No, continue without
+    these permissions", the row that keeps the seat without applying them.
+    Both rows must be rows of the parsed menu block — the block a respond()
+    would drive — so quoted rows in a command preview never count."""
+    rows = [r["text"] for r in SeatDriver._menu_block(list(lines))]
+    no = next((t for t in rows if t in _TRUST_NO), None)
+    if _TRUST_YES not in rows or no is None:
         return None
-    if _TRUST_CONTINUE.search(text):
+    if no != "No, exit":
         return "widen-continue"
-    return "widen" if _TRUST_WIDEN.search(text) else "trust"
+    return "widen" if _TRUST_WIDEN.search("\n".join(lines)) else "trust"
 # Secret shapes to mask on read unless --raw.
 _SECRETS = [
     # Distinctive credential prefixes — matched anywhere (a leading word char,
@@ -259,11 +264,11 @@ class SeatDriver:
         return "busy"  # some foreground process holds the pane
 
     def trust_prompt(self, seat):
-        """Which workspace-trust dialog is on screen, by its own rows: None,
-        "trust", "widen" or "widen-continue" (see trust_dialog). Its default
-        row exits the CLI, so callers answer it through respond() — a driven,
-        verified row — never with an Enter."""
-        return trust_dialog("\n".join(self._capture(seat, 20)))
+        """Which workspace-trust dialog is on screen, by its own menu rows:
+        None, "trust", "widen" or "widen-continue" (see trust_dialog). Its
+        default row exits the CLI, so callers answer it through respond() —
+        a driven, verified row — never with an Enter."""
+        return trust_dialog(self._capture(seat, 20))
 
     def _title(self, seat):
         return self._field(seat, "#{pane_title}")
@@ -475,15 +480,17 @@ class SeatDriver:
             return self._drive_menu(seat, menu, tgt, "deny")
         if not menu:
             return {"ok": False, "err": "no menu block found on screen"}
-        if trust_dialog("\n".join(self._capture(seat, 20))) in ("widen", "widen-continue"):
-            # The workspace-trust Yes of a folder that pre-approves tool
-            # permissions enables them all: the widening row this method
+        if trust_dialog(self._capture(seat, 20)) in ("widen", "widen-continue"):
+            # The workspace-trust Yes of a folder whose settings would apply
+            # without asking (pre-approved tool permissions, added
+            # directories) applies them all: the widening row this method
             # promises never to pick.
             return {"ok": False,
-                    "err": "'Yes, I trust this folder' here also enables the folder's "
-                           "pre-approved tool permissions — refusing to widen them "
-                           "(respond deny keeps the seat without them when the dialog "
-                           "offers that; otherwise answer in the pane by hand)"}
+                    "err": "'Yes, I trust this folder' here also applies the folder's "
+                           "settings without asking (pre-approved tool permissions, added "
+                           "directories) — refusing to widen them (respond deny keeps the "
+                           "seat without them when the dialog offers that; otherwise "
+                           "answer in the pane by hand)"}
         target = choose_option(menu, "allow")
         if target is None:
             return {"ok": False,
@@ -635,11 +642,12 @@ def rename_when_ready(drv, seat, name, boot_wait=25, log=None):
     the agent died within a second and its window vanished. So: answer the
     plain dialog through respond("allow") — the affirmative row, driven and
     verified, never an Enter — and type nothing while the pane is blank
-    (booting) or holds any other dialog. A folder that pre-approves tool
-    permissions makes that same Yes enable them all: when the dialog offers
-    "No, continue without these permissions" that row is chosen (the seat
-    lives, nothing is widened); when its only other row exits, the dialog is
-    left to a human and reported. Returns {"ok", "state", "trusted"}, plus
+    (booting) or holds any other dialog. A folder whose settings would apply
+    without asking (pre-approved tool permissions, added directories) makes
+    that same Yes apply them all: when the dialog offers "No, continue
+    without these permissions" that row is chosen (the seat lives, nothing
+    is widened); when its only other row exits, the dialog is left to a
+    human and reported. Returns {"ok", "state", "trusted"}, plus
     "err" when nothing was sent, so the caller can report why; tmux or the
     ssh carrying it going quiet is reported the same way, never raised."""
     log = log or (lambda *a: None)
@@ -657,10 +665,11 @@ def rename_when_ready(drv, seat, name, boot_wait=25, log=None):
                 kind = drv.trust_prompt(seat)
                 if kind == "widen":
                     return {"ok": False, "state": st, "trusted": False,
-                            "err": "the trust dialog in seat %s says the folder pre-approves "
-                                   "tool permissions (.claude/settings.json) and its Yes would "
-                                   "enable them all; left for a human — answer it in the pane, "
-                                   "or drop the allow rules and restart" % seat}
+                            "err": "the trust dialog in seat %s warns that this folder's "
+                                   ".claude/settings.json would apply without asking "
+                                   "(pre-approved tool permissions, added directories) and its "
+                                   "Yes would apply them all; left for a human — answer it in "
+                                   "the pane, or drop those settings and restart" % seat}
                 if kind:
                     r = drv.respond(seat, "allow" if kind == "trust" else "deny")
                     trusted = bool(r.get("ok"))

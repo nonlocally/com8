@@ -730,10 +730,10 @@ MARK = ha._SEAT_MARK
 
 
 class FarTmux:
-    def __init__(self, timeout_at=None, no_session=False):
+    def __init__(self, timeout_at=None, no_session=False, dead_ssh=False):
         self.screen, self.reads, self.staged = "", 0, ""
         self.events, self.cmds = [], []
-        self.timeout_at, self.no_session = timeout_at, no_session
+        self.timeout_at, self.no_session, self.dead_ssh = timeout_at, no_session, dead_ssh
 
     def answer(self, body, ok=True):
         # stdout first (login notice, sentinel, body, end mark), then stderr
@@ -756,6 +756,8 @@ class FarTmux:
             return (0, "")
         argv = toks[toks.index("/x/tmux") + 1:]
         argv = argv[:min(argv.index(t) for t in ("2>/dev/null", "&&", "||") if t in argv)]
+        if self.dead_ssh:
+            return (124, "ssh timed out after 60s (device hung or unreachable)")
         if self.no_session:
             return self.answer("", ok=False)
         if argv[0] == "display":
@@ -829,12 +831,18 @@ far3, said3 = FarTmux(no_session=True), []
 okd3 = ha.spawn("u@h", "lathe", facts, "far", ssh=far3.ssh, say=said3.append, ask=None)
 assert okd3 is False and any("no tmux pane came up" in s for s in said3), said3
 assert not far3.events, far3.events
+
+# ssh never answers at all: that is not "no pane came up" — the seat may well be running
+far4, said4 = FarTmux(dead_ssh=True), []
+okd4 = ha.spawn("u@h", "lathe", facts, "far", ssh=far4.ssh, say=said4.append, ask=None)
+assert okd4 is False and any("did not reach tmux" in s for s in said4), said4
+assert not any("no tmux pane came up" in s for s in said4), said4
 print("OK")
 PY
 r="$(python3 "$RS/remote_spawn.py" "$HERE/lib" 2>&1 | tail -1)"
 rm -rf "$RS"
 if [ "$r" = "OK" ]; then
-  ok "trust answered with the affirmative row; /rename only on the idle composer; nothing typed into a blank pane; ssh stderr after the answer survives; a timeout and a missing session are reported"
+  ok "trust answered with the affirmative row; /rename only on the idle composer; nothing typed into a blank pane; ssh stderr after the answer survives; a timeout, a missing session and a dead ssh are each reported for what they are"
 else bad "remote spawn (got: $r)"; fi
 
 echo

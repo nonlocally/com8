@@ -440,9 +440,13 @@ class _RemoteSeat(com8_seat.SeatDriver):
         return subprocess.CompletedProcess(args, rc, stdout=body, stderr="")
 
     def pane_of(self, session):
-        """The pane id behind a session name; "" when there is no such session."""
+        """The pane id behind a session name; "" when there is no such
+        session. An ssh that never reached tmux (SeatUnavailable) is NOT the
+        absence of a session, and propagates."""
         try:
             return self._field(session, "#{pane_id}")
+        except com8_seat.SeatUnavailable:
+            raise
         except com8_seat.SeatError:
             return ""
 
@@ -688,7 +692,11 @@ def spawn(addr, name, facts, fardev, ssh=_run_ssh, say=print, ask=None,
     for cmd in spawn_cmds(name, facts, steered=steered):
         ssh(addr, cmd)
     seat = _RemoteSeat(addr, ssh, tmux=facts.get("tmux_bin") or "tmux")
-    pane = seat.pane_of("com8-%s" % name)
+    try:
+        pane = seat.pane_of("com8-%s" % name)
+    except com8_seat.SeatUnavailable as e:
+        say("  spawn: %-18s %s" % (name, "NOT REGISTERED — %s" % e))
+        return False
     if not pane.startswith("%"):
         say("  spawn: %-18s %s" % (name, "NOT REGISTERED — no tmux pane came up"))
         return False
