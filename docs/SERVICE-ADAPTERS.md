@@ -131,13 +131,16 @@ The worker only leases what its journal can hold: when the 128-job queue is full
 the service is left out of the device poll, so the hub keeps its messages (24 h)
 and offers them when room returns, and a message the journal cannot take keeps
 its hub lease instead of being failed. The room is shared by every service the
-worker serves, so one poll's batches never add up to more than it. This is a
-change of behaviour: before 0.7 a message that arrived while the journal was
-full was acknowledged as `failed` at once and lost; now the sender's receipt
-stays `accepted` while the service is saturated, and the message expires after
-24 hours only if room never returns. The journal's room is the service's
-admission signal, and a saturated service is a transient condition, not a
-delivery failure. Up to eight `deliver` calls run at once,
+worker serves, so one poll's batches never add up to more than it, and every
+pending job counts against it until the endpoint answers, including a job
+whose `deliver` returned `pending` and is being polled; a service that holds
+many tasks open fills the room with them. This is a change of behaviour:
+before 0.7 a message that arrived while the journal was full was acknowledged
+as `failed` at once, a terminal receipt the sender had to act on; now the
+sender's receipt stays `accepted` while the service is saturated, and the
+message expires after 24 hours only if room never returns. The journal's room
+is the service's admission signal, and a saturated service is a transient
+condition, not a delivery failure. Up to eight `deliver` calls run at once,
 so distinct messages can reach the endpoint out of queue order; the endpoint
 must not depend on their arrival order. A lost acknowledgment is retried once
 and otherwise recovered when the lease expires and the hub offers the message
