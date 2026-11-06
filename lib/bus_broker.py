@@ -60,6 +60,8 @@ CHAT_RETENTION = 30 * MESSAGE_TTL
 RECEIPT_RETENTION = 7 * MESSAGE_TTL
 LIVE_TTL = 45
 LEASE_TTL = 60
+# A service recipient may hold this many leases at once; other agents hold one.
+MAX_LEASE_BATCH = 32
 BUS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 USER_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 DEVICE_FIELDS = {"hostname": 253, "platform": 64, "tailscale_hostname": 253, "tailscale_dns_name": 253}
@@ -1717,6 +1719,14 @@ class Broker:
             raise BusError("invalid service epoch selectors")
         for value in epochs.values():
             self._epoch(value)
+        batch = r.get("batch", {})
+        if not isinstance(batch, dict) or set(batch) - set(owned) or len(batch) > MAX_AGENTS:
+            raise BusError("invalid lease batch selectors")
+        for ident, size in batch.items():
+            if type(size) is not int or not 1 <= size <= MAX_LEASE_BATCH:
+                raise BusError("lease batch sizes must be 1 to %d" % MAX_LEASE_BATCH)
+            if self._owned(db, p, ident)["kind"] != "service":
+                raise BusError("batch leases are only for service registrations")
         eligible, refused = [], []
         for ident in owned:
             agent = self._owned(db, p, ident)
@@ -1727,27 +1737,37 @@ class Broker:
                     refused.append({"agent": ident, "code": "service_epoch_required" if ident not in epochs else "stale_service_epoch"})
                     continue
             eligible.append(ident)
-        result = self._poll(db, eligible, now, limit=32) if eligible else {"messages": [], "lease_seconds": LEASE_TTL}
+        result = (self._poll(db, eligible, now, limit=32, batch={ident: size for ident, size in batch.items() if ident in eligible})
+                  if eligible else {"messages": [], "lease_seconds": LEASE_TTL})
         if refused:
             result["refusals"] = refused
         return result
 
-    def _poll(self, db, agents, now, limit):
+    def _poll(self, db, agents, now, limit, batch=None):
         self._cancel_invalid(db, now)
-        slots = ",".join("?" for _ in agents)
-        # The shared durable order prevents an agent delivery and a human
-        # delivery from holding concurrent leases for one exact destination.
-        rows = db.execute("""WITH pending AS (
+        # A target holds one lease at a time, so its messages are delivered in
+        # order; a service recipient may ask for a batch, which widens its window
+        # to its first `size` queued messages. The shared durable order prevents
+        # an agent delivery and a human delivery from holding concurrent leases
+        # for one exact destination, and each message gets exactly one lease
+        # until that lease is acknowledged or expires.
+        allowance = {agent: 1 for agent in agents}
+        allowance.update(batch or {})
+        values = ",".join("(?,?)" for _ in allowance)
+        rows = db.execute("""WITH allowance(target,size) AS (VALUES %s),
+                             pending AS (
                              SELECT q.*,COALESCE(m.status,h.status) AS status,
                                     COALESCE(m.lease_until,h.lease_until) AS lease_until
                              FROM outbound_queue q LEFT JOIN messages m ON m.id=q.message
                              LEFT JOIN human_chat_messages h ON h.id=q.message
-                             WHERE COALESCE(m.status,h.status) IN ('accepted','leased'))
-                             SELECT * FROM pending q WHERE q.target IN (%s)
-                             AND (q.status='accepted' OR q.lease_until<=?)
-                             AND NOT EXISTS (SELECT 1 FROM pending earlier WHERE earlier.target=q.target
-                                             AND earlier.ordering<q.ordering)
-                             ORDER BY q.ordering LIMIT ?""" % slots, (*agents, now, limit)).fetchall()
+                             WHERE q.target IN (SELECT target FROM allowance)
+                             AND COALESCE(m.status,h.status) IN ('accepted','leased'))
+                             SELECT q.* FROM pending q JOIN allowance a ON a.target=q.target
+                             WHERE (q.status='accepted' OR q.lease_until<=?)
+                             AND (SELECT COUNT(*) FROM pending earlier WHERE earlier.target=q.target
+                                  AND earlier.ordering<q.ordering)<a.size
+                             ORDER BY q.ordering LIMIT ?""" % values,
+                          (*(item for pair in allowance.items() for item in pair), now, limit)).fetchall()
         messages = []
         for queued in rows:
             lease = secrets.token_urlsafe(18)

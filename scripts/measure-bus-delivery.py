@@ -38,7 +38,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "lib"))
-from bus_broker import Broker, handler_factory  # noqa: E402
+from bus_broker import Broker, BusHTTPServer, handler_factory  # noqa: E402
 
 CERT_CONFIG = """[req]
 prompt = no
@@ -89,9 +89,18 @@ def instrument(broker, recorder):
 
     def handle(token, request, **context):
         started = time.time()
-        result = original(token, request, **context)
+        try:
+            result = original(token, request, **context)
+        except Exception as exc:
+            # A broker exception answers the worker with HTTP 500; keep it in the timeline.
+            recorder.record("hub", {"at": started, "elapsed": time.time() - started, "op": request.get("op"),
+                                    "ok": False, "exception": type(exc).__name__ + ": " + " ".join(str(exc).split())[:200],
+                                    **({"id": request.get("id")} if isinstance(request, dict) else {})})
+            raise
         event = {"at": started, "elapsed": time.time() - started, "op": request.get("op") if isinstance(request, dict) else None,
                  "ok": bool(result.get("ok"))}
+        if not event["ok"]:
+            event["error"] = result.get("error")
         if event["op"] == "poll_device":
             event["agents"] = len(request.get("agents") or [])
             if "batch" in request:
@@ -110,8 +119,8 @@ def instrument(broker, recorder):
     broker.handle = handle
 
 
-def tls_server(cert, key, handler):
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+def tls_server(cert, key, handler, server_class=http.server.ThreadingHTTPServer):
+    server = server_class(("127.0.0.1", 0), handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -123,7 +132,8 @@ def tls_server(cert, key, handler):
 def start_hub(temp, cert, key, recorder):
     broker = Broker(temp / "hub")
     instrument(broker, recorder)
-    server, thread = tls_server(cert, key, handler_factory(broker))
+    # The release's own server: its listen backlog and connection slots are part of the measurement.
+    server, thread = tls_server(cert, key, handler_factory(broker), BusHTTPServer)
     return broker, server, thread, "https://localhost:%d" % server.server_port
 
 
@@ -252,10 +262,12 @@ def analyze(parameters, sends, recorder, broker, service_id, worker_state):
                             "interval_s": quantiles(intervals), "lease_size": quantiles(lease_sizes),
                             "elapsed_s": quantiles([event["elapsed"] for event in polls]),
                             "batch_requested": any("batch" in event for event in polls)},
-            "ack": {"count": len(acks), "elapsed_s": quantiles([event["elapsed"] for event in acks]),
+            "ack": {"count": len(acks), "distinct": len({event["id"] for event in acks if event["ok"]}),
+                    "elapsed_s": quantiles([event["elapsed"] for event in acks]),
                     "statuses": {status: sum(1 for event in acks if event["status"] == status)
                                  for status in sorted({event["status"] for event in acks})}},
-            "reply": {"count": len(replies), "elapsed_s": quantiles([event["elapsed"] for event in replies])},
+            "reply": {"count": len(replies), "distinct": len({event["reply_to"] for event in replies}),
+                      "elapsed_s": quantiles([event["elapsed"] for event in replies])},
             "heartbeat": {"count": len(heartbeats)},
             "operations_per_message": (len(polls) + len(acks) + len(replies)) / count if count else None,
         },
@@ -323,11 +335,27 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
         deadline = time.monotonic() + timeout
         complete = False
         last_report = 0.0
+        state_dir = Path(env["COMM_STATE"]) / "bus"
+        observed_errors = []
+        watching = threading.Event()
+
+        def watch_errors():
+            # The worker republishes its error list every iteration, which can be
+            # 0.1 s apart under load; read it continuously and keep each distinct error.
+            while not watching.wait(0.005):
+                try:
+                    for item in json.loads((state_dir / "worker.json").read_text()).get("errors", []):
+                        if item not in observed_errors:
+                            observed_errors.append(item)
+                except (OSError, ValueError):
+                    pass
+        watcher = threading.Thread(target=watch_errors, daemon=True)
+        watcher.start()
         while time.monotonic() < deadline:
             bridge = recorder.snapshot("bridge")
             delivered = {event["id"] for event in bridge if event["op"] == "deliver"}
             answered = {event["id"] for event in bridge if event["answer"] == "reply"}
-            replied = sum(1 for event in recorder.snapshot("hub") if event["op"] == "reply" and event["ok"])
+            replied = len({event["reply_to"] for event in recorder.snapshot("hub") if event["op"] == "reply" and event["ok"]})
             if progress and time.monotonic() - last_report >= 10:
                 progress("delivered %d/%d, answered %d, replies at hub %d" % (len(delivered), messages, len(answered), replied))
                 last_report = time.monotonic()
@@ -335,12 +363,14 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
                 complete = True
                 break
             time.sleep(.25)
+        watching.set()
+        watcher.join(2)
         worker_state = {}
-        state_dir = Path(env["COMM_STATE"]) / "bus"
         try:
             worker_state = json.loads((state_dir / "worker.json").read_text())
         except (OSError, ValueError):
             pass
+        worker_state["errors"] = observed_errors + [item for item in worker_state.get("errors", []) if item not in observed_errors]
         parameters = {"messages": messages, "window_s": window, "mode": mode, "timeout_s": timeout, "complete": complete,
                       "hub": hub_url, "endpoint": endpoint, "state": str(temp)}
         report = analyze(parameters, sends, recorder, broker, recipient, worker_state)
@@ -369,9 +399,9 @@ def summarize(report):
         "hub poll_device: %d calls, %d empty; interval p50 %.2f s, p90 %.2f s, max %.2f s; lease size max %s, mean %.2f" % (
             poll["count"], poll["empty"], poll["interval_s"].get("p50", 0), poll["interval_s"].get("p90", 0),
             poll["interval_s"].get("max", 0), poll["lease_size"].get("max"), poll["lease_size"].get("mean", 0)),
-        "hub ack: %d (%s); reply: %d; heartbeat: %d; hub operations per message: %.2f" % (
-            hub["ack"]["count"], hub["ack"]["statuses"], hub["reply"]["count"], hub["heartbeat"]["count"],
-            hub["operations_per_message"] or 0),
+        "hub ack: %d for %d messages (%s); reply: %d for %d; heartbeat: %d; hub operations per message: %.2f" % (
+            hub["ack"]["count"], hub["ack"]["distinct"], hub["ack"]["statuses"], hub["reply"]["count"], hub["reply"]["distinct"],
+            hub["heartbeat"]["count"], hub["operations_per_message"] or 0),
         "service: %d deliver (%d distinct, %d duplicates), %d poll; %.2f bridge calls per message" % (
             service["deliver"], service["distinct_delivered"], service["duplicate_delivers"], service["poll"],
             service["operations_per_message"] or 0),
