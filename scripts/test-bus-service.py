@@ -336,7 +336,7 @@ class Services(unittest.TestCase):
             with lock:
                 running[0] += 1
                 peak[0] = max(peak[0], running[0])
-            time.sleep(.02)
+            time.sleep(.1)
             with lock:
                 running[0] -= 1
             return {"pending": False, "disposition": "acknowledge"}
@@ -348,7 +348,9 @@ class Services(unittest.TestCase):
         self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
                                          call_bridge=bridge, now=now, limit=64), [])
         self.assertEqual(self.states().count("acknowledged"), 20)
+        # One service's jobs are called concurrently: the actor lock covers journal transitions, not the endpoint call.
         self.assertLessEqual(peak[0], 8)
+        self.assertGreater(peak[0], 1)
 
     def test_advance_budget_stops_after_a_whole_round(self):
         self.record["contract_version"] = 2

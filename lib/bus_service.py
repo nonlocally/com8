@@ -715,58 +715,69 @@ def validate_response(result, version):
 
 
 def _advance_job(root,record,selected,connection,broker_request,call_bridge,now):
+    """One job's next step. The actor lock covers every journal transition and the
+    check before a remote effect; the endpoint call and the broker reply run outside
+    it, so one service's jobs are called eight at a time and a retirement barrier can
+    complete while a call is in flight, whose late result then becomes an observation."""
     errors=[]
     if now is None: now=time.time()
-    with lifecycle_lock(root,*_actor(record)):
-        db=journal(root)
+    actor=_actor(record)
+    # CAS always binds both nullable generation fields and pending state.
+    where="hub=? AND id=? AND state='pending' AND recipient_epoch IS ? AND protocol IS ?"
+    def locked_journal(action):
+        with lifecycle_lock(root,*actor):
+            db=journal(root)
+            try: return action(db)
+            finally: db.close()
+    def load(db):
+        row=db.execute("SELECT * FROM jobs WHERE hub=? AND id=? AND state='pending'",(selected['hub'],selected['id'])).fetchone()
+        return dict(row) if row is not None and _allowed(db,record,row) else None
+    def update(job,sql,values):
+        def transition(db):
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                if not _allowed(db,record,job): return False
+                return db.execute("UPDATE jobs SET "+sql+" WHERE "+where,(*values,job['hub'],job['id'],job['recipient_epoch'],job['protocol'])).rowcount==1
+        return locked_journal(transition)
+    def observation(job,kind,result):
+        def record_late(db):
+            with db:
+                db.execute("INSERT INTO service_job_observations(hub,job_id,recipient,service_id,recipient_epoch,kind,result,updated) VALUES(?,?,?,?,?,?,?,?)",
+                    (job['hub'],job['id'],job['recipient'],job['service_id'],job['recipient_epoch'],kind,_canonical(result),now))
+        locked_journal(record_late)
+    job=locked_journal(load)
+    if job is None: return errors
+    if job['reply'] is None:
         try:
-            row=db.execute("SELECT * FROM jobs WHERE hub=? AND id=? AND state='pending'",(selected['hub'],selected['id'])).fetchone()
-            if row is None or not _allowed(db,record,row): return errors
-            job=dict(row)
-            # CAS always binds both nullable generation fields and pending state.
-            where="hub=? AND id=? AND state='pending' AND recipient_epoch IS ? AND protocol IS ?"
-            identity=(job['hub'],job['id'],job['recipient_epoch'],job['protocol'])
-            def update(sql,values):
-                with db:
-                    db.execute('BEGIN IMMEDIATE')
-                    if not _allowed(db,record,job): return False
-                    return db.execute("UPDATE jobs SET "+sql+" WHERE "+where,(*values,*identity)).rowcount==1
-            def observation(kind,result):
-                with db:
-                    db.execute("INSERT INTO service_job_observations(hub,job_id,recipient,service_id,recipient_epoch,kind,result,updated) VALUES(?,?,?,?,?,?,?,?)",
-                        (job['hub'],job['id'],job['recipient'],job['service_id'],job['recipient_epoch'],kind,_canonical(result),now))
-            if job['reply'] is None:
-                try:
-                    result=validate_response(call_bridge(record,job),job['contract_version'])
-                    acknowledged=result.get('disposition')=='acknowledge'
-                    reply=result.get('reply')
-                except Exception:
-                    update('next_at=?,updated=?',(now+5,now))
-                    return [{"agent":job['recipient'],"error":"service endpoint unavailable; retry scheduled"}]
-                if acknowledged:
-                    if not update("state='acknowledged',updated=?",(now,)): observation("callback_after_quiesce",result)
-                    return errors
-                if not update("operation='poll',reply=?,next_at=?,updated=?",(reply,now+5,now)):
-                    observation("callback_after_quiesce",result)
-                    return errors
-                job['reply']=reply
-            if job['reply'] is not None:
-                # Quiesce can be published while a callback holds the actor lock.
-                # Recheck immediately before beginning another remote effect.
-                if not _allowed(db,record,job): return errors
-                try:
-                    args={"sender":job['recipient'],"id":json.loads(job['envelope'])['reply_to'],
-                          "message":job['reply'],"request_id":"service:"+hashlib.sha256((job['hub']+'|'+job['id']).encode()).hexdigest()}
-                    if job['recipient_epoch'] is not None: args['expected_sender_epoch']=job['recipient_epoch']
-                    receipt=broker_request(connection,'reply',**args)
-                    if not update("state='sent',receipt=?,updated=?",(_canonical(receipt),now)):
-                        observation("broker_reply_after_quiesce",receipt)
-                except Exception as exc:
-                    state='expired' if getattr(exc,'code',None) in {'not_found','forbidden','unauthorized'} else 'pending'
-                    update('state=?,next_at=?,updated=?',(state,now+5,now))
-                    errors.append({"agent":job['recipient'],"error":"service reply unavailable; "+state})
+            result=validate_response(call_bridge(record,job),job['contract_version'])
+            acknowledged=result.get('disposition')=='acknowledge'
+            reply=result.get('reply')
+        except Exception:
+            update(job,'next_at=?,updated=?',(now+5,now))
+            return [{"agent":job['recipient'],"error":"service endpoint unavailable; retry scheduled"}]
+        if acknowledged:
+            if not update(job,"state='acknowledged',updated=?",(now,)): observation(job,"callback_after_quiesce",result)
             return errors
-        finally: db.close()
+        if not update(job,"operation='poll',reply=?,next_at=?,updated=?",(reply,now+5,now)):
+            observation(job,"callback_after_quiesce",result)
+            return errors
+        job['reply']=reply
+    if job['reply'] is not None:
+        # Quiesce can be published at any time. Recheck under the lock immediately
+        # before beginning another remote effect.
+        if locked_journal(load) is None: return errors
+        try:
+            args={"sender":job['recipient'],"id":json.loads(job['envelope'])['reply_to'],
+                  "message":job['reply'],"request_id":"service:"+hashlib.sha256((job['hub']+'|'+job['id']).encode()).hexdigest()}
+            if job['recipient_epoch'] is not None: args['expected_sender_epoch']=job['recipient_epoch']
+            receipt=broker_request(connection,'reply',**args)
+            if not update(job,"state='sent',receipt=?,updated=?",(_canonical(receipt),now)):
+                observation(job,"broker_reply_after_quiesce",receipt)
+        except Exception as exc:
+            state='expired' if getattr(exc,'code',None) in {'not_found','forbidden','unauthorized'} else 'pending'
+            update(job,'state=?,next_at=?,updated=?',(state,now+5,now))
+            errors.append({"agent":job['recipient'],"error":"service reply unavailable; "+state})
+    return errors
 
 
 def advance(root, registrations, connections, broker_request, *, call_bridge=bridge, now=None, limit=8, budget_s=None):

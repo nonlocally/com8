@@ -130,7 +130,14 @@ batch costs a few round trips rather than one per message.
 The worker only leases what its journal can hold: when the 128-job queue is full
 the service is left out of the device poll, so the hub keeps its messages (24 h)
 and offers them when room returns, and a message the journal cannot take keeps
-its hub lease instead of being failed. Up to eight `deliver` calls run at once,
+its hub lease instead of being failed. The room is shared by every service the
+worker serves, so one poll's batches never add up to more than it. This is a
+change of behaviour: before 0.7 a message that arrived while the journal was
+full was acknowledged as `failed` at once and lost; now the sender's receipt
+stays `accepted` while the service is saturated, and the message expires after
+24 hours only if room never returns. The journal's room is the service's
+admission signal, and a saturated service is a transient condition, not a
+delivery failure. Up to eight `deliver` calls run at once,
 so distinct messages can reach the endpoint out of queue order; the endpoint
 must not depend on their arrival order. A lost acknowledgment is retried once
 and otherwise recovered when the lease expires and the hub offers the message
@@ -190,12 +197,17 @@ the latter's recipient epoch stays null. No epoch is parsed from message text.
 
 The journal migrates additively. New jobs capture immutable participant epochs;
 existing rows retain nulls. Per-actor private process-shared file locks plus
-thread locks cover enqueue, callback start/completion, retry and broker-reply
-effects. Locks are reentrant in one thread and bounded across processes.
-Callbacks and replies never hold a SQLite transaction while doing HTTP. Every
-result update requires the original pending state, captured generation and
-current active lifecycle. Late results observed after quiescing are appended to
-`service_job_observations`; they cannot resurrect a job or fabricate a receipt.
+thread locks cover enqueue and every journal transition of a job (its start,
+completion, retry and broker-reply effects) and the check immediately before a
+remote effect begins. Locks are reentrant in one thread and bounded across
+processes. The endpoint call and the broker reply themselves run outside the
+lock and never hold a SQLite transaction, so one service's ready jobs are
+called eight at a time and a barrier can complete while a call is in flight.
+Every result update requires the original pending state, captured generation
+and current active lifecycle. Late results observed after quiescing, including
+the answer of a call that was in flight when the barrier completed, are
+appended to `service_job_observations`; they cannot resurrect a job or
+fabricate a receipt.
 The existing terminal `{pending:false,disposition:acknowledge}` path is
 unchanged for eligible current work.
 

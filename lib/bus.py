@@ -895,7 +895,10 @@ def worker():
                             if room <= 0:
                                 del active[ident]
                             else:
+                                # Room is shared by every service of this worker: what one
+                                # poll may lease in total never exceeds the journal's room.
                                 batch[ident] = min(SERVICE_LEASE_BATCH, room)
+                                room -= batch[ident]
                         ids = list(active)
                         for offset in range(0, len(ids), 128):
                             if stopping():

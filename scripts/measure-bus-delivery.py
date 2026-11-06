@@ -262,10 +262,12 @@ def analyze(parameters, sends, recorder, broker, service_id, worker_state):
                             "interval_s": quantiles(intervals), "lease_size": quantiles(lease_sizes),
                             "elapsed_s": quantiles([event["elapsed"] for event in polls]),
                             "batch_requested": any("batch" in event for event in polls)},
-            "ack": {"count": len(acks), "elapsed_s": quantiles([event["elapsed"] for event in acks]),
+            "ack": {"count": len(acks), "distinct": len({event["id"] for event in acks if event["ok"]}),
+                    "elapsed_s": quantiles([event["elapsed"] for event in acks]),
                     "statuses": {status: sum(1 for event in acks if event["status"] == status)
                                  for status in sorted({event["status"] for event in acks})}},
-            "reply": {"count": len(replies), "elapsed_s": quantiles([event["elapsed"] for event in replies])},
+            "reply": {"count": len(replies), "distinct": len({event["reply_to"] for event in replies}),
+                      "elapsed_s": quantiles([event["elapsed"] for event in replies])},
             "heartbeat": {"count": len(heartbeats)},
             "operations_per_message": (len(polls) + len(acks) + len(replies)) / count if count else None,
         },
@@ -353,7 +355,7 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
             bridge = recorder.snapshot("bridge")
             delivered = {event["id"] for event in bridge if event["op"] == "deliver"}
             answered = {event["id"] for event in bridge if event["answer"] == "reply"}
-            replied = sum(1 for event in recorder.snapshot("hub") if event["op"] == "reply" and event["ok"])
+            replied = len({event["reply_to"] for event in recorder.snapshot("hub") if event["op"] == "reply" and event["ok"]})
             if progress and time.monotonic() - last_report >= 10:
                 progress("delivered %d/%d, answered %d, replies at hub %d" % (len(delivered), messages, len(answered), replied))
                 last_report = time.monotonic()
@@ -397,9 +399,9 @@ def summarize(report):
         "hub poll_device: %d calls, %d empty; interval p50 %.2f s, p90 %.2f s, max %.2f s; lease size max %s, mean %.2f" % (
             poll["count"], poll["empty"], poll["interval_s"].get("p50", 0), poll["interval_s"].get("p90", 0),
             poll["interval_s"].get("max", 0), poll["lease_size"].get("max"), poll["lease_size"].get("mean", 0)),
-        "hub ack: %d (%s); reply: %d; heartbeat: %d; hub operations per message: %.2f" % (
-            hub["ack"]["count"], hub["ack"]["statuses"], hub["reply"]["count"], hub["heartbeat"]["count"],
-            hub["operations_per_message"] or 0),
+        "hub ack: %d for %d messages (%s); reply: %d for %d; heartbeat: %d; hub operations per message: %.2f" % (
+            hub["ack"]["count"], hub["ack"]["distinct"], hub["ack"]["statuses"], hub["reply"]["count"], hub["reply"]["distinct"],
+            hub["heartbeat"]["count"], hub["operations_per_message"] or 0),
         "service: %d deliver (%d distinct, %d duplicates), %d poll; %.2f bridge calls per message" % (
             service["deliver"], service["distinct_delivered"], service["duplicate_delivers"], service["poll"],
             service["operations_per_message"] or 0),

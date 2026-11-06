@@ -319,28 +319,32 @@ class LifecycleTests(unittest.TestCase):
         state.mkdir()
         url = "https://service-full.invalid"
         records = self.service_records(state, url)
+        records["second"] = dict(records["svc"], id="agent-second", session_key="service:second",
+                                 service_id="00000000-0000-4000-8000-000000000002")
         cfg = {"connections": {url: {"url": url}}}
         polls = []
-        capacities = [0, 5, 400]
+        capacities = [0, 5, 40, 400]
 
         def request(conn, operation, **payload):
             if operation == "heartbeat":
                 return {"ok": True}
             if operation == "poll_device":
                 polls.append({"agents": payload["agents"], "batch": payload.get("batch")})
-                if len(polls) == 3:
+                if len(polls) == 4:
                     (state / "worker.stop").touch()
                 return {"messages": []}
             raise AssertionError(operation)
 
-        with mock.patch.object(bus_service, "capacity", side_effect=lambda root: capacities[min(len(polls), 2)]):
+        with mock.patch.object(bus_service, "capacity", side_effect=lambda root: capacities[min(len(polls), 3)]):
             self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"))
-        self.assertEqual(len(polls), 3)
-        # No journal capacity: the service is not polled, so the hub keeps its messages (24 h) instead of
-        # the worker failing them; a small capacity bounds the batch; a large one is capped at the batch size.
+        self.assertEqual(len(polls), 4)
+        # No journal room: no service is polled, so the hub keeps its messages (24 h) instead of the worker
+        # failing them. Room is shared: the batches requested in one poll never add up to more than it.
         self.assertEqual((polls[0]["agents"], polls[0]["batch"]), (["agent-native"], None))
         self.assertEqual(polls[1]["batch"], {"agent-service": 5})
-        self.assertEqual(polls[2]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH})
+        self.assertEqual(sorted(polls[1]["agents"]), ["agent-native", "agent-service"])
+        self.assertEqual(polls[2]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": 8})
+        self.assertEqual(polls[3]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": bus.SERVICE_LEASE_BATCH})
 
     def test_worker_is_ready_before_network_and_heartbeats_continue_during_delivery(self):
         state = self.root / "worker-state"
