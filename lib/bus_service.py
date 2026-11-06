@@ -60,6 +60,11 @@ class ServiceError(ValueError):
     pass
 
 
+class ServiceBusy(ServiceError):
+    """The transport journal is full; the hub keeps the message until its lease expires."""
+
+
+
 def endpoint(value):
     parsed = urllib.parse.urlsplit(value)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
@@ -104,6 +109,16 @@ def configured(record):
         return True
     except (OSError, ValueError, KeyError, UnicodeError):
         return False
+
+
+def capacity(root):
+    """Pending jobs the journal can still take, across every service it serves."""
+    db = journal(root)
+    try:
+        pending = db.execute("SELECT COUNT(*) FROM jobs WHERE state='pending'").fetchone()[0]
+        return max(0, MAX_PENDING - pending)
+    finally:
+        db.close()
 
 
 def journal(root):
@@ -640,7 +655,7 @@ def _enqueue_locked(root, record, envelope):
             else:
                 count = db.execute("SELECT COUNT(*) FROM jobs WHERE state='pending'").fetchone()[0]
                 if count >= MAX_PENDING:
-                    raise ServiceError("service transport queue is full")
+                    raise ServiceBusy("service transport queue is full")
                 db.execute("""INSERT INTO jobs(hub,id,recipient,service_id,envelope,request_hash,expires,updated,contract_version,protocol,sender_epoch,recipient_epoch)
                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (record["url"], item["id"], record["id"],
                               record["service_id"], body, digest, expiry, time.time(), version,item.get("protocol"),item["sender"].get("epoch"),item.get("recipient_epoch")))
@@ -701,6 +716,7 @@ def validate_response(result, version):
 
 def _advance_job(root,record,selected,connection,broker_request,call_bridge,now):
     errors=[]
+    if now is None: now=time.time()
     with lifecycle_lock(root,*_actor(record)):
         db=journal(root)
         try:
@@ -753,30 +769,38 @@ def _advance_job(root,record,selected,connection,broker_request,call_bridge,now)
         finally: db.close()
 
 
-def advance(root, registrations, connections, broker_request, *, call_bridge=bridge, now=None):
-    """Bounded drain; actor lock spans callbacks/replies, never a SQLite transaction."""
-    now=time.time() if now is None else now
+def advance(root, registrations, connections, broker_request, *, call_bridge=bridge, now=None, limit=8, budget_s=None):
+    """Bounded drain of up to `limit` ready jobs, eight at a time, starting no round after `budget_s`.
+
+    The actor lock spans callbacks/replies, never a SQLite transaction. Without a
+    fixed `now` each job is timed when it runs, so its retry is scheduled from then.
+    """
+    started=time.monotonic()
+    selected_at=time.time() if now is None else now
     db=journal(root)
     try:
         with db:
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='pending' AND expires<=?",(now,now))
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='pending' AND expires<=?",(selected_at,selected_at))
             # Retirement evidence is append-only, including the preserved job row.
-            db.execute("DELETE FROM jobs WHERE state NOT IN ('pending','abandoned_retired') AND retirement_barrier IS NULL AND updated<?",(now-172800,))
+            db.execute("DELETE FROM jobs WHERE state NOT IN ('pending','abandoned_retired') AND retirement_barrier IS NULL AND updated<?",(selected_at-172800,))
         records={(r['url'],r['id']):r for r in registrations.values() if r.get('kind')=='service'}
-        jobs=db.execute("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY next_at,updated LIMIT 128",(now,)).fetchall()
+        jobs=db.execute("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY next_at,updated LIMIT ?",
+                        (selected_at,max(limit,128))).fetchall()
         available=[]
         for job in jobs:
             record=records.get((job['hub'],job['recipient']))
             if (record and record['service_id']==job['service_id'] and job['hub'] in connections
-                    and (record.get('buses') or record.get('reply_until',0)>now) and _allowed(db,record,job)):
+                    and (record.get('buses') or record.get('reply_until',0)>selected_at) and _allowed(db,record,job)):
                 available.append((dict(job),dict(record)))
-        available=available[:8]
+        available=available[:limit]
     finally: db.close()
     errors=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures=[pool.submit(_advance_job,root,record,job,connections[job['hub']],broker_request,call_bridge,now)
-                 for job,record in available]
-        for future in concurrent.futures.as_completed(futures):
-            try: errors.extend(future.result())
-            except Exception: errors.append({"error":"service lifecycle unavailable; retained for retry"})
+        for offset in range(0,len(available),8):
+            if offset and budget_s is not None and time.monotonic()-started>=budget_s: break
+            futures=[pool.submit(_advance_job,root,record,job,connections[job['hub']],broker_request,call_bridge,now)
+                     for job,record in available[offset:offset+8]]
+            for future in concurrent.futures.as_completed(futures):
+                try: errors.extend(future.result())
+                except Exception: errors.append({"error":"service lifecycle unavailable; retained for retry"})
     return errors

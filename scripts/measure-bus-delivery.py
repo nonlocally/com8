@@ -38,7 +38,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(ROOT / "lib"))
-from bus_broker import Broker, handler_factory  # noqa: E402
+from bus_broker import Broker, BusHTTPServer, handler_factory  # noqa: E402
 
 CERT_CONFIG = """[req]
 prompt = no
@@ -89,9 +89,18 @@ def instrument(broker, recorder):
 
     def handle(token, request, **context):
         started = time.time()
-        result = original(token, request, **context)
+        try:
+            result = original(token, request, **context)
+        except Exception as exc:
+            # A broker exception answers the worker with HTTP 500; keep it in the timeline.
+            recorder.record("hub", {"at": started, "elapsed": time.time() - started, "op": request.get("op"),
+                                    "ok": False, "exception": type(exc).__name__ + ": " + " ".join(str(exc).split())[:200],
+                                    **({"id": request.get("id")} if isinstance(request, dict) else {})})
+            raise
         event = {"at": started, "elapsed": time.time() - started, "op": request.get("op") if isinstance(request, dict) else None,
                  "ok": bool(result.get("ok"))}
+        if not event["ok"]:
+            event["error"] = result.get("error")
         if event["op"] == "poll_device":
             event["agents"] = len(request.get("agents") or [])
             if "batch" in request:
@@ -110,8 +119,8 @@ def instrument(broker, recorder):
     broker.handle = handle
 
 
-def tls_server(cert, key, handler):
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+def tls_server(cert, key, handler, server_class=http.server.ThreadingHTTPServer):
+    server = server_class(("127.0.0.1", 0), handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(cert, key)
     server.socket = context.wrap_socket(server.socket, server_side=True)
@@ -123,7 +132,8 @@ def tls_server(cert, key, handler):
 def start_hub(temp, cert, key, recorder):
     broker = Broker(temp / "hub")
     instrument(broker, recorder)
-    server, thread = tls_server(cert, key, handler_factory(broker))
+    # The release's own server: its listen backlog and connection slots are part of the measurement.
+    server, thread = tls_server(cert, key, handler_factory(broker), BusHTTPServer)
     return broker, server, thread, "https://localhost:%d" % server.server_port
 
 
@@ -323,6 +333,22 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
         deadline = time.monotonic() + timeout
         complete = False
         last_report = 0.0
+        state_dir = Path(env["COMM_STATE"]) / "bus"
+        observed_errors = []
+        watching = threading.Event()
+
+        def watch_errors():
+            # The worker republishes its error list every iteration, which can be
+            # 0.1 s apart under load; read it continuously and keep each distinct error.
+            while not watching.wait(0.005):
+                try:
+                    for item in json.loads((state_dir / "worker.json").read_text()).get("errors", []):
+                        if item not in observed_errors:
+                            observed_errors.append(item)
+                except (OSError, ValueError):
+                    pass
+        watcher = threading.Thread(target=watch_errors, daemon=True)
+        watcher.start()
         while time.monotonic() < deadline:
             bridge = recorder.snapshot("bridge")
             delivered = {event["id"] for event in bridge if event["op"] == "deliver"}
@@ -335,12 +361,14 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
                 complete = True
                 break
             time.sleep(.25)
+        watching.set()
+        watcher.join(2)
         worker_state = {}
-        state_dir = Path(env["COMM_STATE"]) / "bus"
         try:
             worker_state = json.loads((state_dir / "worker.json").read_text())
         except (OSError, ValueError):
             pass
+        worker_state["errors"] = observed_errors + [item for item in worker_state.get("errors", []) if item not in observed_errors]
         parameters = {"messages": messages, "window_s": window, "mode": mode, "timeout_s": timeout, "complete": complete,
                       "hub": hub_url, "endpoint": endpoint, "state": str(temp)}
         report = analyze(parameters, sends, recorder, broker, recipient, worker_state)

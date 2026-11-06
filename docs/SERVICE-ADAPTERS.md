@@ -110,8 +110,32 @@ messages with each other with `--contract-version 2`.
 `deliver` must itself be idempotent by `(hub, bus, message id)` and persist the
 application task binding. The worker can retry after a lost response. `poll`
 reads that durable binding and must not create another task. Admission belongs
-to the application: the transport has a bounded 128-job queue and drains at most
-eight jobs concurrently, and does not replace application per-user limits.
+to the application: the transport has a bounded 128-job queue and calls the
+endpoint for at most eight jobs concurrently, and does not replace application
+per-user limits.
+
+## Delivery cadence
+
+The hub leases a service registration up to 32 of its queued messages per
+device poll, in queue order, each with its own 60-second lease (native sessions
+keep one message at a time, so their order is preserved). The worker journals
+every leased message before acknowledging it, acknowledges eight at a time, and
+polls again at once while a poll leased service messages; an idle worker polls
+every two seconds. Each loop iteration then calls the endpoint for every ready
+job, eight at a time, for up to five seconds before native delivery resumes.
+Against a local hub this delivers hundreds of messages a minute to one service
+(`scripts/measure-bus-delivery.py` measures it); against a remote hub each
+batch costs a few round trips rather than one per message.
+
+The worker only leases what its journal can hold: when the 128-job queue is full
+the service is left out of the device poll, so the hub keeps its messages (24 h)
+and offers them when room returns, and a message the journal cannot take keeps
+its hub lease instead of being failed. Up to eight `deliver` calls run at once,
+so distinct messages can reach the endpoint out of queue order; the endpoint
+must not depend on their arrival order. A lost acknowledgment is retried once
+and otherwise recovered when the lease expires and the hub offers the message
+again; `worker.json` keeps the last 32 distinct delivery errors with their
+times under `recent_errors`, since `errors` only shows the current iteration.
 
 The journal retains the original reply destination and deadline. It persists the
 terminal answer before sending `reply` through the existing broker. The new

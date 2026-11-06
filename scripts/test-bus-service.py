@@ -297,6 +297,80 @@ class Services(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "queue is full"):
                 service.enqueue(self.root, self.record, dict(self.envelope, id="m_other", reply_to="m_other"))
 
+    def states(self):
+        db = service.journal(self.root)
+        try:
+            return [row["state"] for row in db.execute("SELECT state FROM jobs ORDER BY id")]
+        finally:
+            db.close()
+
+    def test_full_transport_queue_is_busy_not_failed_and_capacity_counts_pending_jobs(self):
+        self.assertEqual(service.capacity(self.root), service.MAX_PENDING)
+        with mock.patch.object(service, "MAX_PENDING", 2):
+            self.assertEqual(service.capacity(self.root), 2)
+            service.enqueue(self.root, self.record, self.envelope)
+            self.assertEqual(service.capacity(self.root), 1)
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_second", reply_to="m_second"))
+            self.assertEqual(service.capacity(self.root), 0)
+            third = dict(self.envelope, id="m_third", reply_to="m_third")
+            with self.assertRaisesRegex(service.ServiceBusy, "queue is full"):
+                service.enqueue(self.root, self.record, third)
+            self.assertTrue(issubclass(service.ServiceBusy, service.ServiceError))
+            # The worker keeps the hub's lease for a message a full journal cannot take, instead of failing it.
+            with mock.patch.object(bus, "state_dir", return_value=self.root):
+                self.assertIsNone(bus.deliver(self.record, third))
+            # An already journaled message is not new work and needs no capacity.
+            self.assertEqual(service.enqueue(self.root, self.record, self.envelope)[0], "queued")
+        self.assertEqual(self.states(), ["pending", "pending"])
+        service.advance(self.root, self.registrations, self.connections, self.request, now=time.time(),
+                        call_bridge=lambda record, job: {"pending": False, "reply": "done"}, limit=8)
+        self.assertNotIn("pending", self.states())
+        self.assertEqual(service.capacity(self.root), service.MAX_PENDING)
+
+    def test_advance_drains_up_to_the_limit_eight_at_a_time(self):
+        self.record["contract_version"] = 2
+        for index in range(20):
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_%02d" % index, reply_to="m_%02d" % index))
+        running, peak, lock = [0], [0], threading.Lock()
+        def bridge(record, job):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(.02)
+            with lock:
+                running[0] -= 1
+            return {"pending": False, "disposition": "acknowledge"}
+        now = time.time()
+        # The default is one round of eight, as before.
+        self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
+                                         call_bridge=bridge, now=now), [])
+        self.assertEqual(self.states().count("acknowledged"), 8)
+        self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
+                                         call_bridge=bridge, now=now, limit=64), [])
+        self.assertEqual(self.states().count("acknowledged"), 20)
+        self.assertLessEqual(peak[0], 8)
+
+    def test_advance_budget_stops_after_a_whole_round(self):
+        self.record["contract_version"] = 2
+        for index in range(24):
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_%02d" % index, reply_to="m_%02d" % index))
+        def slow(record, job):
+            time.sleep(.1)
+            return {"pending": False, "disposition": "acknowledge"}
+        service.advance(self.root, self.registrations, self.connections, self.request, call_bridge=slow,
+                        limit=64, budget_s=.05)
+        self.assertEqual(self.states().count("acknowledged"), 8)
+        # Without a fixed clock each job records its own time, so retries are scheduled from when they ran.
+        service.advance(self.root, self.registrations, self.connections, self.request, limit=64,
+                        call_bridge=lambda record, job: {"pending": True})
+        db = service.journal(self.root)
+        try:
+            next_at = [row["next_at"] for row in db.execute("SELECT next_at FROM jobs WHERE state='pending'")]
+        finally:
+            db.close()
+        self.assertEqual(len(next_at), 16)
+        self.assertTrue(all(value > time.time() + 4 for value in next_at))
+
     def test_real_bridge_payload_auth_and_no_redirect_or_unbounded_response(self):
         service.enqueue(self.root, self.record, self.envelope)
         response = mock.MagicMock()
