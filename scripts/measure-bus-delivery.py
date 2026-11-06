@@ -83,12 +83,21 @@ class Recorder:
             return list(getattr(self, kind))
 
 
-def instrument(broker, recorder):
-    """Record each broker operation the worker performs, with its timing and result size."""
+def instrument(broker, recorder, latency=0.0, old_hub=False):
+    """Record each broker operation the worker performs, with its timing and result size.
+
+    `latency` delays every request by that many seconds before the broker sees it,
+    standing in for a remote hub's round trip; `old_hub` drops the `batch` field so
+    the broker leases one message per target, as releases before 0.7 do.
+    """
     original = broker.handle
 
     def handle(token, request, **context):
         started = time.time()
+        if latency:
+            time.sleep(latency)
+        if old_hub and isinstance(request, dict) and request.get("op") == "poll_device":
+            request = {key: value for key, value in request.items() if key != "batch"}
         try:
             result = original(token, request, **context)
         except Exception as exc:
@@ -116,6 +125,8 @@ def instrument(broker, recorder):
         recorder.record("hub", event)
         return result
 
+    # The harness's own sends and lookups bypass the wrapper: only the worker's traffic is measured.
+    broker.direct = original
     broker.handle = handle
 
 
@@ -129,9 +140,9 @@ def tls_server(cert, key, handler, server_class=http.server.ThreadingHTTPServer)
     return server, thread
 
 
-def start_hub(temp, cert, key, recorder):
+def start_hub(temp, cert, key, recorder, latency=0.0, old_hub=False):
     broker = Broker(temp / "hub")
-    instrument(broker, recorder)
+    instrument(broker, recorder, latency, old_hub)
     # The release's own server: its listen backlog and connection slots are part of the measurement.
     server, thread = tls_server(cert, key, handler_factory(broker), BusHTTPServer)
     return broker, server, thread, "https://localhost:%d" % server.server_port
@@ -197,7 +208,7 @@ def cli(env, *args):
 
 
 def invitation(broker, url, user):
-    invite = broker.handle(broker.admin_token, {"op": "invite", "bus": "general", "ttl": 300, "user": user})
+    invite = broker.direct(broker.admin_token, {"op": "invite", "bus": "general", "ttl": 300, "user": user})
     if not invite.get("ok"):
         raise RuntimeError("invite failed: %r" % (invite,))
     raw = json.dumps({"url": url, "invite": invite["invite"]}).encode()
@@ -290,7 +301,8 @@ def analyze(parameters, sends, recorder, broker, service_id, worker_state):
     return report
 
 
-def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, keep=False, progress=None):
+def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, keep=False, progress=None,
+            hub_latency=0.0, old_hub=False):
     """Run one measurement; returns the report dictionary (timeline included)."""
     if mode not in ("immediate", "poll"):
         raise ValueError("mode must be immediate or poll")
@@ -300,7 +312,7 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
     env = None
     try:
         cert, key = make_certificate(temp)
-        broker, hub_server, hub_thread, hub_url = start_hub(temp, cert, key, recorder)
+        broker, hub_server, hub_thread, hub_url = start_hub(temp, cert, key, recorder, hub_latency, old_hub)
         servers.append((hub_server, hub_thread))
         token = "measure-bridge-token-" + uuid.uuid4().hex + uuid.uuid4().hex
         service_server, service_thread, endpoint = start_service(cert, key, token, mode, recorder)
@@ -314,7 +326,7 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
         registered = cli(env, "register-service", "measured-service", "--service-id", service_id,
                          "--endpoint", endpoint, "--token-file", str(token_file), "--contract-version", "2", "--json")
         recipient = registered["id"]
-        sender = broker.handle(broker.admin_token, {"op": "register", "session_key": "measure-sender",
+        sender = broker.direct(broker.admin_token, {"op": "register", "session_key": "measure-sender",
                                                     "name": "measure-sender", "kind": "codex"})
         if not sender.get("ok"):
             raise RuntimeError("sender registration failed: %r" % (sender,))
@@ -327,7 +339,7 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
             delay = due - time.time()
             if delay > 0:
                 time.sleep(delay)
-            result = broker.handle(broker.admin_token, {"op": "send", "sender": sender, "target": recipient,
+            result = broker.direct(broker.admin_token, {"op": "send", "sender": sender, "target": recipient,
                                                         "bus": "general", "message": "measurement %d of %d" % (index + 1, messages)})
             if not result.get("ok"):
                 raise RuntimeError("send %d failed: %r" % (index + 1, result))
@@ -372,7 +384,7 @@ def measure(messages=100, window=10.0, mode="poll", timeout=900.0, state=None, k
             pass
         worker_state["errors"] = observed_errors + [item for item in worker_state.get("errors", []) if item not in observed_errors]
         parameters = {"messages": messages, "window_s": window, "mode": mode, "timeout_s": timeout, "complete": complete,
-                      "hub": hub_url, "endpoint": endpoint, "state": str(temp)}
+                      "hub": hub_url, "endpoint": endpoint, "state": str(temp), "hub_latency_s": hub_latency, "old_hub": old_hub}
         report = analyze(parameters, sends, recorder, broker, recipient, worker_state)
         try:
             report["worker"]["log_tail"] = (state_dir / "worker.log").read_text()[-2000:]
@@ -394,8 +406,10 @@ def summarize(report):
     hub, service, messages = report["hub"], report["service"], report["messages"]
     poll = hub["poll_device"]
     lines = [
-        "messages: %d sent over %.1f s (%s mode); complete=%s" % (
-            messages["sent"], messages["send_span_s"], report["parameters"]["mode"], report["parameters"]["complete"]),
+        "messages: %d sent over %.1f s (%s mode%s); complete=%s" % (
+            messages["sent"], messages["send_span_s"], report["parameters"]["mode"],
+            (", hub latency %.2f s" % report["parameters"]["hub_latency_s"] if report["parameters"].get("hub_latency_s") else "")
+            + (", old hub" if report["parameters"].get("old_hub") else ""), report["parameters"]["complete"]),
         "hub poll_device: %d calls, %d empty; interval p50 %.2f s, p90 %.2f s, max %.2f s; lease size max %s, mean %.2f" % (
             poll["count"], poll["empty"], poll["interval_s"].get("p50", 0), poll["interval_s"].get("p90", 0),
             poll["interval_s"].get("max", 0), poll["lease_size"].get("max"), poll["lease_size"].get("mean", 0)),
@@ -428,9 +442,14 @@ def main(argv=None):
     parser.add_argument("--keep", action="store_true", help="retain the fixture state for inspection")
     parser.add_argument("--json", action="store_true", help="print the full report, timeline included")
     parser.add_argument("--out", help="write the full JSON report to this file")
+    parser.add_argument("--hub-latency", type=float, default=0.0, help="seconds added to every hub request, as a remote hub's round trip")
+    parser.add_argument("--old-hub", action="store_true", help="the hub ignores batch leases, as releases before 0.7 do")
     args = parser.parse_args(argv)
+    if not 0 <= args.hub_latency <= 10:
+        parser.error("--hub-latency must be 0 to 10 seconds")
     report = measure(args.messages, args.window, args.mode, args.timeout, args.state, args.keep,
-                     progress=lambda text: print(text, file=sys.stderr, flush=True))
+                     progress=lambda text: print(text, file=sys.stderr, flush=True),
+                     hub_latency=args.hub_latency, old_hub=args.old_hub)
     if args.out:
         Path(args.out).write_text(json.dumps(rounded(report), indent=1))
     if args.json:

@@ -170,6 +170,59 @@ existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
 
+## Upgrading a running service worker in place
+
+The worker is `lib/bus.py` and `lib/bus_service.py`, run through `bin/communicate`
+(which sources `lib/common.sh`, `lib/claude.sh`, `lib/codex.sh`, `lib/peer.sh`,
+`lib/router.sh` and `lib/wake.sh`) or `com8`; the hub side is `lib/bus_broker.py`.
+A running worker identifies the code it loaded by `runtime` in `worker.json`,
+the SHA-256 of those two files, and reports the `VERSION` beside them and its
+`source` directory. Everything it owns is in `$COMM_STATE/bus` (default
+`~/.local/state/communicate/bus`): the device credential (`client.json`), the
+registrations, the receipt journal, the service job journal and its locks.
+An upgrade changes the code, never that directory or the registration.
+
+1. Update the code: check out the reviewed commit in the checkout the worker
+   runs from, or extract the new release beside the old one.
+2. `com8 bus start` from the new code (the same user, the same `COMM_STATE`).
+   It refuses when no active registration exists; otherwise it compares the
+   running worker's `runtime` with the new source, asks an older worker to
+   stop (the worker finishes its current iteration, at most one bounded
+   request), waits up to 30 seconds for its lock, and starts the new worker.
+   `register-service` with the registration's original arguments does the
+   same after re-registering (the same service UUID keeps the same agent id),
+   as does any successful `bus send` or `bus reply`. An unchanged source is
+   never restarted.
+3. Confirm: the command prints `current: true` and the worker's `pid`,
+   `version`, `runtime` and `source`; `com8 bus status --json` shows the same
+   under `worker`, with `worker_recent` once it has heartbeated, and
+   `com8 bus agents --json` lists the service with its unchanged id.
+
+Messages in the gap: the hub keeps every message addressed to the service as
+`accepted` for 24 hours and leases it to the first poll of the new worker. A
+message the old worker had leased but not acknowledged is leased again when
+that lease expires (60 seconds); one it acknowledged after journaling is not
+delivered twice (`receipts.sqlite` answers the repeat offer); a job the old
+worker had queued for the endpoint continues from `service-jobs.sqlite`,
+including a pending `poll`. The roster shows the service `offline` 45 seconds
+after the old worker's last heartbeat until the new one's first, which does
+not stop senders. `com8 bus stop` is only needed to hold a gap deliberately
+(for instance to move the state directory); `bus start` closes it.
+`scripts/test-bus-worker-upgrade.py` runs this sequence against an isolated hub.
+
+Against a hub older than the worker (the hosted hub until it is updated), the
+new worker is leased one message per poll, as before, but polls again at once
+while service messages are arriving, acknowledges eight at a time and keeps
+`recent_errors`; `bus export` needs the new hub. Measured with the delivery
+harness and an emulated round trip (`--hub-latency`, `--old-hub`): the 0.6.1
+worker delivers one message per 2 s wait plus three round trips (3.55 s, 17 a
+minute at 0.5 s, which matches the 13-18 a minute seen against the hosted hub),
+the new worker against the old hub one per three round trips plus 0.1 s (1.0 s
+and 61 a minute at 0.3 s; 1.6 s and 38 a minute at 0.5 s; 2.5 s and 24 a minute
+at 0.8 s), and against the new hub a batch of up to 32 per poll (273 a minute at
+0.5 s, send-to-deliver p50 3.4 s; the replies of 100 jobs completing together
+then take about half a minute, eight round trips at a time).
+
 ## Keeping receipts beyond seven days
 
 The hub keeps a message's receipt for seven days after its last update, with

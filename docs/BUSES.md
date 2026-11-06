@@ -659,11 +659,13 @@ reusing the key for different content is rejected. Register only when publicatio
 membership is intended. Network reverse proxies
 are configured separately and are not removed by `bus stop`.
 
-After a plugin update, the next registration or successful send/reply compares
-the worker's loaded runtime with the installed client. An old worker is asked
-to stop and replaced cooperatively. The broker and native local routes remain
-running. If the old worker cannot release its lock within 30 seconds, the
-command reports the failure instead of killing a PID or starting a competitor.
+After a plugin update, `bus start`, the next registration or a successful
+send/reply compares the worker's loaded runtime with the installed client. An
+old worker is asked to stop and replaced cooperatively; `worker.json` names the
+running worker's `version`, `runtime` and `source`. The broker and native local
+routes remain running. If the old worker cannot release its lock within 30
+seconds, the command reports the failure instead of killing a PID or starting a
+competitor.
 
 The deterministic checks are:
 

@@ -38,6 +38,14 @@ sys.dont_write_bytecode = True
 LIB = Path(__file__).resolve().parent
 # Captured once: a running worker must not mistake changed source for code it loaded.
 WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_service.py").read_bytes()).hexdigest()
+
+
+def worker_version():
+    """The release or checkout version beside this code; the runtime hash is the exact identity."""
+    try:
+        return (LIB.parent / "VERSION").read_text().strip()[:64] or "unknown"
+    except OSError:
+        return "unknown"
 TAILSCALE_STATUS_TIMEOUT = 1.5
 # Retirement records kept per hub. A broker retains at most this many of one
 # device's registrations (MAX_RETAINED_AGENTS), retired or not.
@@ -761,7 +769,8 @@ def worker():
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         signal.signal(signal.SIGINT, lambda *_: stop.set())
         status_lock = threading.Lock()
-        state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "started_at": time.time(), "state": "starting",
+        state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "version": worker_version(), "source": str(LIB),
+                 "started_at": time.time(), "state": "starting",
                  "heartbeat_at": 0, "heartbeat_success_at": 0, "adapters": 0,
                  "heartbeat_errors": [], "delivery_errors": [], "errors": [], "recent_errors": [],
                  **worker_process_metadata(root)}
@@ -1225,6 +1234,8 @@ def parser():
     rehome = commands.add_parser("rehome", help="move a connected hub to a new public origin of the same broker, keeping this device's credential")
     rehome.add_argument("old", help="the connected HTTPS origin, e.g. https://bus.communicate.sh")
     rehome.add_argument("new", help="the broker's new public origin, e.g. https://bus.nonlocally.org")
+    commands.add_parser("start", help="start this device's outbound worker from the current source, or replace a "
+                        "running one cooperatively when the source changed; registrations are reused")
     commands.add_parser("stop")
     for name in ("serve", "__serve"):
         service = commands.add_parser(name)
@@ -1246,6 +1257,16 @@ def run(args):
         return worker()
     if cmd == "stop":
         return stop_services()
+    if cmd == "start":
+        cfg = config()
+        if not any(active_adapter(record) and record["url"] in cfg["connections"] for record in registrations().values()):
+            raise BusError("nothing to deliver for: no active registration on a connected hub; register or register-service first")
+        start_worker()
+        info = read_json(state_dir() / "worker.json", {})
+        return {"ok": True, "worker": {key: info.get(key) for key in ("pid", "version", "runtime", "source", "state", "started_at")},
+                "current": info.get("runtime") == WORKER_RUNTIME,
+                "note": "the running worker loads this source" if info.get("runtime") == WORKER_RUNTIME
+                else "a worker with other source is still running; inspect worker.log"}
     if cmd == "register":
         return register(args)
     if cmd == "register-service":

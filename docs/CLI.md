@@ -22,6 +22,7 @@ a substitute agent or target another route silently.
 | `com8 bus register-service` | Intentionally publish a configured application service; see [service adapters](SERVICE-ADAPTERS.md). |
 | `com8 bus agents --json` | Registered sessions on that broker. |
 | `com8 bus send ID --bus NAME -- MESSAGE` | Bus delivery with membership checks. |
+| `com8 bus start` | Start this device's outbound worker from the current source, or replace a running one whose source changed; registrations are reused. See [service adapters](SERVICE-ADAPTERS.md) for the in-place upgrade. |
 | `com8 bus export AGENT_ID --since UNIX_TIME` | Receipts of one of this device's registrations as JSON lines, to keep beyond the hub's seven-day retention; see [service adapters](SERVICE-ADAPTERS.md). |
 | `com8 native agents` | Existing native socket/SSH routing table. |
 | `com8 native route NAME MESSAGE` | Native session route. |
