@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {snapshotModel, layoutNodes, canDeferRefresh, decorate, agentDetails, agentNodeId, spectralNodes, flowNodes, placeConductor, graphPresentation, communityNodeId} from './model.mjs';
+import {snapshotModel, layoutNodes, canDeferRefresh, decorate, agentDetails, agentNodeId, spectralNodes, flowNodes, placeConductor, graphPresentation, communityNodeId, deviceKey} from './model.mjs';
 
 const agent = (id, extra = {}) => ({id, name: id, user: 'aadarwal', kind: 'codex', device: 'mini', device_id: 'device-one', status: 'queueable', buses: ['qit-wilde'], ...extra});
 const message = (source, target, extra = {}) => ({source, target, message_count: 1, last_sent_at: 100, status_counts: {delivered: 1}, ...extra});
@@ -371,5 +371,75 @@ test('new Flow aggregates clear a visible root and one another along the cross-f
     const moved = graphPresentation(model, base, analysis, {...options, aggregatePositions: new Map([[manualId, manual]])});
     assert.deepEqual(moved.nodes.find(node => node.id === manualId).position, manual);
     assert.notDeepEqual(moved.nodes.find(node => node.id === communityNodeId('g1')).position, manual);
+  }
+});
+
+test('a service\'s published agents hang under it without creating message links', () => {
+  const service = agent('svc', {kind: 'service', agents: [
+    {id: 'prover-1', name: 'Prover 1', status: 'live', role: 'prover'},
+    {id: 'lemma-7', name: 'Lemma 7', status: 'queueable', role: 'worker', parent: 'prover-1'},
+    {id: 'prover-1', name: 'duplicate'}, {name: 'no id'}, {id: 'orphan', parent: 'absent'}, 'text',
+  ]});
+  const model = snapshotModel(snapshot([service, agent('b')], [message('b', 'svc')]));
+  const children = model.agents.filter(entry => entry.via);
+  assert.deepEqual(children.map(entry => [entry.id, entry.name, entry.kind, entry.status, entry.via, entry.parent]), [
+    ['svc/prover-1', 'Prover 1', 'prover', 'live', 'svc', null],
+    ['svc/lemma-7', 'Lemma 7', 'worker', 'queueable', 'svc', 'svc/prover-1'],
+    ['svc/orphan', 'orphan', 'agent', 'queueable', 'svc', null],
+  ]);
+  const parent = model.agents.find(entry => entry.id === 'svc');
+  assert.ok(children.every(entry => deviceKey(entry) === deviceKey(parent) && entry.buses.join() === parent.buses.join()));
+  assert.deepEqual(model.connections.map(edge => [edge.source, edge.target]), [['b', 'svc']]);
+  assert.deepEqual(model.containment, [
+    {source: 'svc', target: 'svc/prover-1'}, {source: 'svc/prover-1', target: 'svc/lemma-7'}, {source: 'svc', target: 'svc/orphan'},
+  ]);
+  // Children follow their service in the device grid and in every presentation.
+  const nodes = layoutNodes(model);
+  assert.deepEqual(nodes.filter(node => node.type === 'agent').map(node => node.data.agent.id), ['b', 'svc', 'svc/prover-1', 'svc/lemma-7', 'svc/orphan']);
+  const view = graphPresentation(model, nodes, null, {selectedId: agentNodeId('svc')});
+  const containment = view.edges.filter(edge => edge.data?.containment);
+  assert.equal(containment.length, 3);
+  assert.ok(containment.every(edge => edge.markerEnd === undefined && edge.label === undefined && edge.style.includes('stroke-dasharray')));
+  assert.equal(view.edges.filter(edge => !edge.data?.containment).length, 1);
+  assert.equal(view.nodes.find(node => node.id === agentNodeId('svc/prover-1')).data.neighbor, true);
+  assert.equal(decorate(model, nodes, null).edges.filter(edge => edge.data?.containment).length, 3);
+  // Published agents are not traffic: details count nothing and the inspector names the service.
+  const details = agentDetails(model, agentNodeId('svc/lemma-7'));
+  assert.equal(details.sent + details.received + details.peerCount, 0);
+  assert.equal(details.agent.viaName, 'svc');
+});
+
+test('published agents are ignored on non-services, bounded, and keep their own identity space', () => {
+  const codex = agent('c', {agents: [{id: 'x'}]});
+  assert.equal(snapshotModel(snapshot([codex], [])).agents.length, 1);
+  const many = agent('svc', {kind: 'service', agents: Array.from({length: 300}, (_, index) => ({id: 'a' + index}))});
+  const bounded = snapshotModel(snapshot([many], []));
+  assert.equal(bounded.agents.length, 1 + 256);
+  // A child named like a real agent never replaces it, and a child never carries message text.
+  const clash = agent('svc', {kind: 'service', agents: [{id: 'b', name: 'Impostor', message: 'secret', description: 'secret'}]});
+  const model = snapshotModel(snapshot([clash, agent('b')], [message('b', 'svc')]));
+  assert.deepEqual(model.agents.map(entry => entry.id).sort(), ['b', 'svc', 'svc/b']);
+  assert.equal(JSON.stringify(model).includes('secret'), false);
+  assert.deepEqual(model.connections.map(edge => [edge.source, edge.target]), [['b', 'svc']]);
+});
+
+test('a child listed before its parent still hangs under that parent, and an offline service takes its children with it', () => {
+  const service = agent('svc', {kind: 'service', agents: [{id: 'lemma-7', parent: 'prover-1', status: 'live'}, {id: 'prover-1', status: 'live'}]});
+  const model = snapshotModel(snapshot([service], []));
+  assert.deepEqual(model.containment, [{source: 'svc/prover-1', target: 'svc/lemma-7'}, {source: 'svc', target: 'svc/prover-1'}]);
+  assert.equal(model.agents.find(entry => entry.id === 'svc/lemma-7').parent, 'svc/prover-1');
+  const down = snapshotModel(snapshot([agent('svc', {kind: 'service', status: 'offline', agents: [{id: 'prover-1', status: 'live'}]})], []));
+  assert.equal(down.agents.find(entry => entry.id === 'svc/prover-1').status, 'offline');
+});
+
+test('children sit under their service in the spectral and flow layouts', () => {
+  const service = agent('svc', {kind: 'service', agents: [{id: 'a'}, {id: 'b'}]});
+  const model = snapshotModel(snapshot([service, agent('peer')], [message('peer', 'svc')]));
+  const analysis = {positions: new Map([['svc', {x: 900, y: 400}], ['peer', {x: 100, y: 400}]])};
+  for (const nodes of [spectralNodes(model, analysis), flowNodes(model, analysis)]) {
+    const by = new Map(nodes.map(node => [node.data.agent.id, node.position]));
+    assert.deepEqual(by.get('svc'), {x: 900, y: 400});
+    assert.ok(by.get('svc/a').y > 400 && by.get('svc/b').y > by.get('svc/a').y, 'children stack below the service');
+    assert.ok(Math.abs(by.get('svc/a').x - 900) < 80, 'children stay in the service\'s column');
   }
 });

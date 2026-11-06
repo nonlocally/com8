@@ -97,6 +97,38 @@ endpoints cannot use this disposition. Explicit application reply tools should
 provide the single final result to this worker, rather than also sending it via
 a separate outbound reply operation.
 
+A service registered with `--publish-agents` is also asked, every 30 seconds,
+`{"version": V, "op": "status", "hub", "recipient_id", "service_id"}` (no
+envelope) and answers exactly `{"agents": [...]}`: at most 256 entries, each
+with `id` (required), `name`, `status` (`live`, `queueable` or `offline`;
+default `queueable`), `role` and `parent` (another entry's `id`), every value
+a printable string of at most 128 UTF-8 bytes (`role` 64; not blank, no
+control characters), the whole list at most 32 KiB, and no other field. The
+worker and the hub validate with the same code (`lib/bus_published.py`): an
+answer that is not `{"agents": [list]}` is refused whole, while a bad entry is
+dropped on its own, the rest of the list stands, the list is cut at 256
+entries and 32 KiB, and then a parent that is not among the kept entries is
+removed so the entry hangs from the service; the hub reports what it dropped
+as `dropped_agents` on the heartbeat result and the worker in `recent_errors`.
+
+The status calls run off the heartbeat path, in their own threads, each with a
+10 s deadline after which its answer is dropped and the next interval asks
+again; a slow or unreachable endpoint never delays a heartbeat. A failed call,
+whatever the failure (a truncated response included), is recorded as that
+service's status error in `worker.json` and the loop goes on. The list in
+hand rides once on the next heartbeat (`agents` on the service's entry), at
+most 64 KiB of lists per heartbeat request, so several maximal lists go out
+over successive heartbeats. The hub stores the list, drops it when the service
+registers again, and carries it only while the service is heard from: it is
+present only on the service's row in the snapshot JSON (`com8 bus agents
+--json`, the dashboard's data) and only while that row is not `offline`; the
+roster table and text output do not show it. The dashboard graph draws the
+entries as nodes under the service. The list is the service's claim about
+itself, never message text or traffic. A hub older than this field accepts
+the heartbeat and ignores the list (checked against the 0.6.1 broker by
+`scripts/test-bus-broker.py` when the checkout has that history). A failed
+or late status call is reported in `worker.json`'s `recent_errors`.
+
 A service can also start a conversation with the ordinary send, using its own
 registered agent ID: `com8 bus send RECIPIENT_ID --bus general --from SERVICE_AGENT_ID -- MESSAGE`.
 The recipient's answer arrives as a normal `deliver` whose authenticated
@@ -110,8 +142,42 @@ messages with each other with `--contract-version 2`.
 `deliver` must itself be idempotent by `(hub, bus, message id)` and persist the
 application task binding. The worker can retry after a lost response. `poll`
 reads that durable binding and must not create another task. Admission belongs
-to the application: the transport has a bounded 128-job queue and drains at most
-eight jobs concurrently, and does not replace application per-user limits.
+to the application: the transport has a bounded 128-job queue and calls the
+endpoint for at most eight jobs concurrently, and does not replace application
+per-user limits.
+
+## Delivery cadence
+
+The hub leases a service registration up to 32 of its queued messages per
+device poll, in queue order, each with its own 60-second lease (native sessions
+keep one message at a time, so their order is preserved). The worker journals
+every leased message before acknowledging it, acknowledges eight at a time, and
+polls again at once while a poll leased service messages; an idle worker polls
+every two seconds. Each loop iteration then calls the endpoint for every ready
+job, eight at a time, for up to five seconds before native delivery resumes.
+Against a local hub this delivers hundreds of messages a minute to one service
+(`scripts/measure-bus-delivery.py` measures it); against a remote hub each
+batch costs a few round trips rather than one per message.
+
+The worker only leases what its journal can hold: when the 128-job queue is full
+the service is left out of the device poll, so the hub keeps its messages (24 h)
+and offers them when room returns, and a message the journal cannot take keeps
+its hub lease instead of being failed. The room is shared by every service the
+worker serves, so one poll's batches never add up to more than it, and every
+pending job counts against it until the endpoint answers, including a job
+whose `deliver` returned `pending` and is being polled; a service that holds
+many tasks open fills the room with them. This is a change of behaviour:
+before 0.7 a message that arrived while the journal was full was acknowledged
+as `failed` at once, a terminal receipt the sender had to act on; now the
+sender's receipt stays `accepted` while the service is saturated, and the
+message expires after 24 hours only if room never returns. The journal's room
+is the service's admission signal, and a saturated service is a transient
+condition, not a delivery failure. Up to eight `deliver` calls run at once,
+so distinct messages can reach the endpoint out of queue order; the endpoint
+must not depend on their arrival order. A lost acknowledgment is retried once
+and otherwise recovered when the lease expires and the hub offers the message
+again; `worker.json` keeps the last 32 distinct delivery errors with their
+times under `recent_errors`, since `errors` only shows the current iteration.
 
 The journal retains the original reply destination and deadline. It persists the
 terminal answer before sending `reply` through the existing broker. The new
@@ -135,6 +201,103 @@ expired local jobs are retained for two days; broker reply receipts use the
 existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
+
+## Upgrading a running service worker in place
+
+The worker is `lib/bus.py` and `lib/bus_service.py`, run through `bin/communicate`
+(which sources `lib/common.sh`, `lib/claude.sh`, `lib/codex.sh`, `lib/peer.sh`,
+`lib/router.sh` and `lib/wake.sh`) or `com8`; the hub side is `lib/bus_broker.py`.
+A running worker identifies the code it loaded by `runtime` in `worker.json`,
+the SHA-256 of those two files, and reports the `VERSION` beside them and its
+`source` directory. Everything it owns is in `$COMM_STATE/bus` (default
+`~/.local/state/communicate/bus`): the device credential (`client.json`), the
+registrations, the receipt journal, the service job journal and its locks.
+An upgrade changes the code, never that directory or the registration.
+
+1. Update the code: check out the reviewed commit in the checkout the worker
+   runs from, or extract the new release beside the old one.
+2. `com8 bus start` from the new code (the same user, the same `COMM_STATE`).
+   It refuses when no active registration exists; otherwise it compares the
+   running worker's `runtime` with the new source, asks an older worker to
+   stop, waits up to 30 seconds for its lock, and starts the new worker.
+   The old worker stops at the end of its current loop iteration, which can
+   be long: it finishes the leases it holds (journaling and acknowledging up
+   to 32 of them, eight hub requests at a time, each bounded by the 12 s
+   request timeout and one retry), any native delivery in flight (a Codex
+   queue call of up to 20 s), and its service drain (rounds of eight endpoint
+   calls of up to 15 s each, no new round after 5 s, plus one hub reply per
+   answered job). That is typically 2-5 s and, with a hung endpoint or hub,
+   30-60 s. If the lock is not released within the 30 s wait, `bus start`
+   withdraws its stop request, the old worker keeps running on the old code,
+   and the command fails with that reason; run it again when the old worker's
+   work has ended (if the old worker did read the request just before it was
+   withdrawn and exited, the next `bus start` simply starts the replacement).
+   `register-service` with the registration's original arguments does the
+   same after re-registering (the same service UUID keeps the same agent id),
+   as does any successful `bus send` or `bus reply`. An unchanged source is
+   never restarted.
+3. Confirm: the command prints `current: true` and the worker's `pid`,
+   `version`, `runtime` and `source`; `com8 bus status --json` shows the same
+   under `worker`, with `worker_recent` once it has heartbeated, and
+   `com8 bus agents --json` lists the service with its unchanged id.
+
+Messages in the gap (the old worker's remaining iteration plus about a second
+for the new worker to start and poll): the hub keeps every message addressed
+to the service as `accepted` for 24 hours and leases it to the first poll of
+the new worker. A message the old worker had leased but not acknowledged is
+leased again when that lease expires (60 seconds); one it acknowledged after
+journaling is not delivered twice (`receipts.sqlite` answers the repeat
+offer); a job the old worker had queued for the endpoint continues from
+`service-jobs.sqlite`, including a pending `poll`. The roster shows the
+service `offline` 45 seconds after the old worker's last heartbeat until the
+new one's first, which does not stop senders. `com8 bus stop` is only needed
+to hold a gap deliberately (for instance to move the state directory);
+`bus start` closes it. `scripts/test-bus-worker-upgrade.py` runs the
+hash-based replacement, the deliberate gap and a lease left in flight at the
+stop against an isolated hub.
+
+Against a hub older than the worker (the hosted hub until it is updated), the
+new worker is leased one message per poll, as before, but polls again at once
+while service messages are arriving, acknowledges eight at a time and keeps
+`recent_errors`; `bus export` needs the new hub. Measured with the delivery
+harness and an emulated round trip (`--hub-latency`, `--old-hub`): the 0.6.1
+worker delivers one message per 2 s wait plus three round trips (3.55 s, 17 a
+minute at 0.5 s, which matches the 13-18 a minute seen against the hosted hub),
+the new worker against the old hub one per three round trips plus 0.1 s (1.0 s
+and 61 a minute at 0.3 s; 1.6 s and 38 a minute at 0.5 s; 2.5 s and 24 a minute
+at 0.8 s), and against the new hub a batch of up to 32 per poll (273 a minute at
+0.5 s, send-to-deliver p50 3.4 s; the replies of 100 jobs completing together
+then take about half a minute, eight round trips at a time).
+
+## Keeping receipts beyond seven days
+
+The hub keeps a message's receipt for seven days after its last update, with
+bounded storage; `export` copies an agent's receipts out before then. The
+device that owns a registration (or the hub administrator) calls `export`
+with `agent`, an optional `since` (Unix time; receipts updated at or after it),
+`limit` (at most 1000 per page) and, to continue, the `next` cursor the
+previous page returned. Each receipt names `id`, `sender`, `target`, `bus`,
+`status`, `detail`, `created_at`, `updated_at`, `expires_at`,
+`conversation_id`, `in_reply_to`, `correlation_version` and `kind` (`agent`,
+or `human` for a human chat, whose human side is `human.<identity>`), oldest
+update first; message bodies and leases never leave the hub. The CLI pages for
+you: `com8 bus export AGENT_ID --since UNIX_TIME` prints one JSON object per
+line (`--json` for one document with `count`).
+
+For the kimi-infer dispatch service: a daily job on the login node beside the
+worker (the same user, so the enrolled device credential is in its COM8 state)
+runs
+
+```
+com8 bus --hub https://HUB export a_SERVICE --since $(( $(date +%s) - 2 * 86400 )) \
+  >> "$RECORD/receipts/$(date -u +%F).jsonl"
+```
+
+and the service deduplicates by `id` and `updated_at` when it reads the files;
+the two-day window tolerates a missed day and catches late updates such as an
+expiry. The swarm's journal remains the record; the export is the hub's side of
+it (what the hub accepted, leased, acknowledged, delivered, cancelled or expired,
+and when). It does not change hub retention or the hub's 20,000-message bound.
 
 ## Measuring delivery cadence
 
@@ -166,12 +329,17 @@ the latter's recipient epoch stays null. No epoch is parsed from message text.
 
 The journal migrates additively. New jobs capture immutable participant epochs;
 existing rows retain nulls. Per-actor private process-shared file locks plus
-thread locks cover enqueue, callback start/completion, retry and broker-reply
-effects. Locks are reentrant in one thread and bounded across processes.
-Callbacks and replies never hold a SQLite transaction while doing HTTP. Every
-result update requires the original pending state, captured generation and
-current active lifecycle. Late results observed after quiescing are appended to
-`service_job_observations`; they cannot resurrect a job or fabricate a receipt.
+thread locks cover enqueue and every journal transition of a job (its start,
+completion, retry and broker-reply effects) and the check immediately before a
+remote effect begins. Locks are reentrant in one thread and bounded across
+processes. The endpoint call and the broker reply themselves run outside the
+lock and never hold a SQLite transaction, so one service's ready jobs are
+called eight at a time and a barrier can complete while a call is in flight.
+Every result update requires the original pending state, captured generation
+and current active lifecycle. Late results observed after quiescing, including
+the answer of a call that was in flight when the barrier completed, are
+appended to `service_job_observations`; they cannot resurrect a job or
+fabricate a receipt.
 The existing terminal `{pending:false,disposition:acknowledge}` path is
 unchanged for eligible current work.
 

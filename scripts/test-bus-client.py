@@ -480,6 +480,40 @@ class ServiceFenceClientTest(unittest.TestCase):
                          (original["id"], 2, "service-fence/epoch-v1"))
         return current
 
+    def test_publish_agents_is_an_explicit_local_registration_choice(self):
+        registered = self.run_cli(*self.arguments, "--publish-agents")
+        record = next(row for row in bus.registrations().values() if row["id"] == registered["id"])
+        self.assertTrue(record["publish_agents"])
+        again = self.run_cli(*self.arguments)
+        self.assertEqual(again["id"], registered["id"])
+        self.assertFalse(next(row for row in bus.registrations().values() if row["id"] == registered["id"])["publish_agents"])
+
+    def test_export_cli_pages_through_the_cursor_and_prints_json_lines(self):
+        import bus_broker
+        registered = self.run_cli(*self.arguments)
+        native = self.request(self.conn, "register", session_key="native:fixture", name="native", kind="codex", bus="general")
+        sent = [self.request(self.conn, "send", sender=native["id"], target=registered["id"], bus="general",
+                             message="body %d" % index)["id"] for index in range(5)]
+        for envelope in self.request(self.conn, "poll_device", agents=[registered["id"]], batch={registered["id"]: 32})["messages"]:
+            self.request(self.conn, "ack", agent=registered["id"], id=envelope["id"], lease=envelope["lease"], status="queued")
+        self.calls.clear()
+        with mock.patch.object(bus_broker, "MAX_EXPORT_PAGE", 2):
+            lines = self.run_cli("export", registered["id"], "--since", "0").splitlines()
+        self.assertEqual([json.loads(line)["id"] for line in lines], sent)
+        self.assertEqual([call["op"] for call in self.calls], ["export"] * 3)
+        self.assertNotIn("after", self.calls[0])
+        self.assertEqual(self.calls[1]["after"], {"updated_at": json.loads(lines[1])["updated_at"], "id": sent[1]})
+        self.assertTrue(all(json.loads(line)["status"] == "queued" and "message" not in json.loads(line) for line in lines))
+        # The registration's name resolves locally too; --json returns one document.
+        document = self.run_cli("export", "fixture", "--json")
+        self.assertEqual((document["agent"], document["count"], [row["id"] for row in document["receipts"]]),
+                         (registered["id"], 5, sent))
+        self.assertEqual(document["hub"], self.conn["url"])
+        # An exact ID without a local record still exports (the hub enforces ownership); nothing prints for none.
+        self.assertIsNone(self.run_cli("export", native["id"], "--since", str(time.time() + 60)))
+        with self.assertRaises(bus.BusError):
+            self.run_cli("export", "unknown-name")
+
     def test_explicit_fenced_cli_reactivation_and_send_preserve_exact_key_and_epoch(self):
         current = self.ready()
         native = self.request(self.conn, "register", session_key="native:fixture", name="native", kind="codex", bus="general")

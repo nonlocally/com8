@@ -31,6 +31,7 @@ python3 "$ROOT/scripts/test-bus-chat-client.py"
 python3 "$ROOT/scripts/test-bus-rehome.py"
 python3 "$ROOT/scripts/test-bus-lifecycle.py"
 python3 "$ROOT/scripts/test-bus-delivery.py"
+python3 "$ROOT/scripts/test-bus-worker-upgrade.py"
 python3 "$ROOT/scripts/test-bus-remote-fixture.py"
 node "$ROOT/scripts/test-bus-ui.js"
 printf 'PASS: complete bus suite (broker, existing-session client, verified TLS, dashboard)\n'

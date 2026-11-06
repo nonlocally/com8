@@ -255,3 +255,12 @@ test('256-node dense refinement is bounded, finite and collision-free', () => {
   assert.ok(result.components[0].spacing.objectiveAfter <= result.components[0].spacing.objectiveBefore);
   assertReadable(result);
 });
+
+test('published children of a service take no part in the analysis', () => {
+  const children = Array.from({length: 300}, (_, index) => ({id: `svc/c${index}`, name: 'child', via: 'svc'}));
+  const result = analyzeGraph({agents: [{id: 'svc', name: 'service'}, {id: 'peer', name: 'peer'}, ...children], connections: [edge('peer', 'svc')]});
+  assert.deepEqual(weightedGraph({agents: [{id: 'svc'}, ...children]}).ids, ['svc']);
+  assert.equal(result.stats.agents, 2);
+  assert.ok(result.stats.communities <= 2);
+  assert.ok(!result.warning, "the analysis stays enabled: " + result.warning);
+});

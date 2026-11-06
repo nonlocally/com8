@@ -223,6 +223,7 @@ communicate bus agents --bus photonics --json
 communicate bus dashboard --open
 communicate bus send TARGET --bus photonics -- MESSAGE
 communicate bus receipt RECEIPT_ID
+communicate bus export AGENT_ID --since UNIX_TIME
 communicate bus reply RECEIVED_MESSAGE_ID -- ANSWER
 communicate bus leave --bus photonics
 communicate bus status --json

@@ -3,10 +3,12 @@
 from concurrent.futures import ThreadPoolExecutor
 import http.client
 import http.server
+import importlib.util
 import json
 from pathlib import Path
 import sqlite3
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -14,7 +16,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_MESSAGE, MAX_PENDING, MESSAGE_TTL, handler_factory, serve
+from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_EXPORT_PAGE, MAX_MESSAGE, MAX_PENDING, MAX_PUBLISHED_AGENTS, MESSAGE_TTL, RECEIPT_RETENTION, handler_factory, serve
 
 
 class BrokerTests(unittest.TestCase):
@@ -172,6 +174,194 @@ class BrokerTests(unittest.TestCase):
         self.now[0] += MESSAGE_TTL
         self.assertEqual(self.call("poll", token=b["token"], agent=b["agent"])["messages"], [])
         self.assertEqual(self.call("receipt", token=a["token"], id=m["id"])["status"], "expired")
+
+    def service_pair(self):
+        """A sending device and a worker device owning a native agent and a service."""
+        a = self.join(device="alice")
+        a["agent"] = self.register(token=a["token"], name="alice")
+        w = self.join(device="worker")
+        w["codex"] = self.register(token=w["token"], name="native", kind="codex", status="queueable")
+        w["service"] = self.register(token=w["token"], name="service:" + "1" * 32, kind="service", status="queueable")
+        return a, w
+
+    def test_batch_leases_for_services_keep_order_and_lease_each_message_at_most_once(self):
+        a, w = self.service_pair()
+        native = [self.call("send", token=a["token"], sender=a["agent"], target=w["codex"], bus="general",
+                            message="n%d" % i)["id"] for i in range(3)]
+        queued = [self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general",
+                            message="s%d" % i)["id"] for i in range(40)]
+        # Without a batch every target, the service included, is leased one message at a time.
+        plain = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]])["messages"]
+        self.assertEqual([m["id"] for m in plain], [native[0], queued[0]])
+        self.call("ack", token=w["token"], agent=w["service"], id=queued[0], lease=plain[1]["lease"], status="queued")
+        first = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 32})
+        self.assertEqual(first["lease_seconds"], LEASE_TTL)
+        # The native target still holds its lease; the service gets its next 32 in queue order, each with its own lease.
+        self.assertEqual([m["id"] for m in first["messages"]], queued[1:33])
+        self.assertEqual(len({m["lease"] for m in first["messages"]}), 32)
+        self.assertTrue(all(m["target"] == w["service"] for m in first["messages"]))
+        # A message is leased once per lease: nothing is handed out again while 32 leases are held.
+        self.assertEqual(self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]],
+                                   batch={w["service"]: 32})["messages"], [])
+        for m in first["messages"][:8]:
+            self.call("ack", token=w["token"], agent=w["service"], id=m["id"], lease=m["lease"], status="queued")
+        rest = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        self.assertEqual([m["id"] for m in rest], queued[33:40])
+        self.assertEqual(self.call("receipt", token=a["token"], id=queued[9])["status"], "leased")
+        # Expired leases are re-leased with new tokens; the old token can no longer acknowledge.
+        self.now[0] += LEASE_TTL + 1
+        renewed = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        self.assertEqual([m["id"] for m in renewed], queued[9:40])
+        stale = first["messages"][8]
+        self.assertEqual(stale["id"], queued[9])
+        self.refused("ack", token=w["token"], agent=w["service"], id=stale["id"], lease=stale["lease"], status="queued", code="not_found")
+        self.call("ack", token=w["token"], agent=w["service"], id=renewed[0]["id"], lease=renewed[0]["lease"], status="queued")
+        self.assertEqual(self.call("receipt", token=a["token"], id=queued[9])["status"], "queued")
+        # A smaller batch and the per-poll limit both bound a poll; the native target never exceeds one.
+        native_again = self.call("poll_device", token=w["token"], agents=[w["codex"]], batch={w["service"]: 4} if False else {})["messages"]
+        self.assertEqual([m["id"] for m in native_again], [native[0]])
+        self.call("ack", token=w["token"], agent=w["codex"], id=native[0], lease=native_again[0]["lease"], status="queued")
+        self.now[0] += LEASE_TTL + 1
+        small = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 4})["messages"]
+        self.assertEqual([m["id"] for m in small], [native[1]] + queued[10:14])
+
+    def test_batch_lease_selectors_validate_before_any_lease(self):
+        a, w = self.service_pair()
+        self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general", message="s")
+        self.call("send", token=a["token"], sender=a["agent"], target=w["codex"], bus="general", message="n")
+        for batch in ({w["codex"]: 2}, {w["service"]: 0}, {w["service"]: 33}, {w["service"]: "8"},
+                      {w["service"]: True}, {a["agent"]: 4}, [w["service"]], {w["service"]: 2, w["codex"]: 1}):
+            self.refused("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch=batch)
+        self.refused("poll_device", token=w["token"], agents=[w["codex"]], batch={w["service"]: 4})
+        with self.b._connect() as db:
+            self.assertEqual({row["status"] for row in db.execute("SELECT status FROM messages")}, {"accepted"})
+        leased = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 1})["messages"]
+        self.assertEqual(len(leased), 2)
+
+    def test_export_pages_an_agents_receipts_and_outlives_hub_retention(self):
+        a, w = self.service_pair()
+        sent = [self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general",
+                          message="secret body %d" % i)["id"] for i in range(3)]
+        other = self.send(a, {"agent": w["codex"]})["id"]
+        leased = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        acked_at = {}
+        for m in leased:
+            self.now[0] += 1
+            self.call("ack", token=w["token"], agent=w["service"], id=m["id"], lease=m["lease"], status="queued")
+            acked_at[m["id"]] = self.now[0]
+        self.now[0] += 1
+        reply = self.call("reply", token=w["token"], sender=w["service"], id=sent[0], message="secret answer")
+        # Everything the service sent or received, oldest update first, in bounded pages.
+        first = self.call("export", token=w["token"], agent=w["service"], limit=2)
+        self.assertEqual([r["id"] for r in first["receipts"]], sent[:2])
+        self.assertEqual(first["retention_seconds"], RECEIPT_RETENTION)
+        second = self.call("export", token=w["token"], agent=w["service"], limit=2, after=first["next"])
+        self.assertEqual([r["id"] for r in second["receipts"]], [sent[2], reply["id"]])
+        self.assertIsNone(second["next"])
+        row = first["receipts"][0]
+        self.assertEqual({key: row[key] for key in ("sender", "target", "bus", "status", "kind", "correlation_version")},
+                         {"sender": a["agent"], "target": w["service"], "bus": "general", "status": "queued", "kind": "agent",
+                          "correlation_version": 1})
+        self.assertEqual((row["updated_at"], row["created_at"]), (acked_at[sent[0]], 1800000000.0))
+        self.assertEqual(row["expires_at"], 1800000000.0 + MESSAGE_TTL)
+        answer = second["receipts"][1]
+        self.assertEqual((answer["sender"], answer["target"], answer["status"], answer["in_reply_to"], answer["conversation_id"]),
+                         (w["service"], a["agent"], "accepted", sent[0], row["conversation_id"]))
+        # Receipts, never bodies or leases; the other agent's traffic is not this agent's.
+        self.assertNotIn("secret", json.dumps(first) + json.dumps(second))
+        self.assertFalse(any("lease" in r for r in first["receipts"] + second["receipts"]))
+        self.assertNotIn(other, [r["id"] for r in first["receipts"] + second["receipts"]])
+        self.assertEqual([r["id"] for r in self.call("export", token=w["token"], agent=w["codex"])["receipts"]], [other])
+        # `since` selects by last update; the owner's device or the administrator may export, nobody else.
+        recent = self.call("export", token=w["token"], agent=w["service"], since=acked_at[sent[2]])
+        self.assertEqual([r["id"] for r in recent["receipts"]], [sent[2], reply["id"]])
+        self.assertEqual(len(self.call("export", agent=w["service"])["receipts"]), 4)
+        self.refused("export", token=a["token"], agent=w["service"], code="not_found")
+        for fields in ({"limit": 0}, {"limit": MAX_EXPORT_PAGE + 1}, {"limit": "2"}, {"since": -1}, {"since": "0"},
+                       {"after": "cursor"}, {"after": {"updated_at": "1", "id": "x"}}, {"after": {"id": "x"}}):
+            self.refused("export", token=w["token"], agent=w["service"], **fields)
+        # After the hub's retention the acknowledged receipts are gone from it; the reply the requester
+        # never fetched has just expired, so its receipt is fresh for one more retention period.
+        self.now[0] += RECEIPT_RETENTION + 1
+        self.refused("receipt", token=a["token"], id=sent[0], code="not_found")
+        remaining = self.call("export", token=w["token"], agent=w["service"])["receipts"]
+        self.assertEqual([(r["id"], r["status"], r["updated_at"]) for r in remaining], [(reply["id"], "expired", self.now[0])])
+        self.now[0] += RECEIPT_RETENTION + 1
+        self.assertEqual(self.call("export", token=w["token"], agent=w["service"])["receipts"], [])
+        self.assertEqual([r["id"] for r in first["receipts"]], sent[:2])
+
+    def published(self, token, agent):
+        return next(row for bus in self.call("snapshot", token=token)["buses"] for row in bus["agents"] if row["id"] == agent)
+
+    def test_service_publishes_a_bounded_agent_list_that_the_snapshot_shows(self):
+        a, w = self.service_pair()
+        published = [{"id": "prover-1", "name": "Prover 1", "status": "live", "role": "prover"},
+                     {"id": "lemma-7", "name": "Lemma 7", "status": "queueable", "role": "worker", "parent": "prover-1"}]
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        # Every viewer of the service sees the same claim; agents that publish nothing carry no field.
+        self.assertEqual(self.published(a["token"], w["service"])["agents"], published)
+        self.assertNotIn("agents", self.published(a["token"], w["codex"]))
+        # Only a service publishes, and a malformed field is a bad request; a bad entry is dropped on its own,
+        # counted in the result, and never stops the rest of the list or the heartbeat from landing.
+        self.refused("heartbeat", token=w["token"], agents=[{"id": w["codex"], "status": "queueable", "agents": published}])
+        self.refused("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": "list"}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        mixed = [{"id": "x", "message": "secret"}, {"name": "no id"}, {"id": ""}, {"id": "  "}, {"id": "x", "status": "busy"},
+                 {"id": "keep"}, {"id": "keep"}, {"id": "orphan", "parent": "missing"}, {"id": "x" * 129}, {"id": "\u00e9" * 128},
+                 {"id": "x", "name": "a\x00b"}, {"id": "x", "name": "a\x7fb"}, "text", {"id": "child", "parent": "keep"}]
+        result = self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": mixed}])
+        self.assertEqual(result["dropped_agents"], {w["service"]: 11})
+        self.assertEqual(self.published(w["token"], w["service"])["agents"],
+                         [{"id": "keep", "name": "keep", "status": "queueable"}, {"id": "orphan", "name": "orphan", "status": "queueable"},
+                          {"id": "child", "name": "child", "status": "queueable", "parent": "keep"}])
+        many = [{"id": "p%d" % i} for i in range(MAX_PUBLISHED_AGENTS + 10)]
+        result = self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": many}])
+        self.assertEqual((result["dropped_agents"], len(self.published(w["token"], w["service"])["agents"])), ({w["service"]: 10}, MAX_PUBLISHED_AGENTS))
+        self.assertNotIn("dropped_agents", self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}]))
+        # A heartbeat without the field keeps the list; an empty list clears it; a registration drops it.
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable"}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": []}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [])
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}])
+        self.register(token=w["token"], name="service:" + "1" * 32, kind="service", status="queueable")
+        self.assertNotIn("agents", self.published(w["token"], w["service"]))
+        # Defaults: status queueable, name the id.
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": [{"id": "solo"}]}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [{"id": "solo", "name": "solo", "status": "queueable"}])
+        # Only a live row carries the list: a service whose heartbeats stopped shows offline without agents.
+        self.now[0] += LIVE_TTL + 1
+        offline = self.published(w["token"], w["service"])
+        self.assertEqual(offline["status"], "offline")
+        self.assertNotIn("agents", offline)
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable"}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [{"id": "solo", "name": "solo", "status": "queueable"}])
+
+    def test_a_hub_without_published_agents_accepts_the_heartbeat_and_drops_the_field(self):
+        # The 0.6.1 broker, as released, from this repository's history; a shallow checkout cannot qualify this.
+        try:
+            shown = subprocess.run(["git", "show", "b3c6815:lib/bus_broker.py"], cwd=Path(__file__).resolve().parents[1],
+                                   capture_output=True, text=True)
+        except FileNotFoundError:
+            self.skipTest("git is not available; old-hub acceptance is unqualified here")
+        if shown.returncode:
+            self.skipTest("0.6.1 source is not in this checkout; old-hub acceptance is unqualified here")
+        with tempfile.TemporaryDirectory(prefix="broker-0.6.1-") as temp:
+            Path(temp, "bus_broker_061.py").write_text(shown.stdout)
+            spec = importlib.util.spec_from_file_location("bus_broker_061", Path(temp, "bus_broker_061.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            old = module.Broker(Path(temp) / "hub", clock=lambda: self.now[0])
+            service = old.handle(old.admin_token, {"op": "register", "session_key": "service:" + "2" * 32, "name": "svc",
+                                                   "kind": "service", "status": "queueable"})
+            result = old.handle(old.admin_token, {"op": "heartbeat", "agents": [{"id": service["id"], "status": "queueable",
+                                                  "agents": [{"id": "w1", "name": "Worker", "status": "live"}]}]})
+            self.assertEqual((result["ok"], result["updated"]), (True, 1))
+            row = next(agent for bus in old.handle(old.admin_token, {"op": "snapshot"})["buses"] for agent in bus["agents"]
+                       if agent["id"] == service["id"])
+            self.assertEqual(row["status"], "queueable")
+            self.assertNotIn("agents", row)
 
     def test_atomic_invitation_and_registration_concurrency(self):
         invitation = self.call("invite")["invite"]

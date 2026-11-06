@@ -12,6 +12,7 @@ import hmac
 import http.server
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -24,6 +25,8 @@ import time
 import unicodedata
 from urllib.parse import urlsplit
 import uuid
+
+from bus_published import MAX_PUBLISHED_AGENTS, validate_published_agents
 
 
 MAX_BODY = 131072
@@ -46,6 +49,8 @@ MAX_ACTIVE_EVENTS_PER_BUS = 8
 MAX_EVENT_HISTORY = 20
 MAX_INVITES = 4096
 MAX_RECORDS = 20000
+# Receipts per export page; a caller continues with the returned cursor.
+MAX_EXPORT_PAGE = 1000
 MAX_SSO_REPLAYS = 4096
 MAX_VIEW_HEADER = 8192
 MAX_CHATS = 4096
@@ -60,6 +65,8 @@ CHAT_RETENTION = 30 * MESSAGE_TTL
 RECEIPT_RETENTION = 7 * MESSAGE_TTL
 LIVE_TTL = 45
 LEASE_TTL = 60
+# A service recipient may hold this many leases at once; other agents hold one.
+MAX_LEASE_BATCH = 32
 BUS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 USER_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 DEVICE_FIELDS = {"hostname": 253, "platform": 64, "tailscale_hostname": 253, "tailscale_dns_name": 253}
@@ -323,7 +330,8 @@ class Broker:
                                               ("messages", "sender_epoch", "INTEGER"),
                                               ("messages", "target_epoch", "INTEGER"),
                                               ("conversations", "initiator_epoch", "INTEGER"),
-                                              ("conversations", "published_epoch", "INTEGER")):
+                                              ("conversations", "published_epoch", "INTEGER"),
+                                              ("agents", "published_agents", "TEXT")):
                 columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
                 if name not in columns:
                     db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, declaration))
@@ -1166,8 +1174,9 @@ class Broker:
             # Reactivation advances the epoch, so clients can order lifecycle responses.
             agent = existing[0]
             epoch = existing["epoch"] + (1 if existing["retired_at"] is not None else 0)
-            db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?
-                          WHERE id=?""", (name, kind, description, status, now, epoch, agent))
+            # A registration starts without a published agent list; the worker republishes it.
+            db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?,
+                          published_agents=NULL WHERE id=?""", (name, kind, description, status, now, epoch, agent))
         else:
             if (db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
                     or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
@@ -1188,17 +1197,34 @@ class Broker:
             return self._service_finish(db, p, r, service_context, result, now, {agent: epoch})
         return result
 
+    @staticmethod
+    def _published_agents(value):
+        """A service's own agent list through the shared validator: (stored JSON, dropped count)."""
+        try:
+            kept, dropped = validate_published_agents(value)
+        except ValueError as exc:
+            raise BusError(str(exc)) from None
+        return json.dumps(kept, separators=(",", ":")), len(dropped)
+
     def _op_heartbeat(self, db, p, r, now):
         rows = r.get("agents")
         if not isinstance(rows, list) or len(rows) > MAX_AGENTS:
             raise BusError("agents must be a bounded list")
         validated = []
+        dropped_agents = {}
         for entry in rows:
             if not isinstance(entry, dict) or entry.get("status") not in ("live", "queueable", "offline"):
                 raise BusError("invalid heartbeat")
             agent = self._owned(db, p, entry.get("id"))
             if "epoch" in entry:
                 self._epoch(entry["epoch"])
+            if "agents" in entry:
+                if agent["kind"] != "service":
+                    raise BusError("published agents require a service registration")
+                encoded, dropped = self._published_agents(entry["agents"])
+                entry = dict(entry, agents=encoded)
+                if dropped:
+                    dropped_agents[agent["id"]] = dropped
             validated.append((entry, agent))
         refused = []
         updated = 0
@@ -1212,10 +1238,14 @@ class Broker:
             # A stale adapter's heartbeat never revives a retired registration.
             db.execute("UPDATE agents SET status=?,last_seen=? WHERE id=? AND retired_at IS NULL",
                        (entry["status"], now, agent["id"]))
+            if "agents" in entry:
+                db.execute("UPDATE agents SET published_agents=? WHERE id=? AND retired_at IS NULL", (entry["agents"], agent["id"]))
             updated += 1
         result = {"updated": updated, "ts": now}
         if refused:
             result["refusals"] = refused
+        if dropped_agents:
+            result["dropped_agents"] = dropped_agents
         return result
 
     def _op_snapshot(self, db, p, r, now):
@@ -1244,6 +1274,10 @@ class Broker:
                     row["principal"] = a["principal"]
                 if self._service_fence(db, a["id"]) is not None:
                     row.update(fence_protocol=SERVICE_FENCE_PROTOCOL, epoch=a["epoch"])
+                if a["published_agents"] is not None and row["status"] != "offline":
+                    # The service's own claim about its agents, as it last published it,
+                    # only while the service itself is heard from.
+                    row["agents"] = json.loads(a["published_agents"])
                 agents.append(row)
             role = self._bus_role(db, p, definition)
             account_owned = definition["owner_user"] is not None and bus != "general"
@@ -1717,6 +1751,14 @@ class Broker:
             raise BusError("invalid service epoch selectors")
         for value in epochs.values():
             self._epoch(value)
+        batch = r.get("batch", {})
+        if not isinstance(batch, dict) or set(batch) - set(owned) or len(batch) > MAX_AGENTS:
+            raise BusError("invalid lease batch selectors")
+        for ident, size in batch.items():
+            if type(size) is not int or not 1 <= size <= MAX_LEASE_BATCH:
+                raise BusError("lease batch sizes must be 1 to %d" % MAX_LEASE_BATCH)
+            if self._owned(db, p, ident)["kind"] != "service":
+                raise BusError("batch leases are only for service registrations")
         eligible, refused = [], []
         for ident in owned:
             agent = self._owned(db, p, ident)
@@ -1727,27 +1769,37 @@ class Broker:
                     refused.append({"agent": ident, "code": "service_epoch_required" if ident not in epochs else "stale_service_epoch"})
                     continue
             eligible.append(ident)
-        result = self._poll(db, eligible, now, limit=32) if eligible else {"messages": [], "lease_seconds": LEASE_TTL}
+        result = (self._poll(db, eligible, now, limit=32, batch={ident: size for ident, size in batch.items() if ident in eligible})
+                  if eligible else {"messages": [], "lease_seconds": LEASE_TTL})
         if refused:
             result["refusals"] = refused
         return result
 
-    def _poll(self, db, agents, now, limit):
+    def _poll(self, db, agents, now, limit, batch=None):
         self._cancel_invalid(db, now)
-        slots = ",".join("?" for _ in agents)
-        # The shared durable order prevents an agent delivery and a human
-        # delivery from holding concurrent leases for one exact destination.
-        rows = db.execute("""WITH pending AS (
+        # A target holds one lease at a time, so its messages are delivered in
+        # order; a service recipient may ask for a batch, which widens its window
+        # to its first `size` queued messages. The shared durable order prevents
+        # an agent delivery and a human delivery from holding concurrent leases
+        # for one exact destination, and each message gets exactly one lease
+        # until that lease is acknowledged or expires.
+        allowance = {agent: 1 for agent in agents}
+        allowance.update(batch or {})
+        values = ",".join("(?,?)" for _ in allowance)
+        rows = db.execute("""WITH allowance(target,size) AS (VALUES %s),
+                             pending AS (
                              SELECT q.*,COALESCE(m.status,h.status) AS status,
                                     COALESCE(m.lease_until,h.lease_until) AS lease_until
                              FROM outbound_queue q LEFT JOIN messages m ON m.id=q.message
                              LEFT JOIN human_chat_messages h ON h.id=q.message
-                             WHERE COALESCE(m.status,h.status) IN ('accepted','leased'))
-                             SELECT * FROM pending q WHERE q.target IN (%s)
-                             AND (q.status='accepted' OR q.lease_until<=?)
-                             AND NOT EXISTS (SELECT 1 FROM pending earlier WHERE earlier.target=q.target
-                                             AND earlier.ordering<q.ordering)
-                             ORDER BY q.ordering LIMIT ?""" % slots, (*agents, now, limit)).fetchall()
+                             WHERE q.target IN (SELECT target FROM allowance)
+                             AND COALESCE(m.status,h.status) IN ('accepted','leased'))
+                             SELECT q.* FROM pending q JOIN allowance a ON a.target=q.target
+                             WHERE (q.status='accepted' OR q.lease_until<=?)
+                             AND (SELECT COUNT(*) FROM pending earlier WHERE earlier.target=q.target
+                                  AND earlier.ordering<q.ordering)<a.size
+                             ORDER BY q.ordering LIMIT ?""" % values,
+                          (*(item for pair in allowance.items() for item in pair), now, limit)).fetchall()
         messages = []
         for queued in rows:
             lease = secrets.token_urlsafe(18)
@@ -1829,6 +1881,45 @@ class Broker:
                 "created_at": m["created_at"], "updated_at": m["updated_at"], "expires_at": m["expires_at"],
                 "correlation_version": m["correlation_version"],
                 "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]}
+
+    def _op_export(self, db, p, r, now):
+        """Receipts of one owned agent's messages, oldest update first, for the caller's own record.
+
+        The hub's retention is unchanged (seven days after a receipt's last
+        update, with bounded storage); a service that must keep its receipts
+        longer exports them before then. Bodies and leases never leave.
+        """
+        agent = self._owned(db, p, r.get("agent"), admin=True)
+        limit = r.get("limit", MAX_EXPORT_PAGE)
+        if type(limit) is not int or not 1 <= limit <= MAX_EXPORT_PAGE:
+            raise BusError("limit must be 1 to %d" % MAX_EXPORT_PAGE)
+        since = r.get("since", 0)
+        if type(since) not in (int, float) or not math.isfinite(since) or since < 0:
+            raise BusError("since must be a non-negative timestamp")
+        after = r.get("after")
+        if after is None:
+            after = {"updated_at": -1.0, "id": ""}
+        elif (not isinstance(after, dict) or set(after) != {"updated_at", "id"}
+              or type(after["updated_at"]) not in (int, float) or not math.isfinite(after["updated_at"])
+              or not isinstance(after["id"], str) or len(after["id"]) > 128):
+            raise BusError("invalid export cursor")
+        self._cancel_invalid(db, now)
+        rows = db.execute("""SELECT * FROM (
+                             SELECT m.id,m.sender,m.target,m.bus,m.status,m.detail,m.created_at,m.updated_at,m.expires_at,
+                                    m.conversation AS conversation_id,m.in_reply_to,m.correlation_version,'agent' AS kind
+                             FROM messages m WHERE m.sender=? OR m.target=?
+                             UNION ALL
+                             SELECT m.id,CASE m.role WHEN 'user' THEN 'human.'||m.identity ELSE c.agent END,
+                                    CASE m.role WHEN 'user' THEN c.agent ELSE 'human.'||m.identity END,
+                                    c.bus,m.status,m.detail,m.created_at,m.updated_at,m.expires_at,m.chat,m.in_reply_to,1,'human'
+                             FROM human_chat_messages m JOIN human_chats c ON c.id=m.chat WHERE c.agent=?)
+                             WHERE updated_at>=? AND (updated_at>? OR (updated_at=? AND id>?))
+                             ORDER BY updated_at,id LIMIT ?""",
+                          (agent["id"], agent["id"], agent["id"], since, after["updated_at"], after["updated_at"],
+                           after["id"], limit + 1)).fetchall()
+        receipts = [dict(row) for row in rows[:limit]]
+        cursor = {"updated_at": receipts[-1]["updated_at"], "id": receipts[-1]["id"]} if len(rows) > limit else None
+        return {"agent": agent["id"], "receipts": receipts, "next": cursor, "retention_seconds": RECEIPT_RETENTION, "ts": now}
 
     def _op_leave(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"), admin=True)

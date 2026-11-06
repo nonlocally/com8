@@ -10,6 +10,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -37,11 +38,36 @@ sys.dont_write_bytecode = True
 LIB = Path(__file__).resolve().parent
 # Captured once: a running worker must not mistake changed source for code it loaded.
 WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_service.py").read_bytes()).hexdigest()
+
+
+def worker_version():
+    """The release or checkout version beside this code; the runtime hash is the exact identity."""
+    try:
+        return (LIB.parent / "VERSION").read_text().strip()[:64] or "unknown"
+    except OSError:
+        return "unknown"
 TAILSCALE_STATUS_TIMEOUT = 1.5
 # Retirement records kept per hub. A broker retains at most this many of one
 # device's registrations (MAX_RETAINED_AGENTS), retired or not.
 MAX_RETIREMENTS = 1024
 SERVICE_FENCE_PROTOCOL = "service-fence/epoch-v1"
+# A service recipient may hold this many hub leases at once (the hub caps it the
+# same); native sessions take one message at a time so each agent's order holds.
+SERVICE_LEASE_BATCH = 32
+# One loop iteration drains the service journal eight jobs at a time, starting
+# no further round after this many seconds, so native delivery is not starved.
+SERVICE_DRAIN_BUDGET = 5.0
+# Acknowledgments of one poll's leases go to the hub concurrently, this many at a time.
+ACK_CONCURRENCY = 8
+# A replacement waits this long for the running worker to finish its iteration and release its lock.
+WORKER_STOP_TIMEOUT = 30
+# A service that publishes its agents is asked for them this often, off the
+# heartbeat path; an answer later than the deadline is dropped, and the list in
+# hand rides on the next heartbeat, at most this many bytes of lists per request.
+STATUS_INTERVAL = 30.0
+STATUS_TICK = 1.0
+STATUS_DEADLINE = 10.0
+HEARTBEAT_AGENTS_BUDGET = 65536
 
 
 def service_epoch(record):
@@ -621,14 +647,19 @@ def start_worker():
                 return
         if not available:
             (root / "worker.stop").touch(mode=0o600)
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + WORKER_STOP_TIMEOUT
             while time.monotonic() < deadline:
                 with locked("worker", blocking=False) as available:
                     if available:
                         break
                 time.sleep(.05)
             else:
-                raise BusError("previous bus worker did not stop within 30 seconds; inspect %s; broker and local routes were not stopped" % (root / "worker.log"))
+                # Withdraw the request: the old worker keeps running instead of
+                # exiting later with nobody to replace it.
+                (root / "worker.stop").unlink(missing_ok=True)
+                raise BusError("previous bus worker did not stop within %d seconds; the stop request was withdrawn and it "
+                               "keeps running; retry when its current work ends (inspect %s); broker and local routes "
+                               "were not stopped" % (WORKER_STOP_TIMEOUT, root / "worker.log"))
         (root / "worker.stop").unlink(missing_ok=True)
         process = spawn_daemon(["__worker"])
         for _ in range(40):
@@ -681,8 +712,13 @@ def current_status(record):
 
 def deliver(record, envelope):
     if record["kind"] == "service":
-        from bus_service import enqueue
-        return enqueue(state_dir(), record, envelope)
+        from bus_service import enqueue, ServiceBusy
+        try:
+            return enqueue(state_dir(), record, envelope)
+        except ServiceBusy:
+            # A full journal keeps the hub's lease: the message is offered again
+            # when the lease expires instead of being failed.
+            return None
     sender = envelope["sender"]
     # IDs and bus names are generated/validated by the broker, never remote shell text.
     reply = ("communicate bus --hub %s reply %s --from %s -- \"<answer>\"" %
@@ -747,15 +783,22 @@ def worker():
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         signal.signal(signal.SIGINT, lambda *_: stop.set())
         status_lock = threading.Lock()
-        state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "started_at": time.time(), "state": "starting",
+        state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "version": worker_version(), "source": str(LIB),
+                 "started_at": time.time(), "state": "starting",
                  "heartbeat_at": 0, "heartbeat_success_at": 0, "adapters": 0,
-                 "heartbeat_errors": [], "delivery_errors": [], "errors": [], **worker_process_metadata(root)}
+                 "heartbeat_errors": [], "delivery_errors": [], "status_errors": [], "errors": [], "recent_errors": [],
+                 **worker_process_metadata(root)}
 
         def publish(**updates):
             with status_lock:
                 state.update(updates)
                 state["updated_at"] = time.time()
-                state["errors"] = (state["heartbeat_errors"] + state["delivery_errors"])[:256]
+                state["errors"] = (state["heartbeat_errors"] + state["delivery_errors"] + state["status_errors"])[:256]
+                # `errors` is the current picture; an iteration can be shorter than
+                # a reader's glance, so the last distinct errors are kept with times.
+                for item in updates.get("delivery_errors", []) + updates.get("heartbeat_errors", []) + updates.get("status_errors", []):
+                    if not any(previous["error"] == item for previous in state["recent_errors"]):
+                        state["recent_errors"] = (state["recent_errors"] + [{"at": state["updated_at"], "error": item}])[-32:]
                 write_json(root / "worker.json", state)
 
         def stopping():
@@ -763,19 +806,89 @@ def worker():
                 stop.set()
             return stop.is_set()
 
+        published = {}
+        status_errors = {}
+
+        def status_loop():
+            """Ask publishing services for their agents on the interval, in their own threads, with a deadline."""
+            from bus_service import publish_status, ServiceError
+            attempted, inflight = {}, {}
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="bus-status") as pool:
+                while not stopping():
+                    cfg = config()
+                    now = time.monotonic()
+                    for record in registrations().values():
+                        if not (active_adapter(record) and record["url"] in cfg["connections"]
+                                and record.get("kind") == "service" and record.get("publish_agents")):
+                            continue
+                        key = (record["url"], record["id"])
+                        if key in inflight:
+                            future, started = inflight[key]
+                            if future.done():
+                                del inflight[key]
+                                try:
+                                    agents, dropped = future.result()
+                                except Exception as exc:
+                                    # Any failure of the call, including a truncated response, is an
+                                    # error of this service's status, never the end of this loop.
+                                    with status_lock:
+                                        status_errors[key] = {"agent": record["id"], "error": "service status unavailable: %s: %s" % (
+                                            type(exc).__name__, " ".join(str(exc).split())[:140])}
+                                    publish(status_errors=list(status_errors.values()))
+                                    continue
+                                with status_lock:
+                                    previous = published.get(key, {})
+                                    published[key] = {"agents": agents, "version": previous.get("version", 0) + 1, "pending": True}
+                                    if dropped:
+                                        status_errors[key] = {"agent": record["id"], "error": "%d published agents dropped: %s" % (
+                                            len(dropped), "; ".join(sorted({reason for _, reason in dropped}))[:120])}
+                                    else:
+                                        status_errors.pop(key, None)
+                                publish(status_errors=list(status_errors.values()))
+                            elif now - started >= STATUS_DEADLINE:
+                                # The answer, if it ever comes, is dropped; the next interval asks again.
+                                future.cancel()
+                                del inflight[key]
+                                with status_lock:
+                                    status_errors[key] = {"agent": record["id"], "error": "service status call exceeded its "
+                                                          "%.0f s deadline" % STATUS_DEADLINE}
+                                publish(status_errors=list(status_errors.values()))
+                            continue
+                        if now - attempted.get(key, -STATUS_INTERVAL) < STATUS_INTERVAL or current_status(record) == "offline":
+                            continue
+                        attempted[key] = now
+                        inflight[key] = (pool.submit(publish_status, record), now)
+                    stop.wait(STATUS_TICK)
+
         def heartbeat_hub(conn, records):
-            entries = []
+            entries, carried, budget = [], [], HEARTBEAT_AGENTS_BUDGET
             for record in records:
                 if stopping():
                     return 0
                 entry = {"id": record["id"], "status": current_status(record)}
                 if service_epoch(record) is not None:
                     entry["epoch"] = service_epoch(record)
+                if record.get("kind") == "service" and record.get("publish_agents") and entry["status"] != "offline":
+                    # Send the list in hand once; lists beyond this request's budget wait for the next.
+                    key = (record["url"], record["id"])
+                    with status_lock:
+                        item = published.get(key)
+                        agents = (list(item["agents"]), item["version"]) if item and item["pending"] else None
+                    if agents is not None:
+                        size = len(json.dumps(agents[0], separators=(",", ":")).encode())
+                        if size <= budget:
+                            budget -= size
+                            entry["agents"] = agents[0]
+                            carried.append((key, agents[1]))
                 entries.append(entry)
             for offset in range(0, len(entries), 128):
                 if stopping():
                     return 0
                 request(conn, "heartbeat", agents=entries[offset:offset + 128])
+            with status_lock:
+                for key, version in carried:
+                    if published.get(key, {}).get("version") == version:
+                        published[key]["pending"] = False
             return len(entries)
 
         def heartbeat_loop():
@@ -814,6 +927,8 @@ def worker():
         publish()
         ticker = threading.Thread(target=heartbeat_loop, name="bus-heartbeat-loop", daemon=True)
         ticker.start()
+        asker = threading.Thread(target=status_loop, name="bus-status-loop", daemon=True)
+        asker.start()
         def deliver_if_live(record, envelope):
             # Re-measure after fetching; preserve an offline target's lease for
             # retry rather than dispatching to a recycled socket/session.
@@ -821,18 +936,32 @@ def worker():
                 return None
             return deliver(record, envelope)
 
-        def record_and_ack(conn, record, envelope, outcome, detail):
+        def journal_outcome(record, envelope, outcome, detail):
             # Journal before ACK. An ACK failure must not lose the outcomes of
             # other deliveries in this batch or cause their re-execution.
             db.execute("INSERT OR REPLACE INTO delivered VALUES (?,?,?,?,?)",
                        (record["url"], envelope["id"], outcome, detail, time.time()))
             db.commit()
+
+        def ack(conn, record, envelope, outcome, detail):
             selectors = {"expected_epoch": service_epoch(record)} if service_epoch(record) is not None else {}
-            request(conn, "ack", agent=record["id"], id=envelope["id"],
-                    status=outcome, detail=detail, lease=envelope["lease"], **selectors)
+            for attempt in range(2):
+                try:
+                    return request(conn, "ack", agent=record["id"], id=envelope["id"],
+                                   status=outcome, detail=detail, lease=envelope["lease"], **selectors)
+                except (BusError, OSError) as exc:
+                    # A connection the hub reset or refused is retried once at once;
+                    # the journaled outcome is otherwise re-acknowledged when the
+                    # lease expires and the hub offers the message again.
+                    if attempt or getattr(exc, "code", None) is not None:
+                        raise
+                    stop.wait(0.2)
 
         try:
-            with ThreadPoolExecutor(max_workers=32, thread_name_prefix="bus-delivery") as delivery_pool:
+            # Deliveries wait on agents, so they get a wide pool; acknowledgments
+            # are hub requests and take a narrow one, as the hub is shared.
+            with ThreadPoolExecutor(max_workers=32, thread_name_prefix="bus-delivery") as delivery_pool, \
+                    ThreadPoolExecutor(max_workers=ACK_CONCURRENCY, thread_name_prefix="bus-ack") as ack_pool:
                 while not stopping():
                     cfg = config()
                     errors = []
@@ -840,12 +969,32 @@ def worker():
                     for record in registrations().values():
                         if active_adapter(record) and record["url"] in cfg["connections"]:
                             groups.setdefault(record["url"], []).append(record)
+                    from bus_service import advance, capacity, MAX_PENDING
+                    # Service messages are journaled before they are acknowledged;
+                    # the journal's free room bounds what this iteration may lease.
+                    room = capacity(root) if any(record["kind"] == "service" for records in groups.values()
+                                                 for record in records) else 0
+                    backlog = False
                     for url, records in groups.items():
                         if stopping():
                             break
                         conn = cfg["connections"][url]
                         active = {record["id"]: record for record in records
                                   if current_status(record) != "offline"}
+                        # A service with no journal room is not polled, so the hub
+                        # keeps its messages (24 h) rather than the worker failing
+                        # them; otherwise it may take a batch of leases at once.
+                        batch = {}
+                        for ident, record in list(active.items()):
+                            if record["kind"] != "service":
+                                continue
+                            if room <= 0:
+                                del active[ident]
+                            else:
+                                # Room is shared by every service of this worker: what one
+                                # poll may lease in total never exceeds the journal's room.
+                                batch[ident] = min(SERVICE_LEASE_BATCH, room)
+                                room -= batch[ident]
                         ids = list(active)
                         for offset in range(0, len(ids), 128):
                             if stopping():
@@ -855,14 +1004,18 @@ def worker():
                                 epochs = {ident: service_epoch(record) for ident, record in requested.items()
                                           if service_epoch(record) is not None}
                                 selectors = {"service_epochs": epochs} if epochs else {}
+                                sizes = {ident: batch[ident] for ident in requested if ident in batch}
+                                if sizes:
+                                    selectors["batch"] = sizes
                                 messages = request(conn, "poll_device", agents=list(requested), **selectors).get("messages", [])
                             except (BusError, OSError, ValueError, KeyError) as exc:
                                 errors.append({"hub": url, "error": " ".join(str(exc).split())[:200]})
                                 continue
-                            futures = {}
-                            # The broker leases at most one message per target,
-                            # preserving each agent's order. Different targets
-                            # may queue concurrently within the 60-second lease.
+                            futures, acks = {}, {}
+                            # The broker leases one message per native target,
+                            # preserving each agent's order, and up to a batch per
+                            # service; different targets queue concurrently within
+                            # the 60-second lease, and so do the acknowledgments.
                             for envelope in messages:
                                 if stopping():
                                     break
@@ -870,14 +1023,13 @@ def worker():
                                 if record is None:
                                     errors.append({"hub": url, "error": "hub returned an unrequested target"})
                                     continue
+                                if record["id"] in batch:
+                                    backlog = True
                                 retain_reply_adapter(record, envelope.get("conversation_expires_at"))
                                 saved = db.execute("SELECT status,detail FROM delivered WHERE hub=? AND id=?",
                                                    (url, envelope["id"])).fetchone()
                                 if saved:
-                                    try:
-                                        record_and_ack(conn, record, envelope, *saved)
-                                    except (BusError, OSError, ValueError, KeyError) as exc:
-                                        errors.append({"agent": record["id"], "error": " ".join(str(exc).split())[:200]})
+                                    acks[ack_pool.submit(ack, conn, record, envelope, *saved)] = record
                                 else:
                                     futures[delivery_pool.submit(deliver_if_live, record, envelope)] = (record, envelope)
                             for future in as_completed(futures):
@@ -888,21 +1040,27 @@ def worker():
                                     result = ("failed", " ".join(str(exc).split())[:200])
                                 if result is None:
                                     continue
+                                journal_outcome(record, envelope, *result)
+                                acks[ack_pool.submit(ack, conn, record, envelope, *result)] = record
+                            for future in as_completed(acks):
                                 try:
-                                    record_and_ack(conn, record, envelope, *result)
+                                    future.result()
                                 except (BusError, OSError, ValueError, KeyError) as exc:
-                                    errors.append({"agent": record["id"], "error": " ".join(str(exc).split())[:200]})
+                                    errors.append({"agent": acks[future]["id"], "error": " ".join(str(exc).split())[:200]})
                     # Fixed service endpoints share this outbound worker; no session,
                     # shell, additional listener or per-message process is involved.
-                    from bus_service import advance
-                    errors.extend(advance(root, registrations(), cfg["connections"], request))
+                    errors.extend(advance(root, registrations(), cfg["connections"], request,
+                                          limit=MAX_PENDING, budget_s=SERVICE_DRAIN_BUDGET))
                     db.execute("DELETE FROM delivered WHERE at < ?", (time.time() - 172800,))
                     db.commit()
                     publish(delivery_errors=errors)
-                    stop.wait(2)
+                    # A poll that leased service messages is followed by the next
+                    # poll at once; an idle iteration waits two seconds.
+                    stop.wait(0.05 if backlog else 2)
         finally:
             stop.set()
             ticker.join()
+            asker.join()
             publish(state="stopped")
             db.close()
 
@@ -1090,6 +1248,8 @@ def parser():
     service.add_argument("--token-file", required=True, help="private bearer-token file; never token bytes")
     service.add_argument("--contract-version", type=int, choices=(1, 2), default=1,
                          help="bridge contract (2 requires broker-authored reply correlation)")
+    service.add_argument("--publish-agents", action="store_true",
+                         help="ask the endpoint for its agents every 30 s and publish that list on the hub for the dashboard")
     service.add_argument("--bus", default="general")
     service.add_argument("--description", default="")
     service.add_argument("--json", action="store_true")
@@ -1132,6 +1292,11 @@ def parser():
     reply.add_argument("id", help="ID of the received message")
     reply.add_argument("--from", dest="sender", default="self")
     reply.add_argument("message", nargs="*")
+    export = commands.add_parser("export", help="receipts of one of this device's registrations, oldest update first, "
+                                 "as JSON lines; keeps a record beyond the hub's seven-day retention")
+    export.add_argument("target", nargs="?", default="self", help="registration ID or name; default self")
+    export.add_argument("--since", type=float, default=0, help="only receipts updated at or after this Unix time")
+    export.add_argument("--json", action="store_true", help="one JSON document instead of JSON lines")
     receipt = commands.add_parser("receipt")
     receipt.add_argument("id")
     invite = commands.add_parser("invite")
@@ -1158,6 +1323,8 @@ def parser():
     rehome = commands.add_parser("rehome", help="move a connected hub to a new public origin of the same broker, keeping this device's credential")
     rehome.add_argument("old", help="the connected HTTPS origin, e.g. https://bus.communicate.sh")
     rehome.add_argument("new", help="the broker's new public origin, e.g. https://bus.nonlocally.org")
+    commands.add_parser("start", help="start this device's outbound worker from the current source, or replace a "
+                        "running one cooperatively when the source changed; registrations are reused")
     commands.add_parser("stop")
     for name in ("serve", "__serve"):
         service = commands.add_parser(name)
@@ -1179,6 +1346,16 @@ def run(args):
         return worker()
     if cmd == "stop":
         return stop_services()
+    if cmd == "start":
+        cfg = config()
+        if not any(active_adapter(record) and record["url"] in cfg["connections"] for record in registrations().values()):
+            raise BusError("nothing to deliver for: no active registration on a connected hub; register or register-service first")
+        start_worker()
+        info = read_json(state_dir() / "worker.json", {})
+        return {"ok": True, "worker": {key: info.get(key) for key in ("pid", "version", "runtime", "source", "state", "started_at")},
+                "current": info.get("runtime") == WORKER_RUNTIME,
+                "note": "the running worker loads this source" if info.get("runtime") == WORKER_RUNTIME
+                else "a worker with other source is still running; inspect worker.log"}
     if cmd == "register":
         return register(args)
     if cmd == "register-service":
@@ -1202,6 +1379,7 @@ def run(args):
                 selectors["service_config_hash"] = hashlib.sha256(json.dumps(
                     {**{key: ident[key] for key in ("service_id", "endpoint", "token_file")},
                      "contract_version": ident["contract_version"],
+                     **({"publish_agents": True} if ident.get("publish_agents") else {}),
                      "token_fingerprint": hashlib.sha256(credential(ident["token_file"]).encode()).hexdigest()},
                     sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             else:
@@ -1438,6 +1616,27 @@ def run(args):
             return None
     if cmd == "receipt":
         return request(conn, "receipt", id=args.id)
+    if cmd == "export":
+        try:
+            agent = local_agent(conn, args.target)["id"]
+        except BusError:
+            # The hub enforces ownership, so an exact ID exports after its local record was lost.
+            if not re.fullmatch(r"a_[0-9a-f]{32}", args.target):
+                raise
+            agent = args.target
+        if not math.isfinite(args.since) or args.since < 0:
+            raise BusError("--since must be a non-negative Unix time")
+        receipts, cursor = [], None
+        while True:
+            page = request(conn, "export", agent=agent, since=args.since, **({"after": cursor} if cursor else {}))
+            receipts.extend(page.get("receipts", []))
+            cursor = page.get("next")
+            if not cursor:
+                break
+        if args.json:
+            return {"agent": agent, "hub": conn["url"], "since": args.since, "count": len(receipts),
+                    "retention_seconds": page.get("retention_seconds"), "receipts": receipts}
+        return "\n".join(json.dumps(item, sort_keys=True) for item in receipts) or None
     if cmd == "invite":
         url = validate_url(args.url)
         payload = {"bus": args.bus, "ttl": args.ttl}
