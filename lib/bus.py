@@ -828,10 +828,12 @@ def worker():
                                 del inflight[key]
                                 try:
                                     agents, dropped = future.result()
-                                except (ServiceError, OSError, ValueError, KeyError) as exc:
+                                except Exception as exc:
+                                    # Any failure of the call, including a truncated response, is an
+                                    # error of this service's status, never the end of this loop.
                                     with status_lock:
-                                        status_errors[key] = {"agent": record["id"], "error": "service status unavailable: "
-                                                              + " ".join(str(exc).split())[:160]}
+                                        status_errors[key] = {"agent": record["id"], "error": "service status unavailable: %s: %s" % (
+                                            type(exc).__name__, " ".join(str(exc).split())[:140])}
                                     publish(status_errors=list(status_errors.values()))
                                     continue
                                 with status_lock:

@@ -106,14 +106,16 @@ a printable string of at most 128 UTF-8 bytes (`role` 64; not blank, no
 control characters), the whole list at most 32 KiB, and no other field. The
 worker and the hub validate with the same code (`lib/bus_published.py`): an
 answer that is not `{"agents": [list]}` is refused whole, while a bad entry is
-dropped on its own, the rest of the list stands, a parent outside the list is
-removed so the entry hangs from the service, and the list is cut at 256
-entries and 32 KiB; the hub reports what it dropped as `dropped_agents` on
-the heartbeat result and the worker in `recent_errors`.
+dropped on its own, the rest of the list stands, the list is cut at 256
+entries and 32 KiB, and then a parent that is not among the kept entries is
+removed so the entry hangs from the service; the hub reports what it dropped
+as `dropped_agents` on the heartbeat result and the worker in `recent_errors`.
 
 The status calls run off the heartbeat path, in their own threads, each with a
 10 s deadline after which its answer is dropped and the next interval asks
-again; a slow or unreachable endpoint never delays a heartbeat. The list in
+again; a slow or unreachable endpoint never delays a heartbeat. A failed call,
+whatever the failure (a truncated response included), is recorded as that
+service's status error in `worker.json` and the loop goes on. The list in
 hand rides once on the next heartbeat (`agents` on the service's entry), at
 most 64 KiB of lists per heartbeat request, so several maximal lists go out
 over successive heartbeats. The hub stores the list, drops it when the service

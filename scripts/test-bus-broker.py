@@ -340,8 +340,11 @@ class BrokerTests(unittest.TestCase):
 
     def test_a_hub_without_published_agents_accepts_the_heartbeat_and_drops_the_field(self):
         # The 0.6.1 broker, as released, from this repository's history; a shallow checkout cannot qualify this.
-        shown = subprocess.run(["git", "show", "b3c6815:lib/bus_broker.py"], cwd=Path(__file__).resolve().parents[1],
-                               capture_output=True, text=True)
+        try:
+            shown = subprocess.run(["git", "show", "b3c6815:lib/bus_broker.py"], cwd=Path(__file__).resolve().parents[1],
+                                   capture_output=True, text=True)
+        except FileNotFoundError:
+            self.skipTest("git is not available; old-hub acceptance is unqualified here")
         if shown.returncode:
             self.skipTest("0.6.1 source is not in this checkout; old-hub acceptance is unqualified here")
         with tempfile.TemporaryDirectory(prefix="broker-0.6.1-") as temp:

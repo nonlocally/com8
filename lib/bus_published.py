@@ -23,9 +23,10 @@ def validate_published_agents(value):
     """Return (kept, dropped): the entries kept, normalised, in order, and (index, reason) per dropped one.
 
     Raises ValueError when the value is not a list at all. Defaults: `name` is
-    the id, `status` is queueable. A parent that is not in the list, or the
-    entry itself, is removed so the entry hangs from the service. The list is
-    cut at MAX_PUBLISHED_AGENTS entries and then at MAX_PUBLISHED_AGENTS_BYTES.
+    the id, `status` is queueable. The list is cut at MAX_PUBLISHED_AGENTS
+    entries and then at MAX_PUBLISHED_AGENTS_BYTES; after that, a parent that
+    is not among the kept entries, or the entry itself, is removed so the
+    entry hangs from the service.
     """
     if not isinstance(value, list):
         raise ValueError("published agents must be a list")
@@ -60,10 +61,11 @@ def validate_published_agents(value):
         seen.add(row["id"])
         kept.append(row)
         indices.append(index)
-    for row in kept:
-        if "parent" in row and (row["parent"] not in seen or row["parent"] == row["id"]):
-            del row["parent"]
     while kept and len(json.dumps(kept, separators=(",", ":")).encode("utf-8")) > MAX_PUBLISHED_AGENTS_BYTES:
         kept.pop()
         dropped.append((indices.pop(), "over %d bytes" % MAX_PUBLISHED_AGENTS_BYTES))
+    present = {row["id"] for row in kept}
+    for row in kept:
+        if "parent" in row and (row["parent"] not in present or row["parent"] == row["id"]):
+            del row["parent"]
     return kept, dropped

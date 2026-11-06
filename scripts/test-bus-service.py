@@ -414,6 +414,11 @@ class Services(unittest.TestCase):
         kept, dropped = service.validate_published_agents(wide)
         self.assertLessEqual(len(json.dumps(kept, separators=(",", ":")).encode()), service.MAX_PUBLISHED_AGENTS_BYTES)
         self.assertEqual(len(kept) + len(dropped), 256)
+        # The byte cut runs last: an entry whose parent was cut from the tail no longer names it.
+        kept, dropped = service.validate_published_agents([{"id": "head", "parent": "tail"}] + wide[:250] + [{"id": "tail"}])
+        self.assertEqual(kept[0], {"id": "head", "name": "head", "status": "queueable"})
+        self.assertNotIn("tail", [row["id"] for row in kept])
+        self.assertTrue(all(row.get("parent", row["id"]) in {row["id"] for row in kept} for row in kept))
         record = service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service", publish_agents=True,
             endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))
         self.assertTrue(record["publish_agents"])

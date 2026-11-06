@@ -452,6 +452,40 @@ class LifecycleTests(unittest.TestCase):
         published = json.loads((state / "worker.json").read_text())
         self.assertTrue(any("deadline" in item["error"]["error"] for item in published["recent_errors"]), published["recent_errors"])
 
+    def test_status_loop_survives_an_unexpected_exception_and_records_it(self):
+        import http.client
+        state = self.root / "truncated-status-worker"
+        state.mkdir()
+        url = "https://service-truncated.invalid"
+        records = self.publishing_records(state, url)
+        cfg = {"connections": {url: {"url": url}}}
+        heartbeats, fetches = [], []
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                heartbeats.append(payload["agents"])
+                if any("agents" in entry for entries in heartbeats for entry in entries):
+                    (state / "worker.stop").touch()
+                return {"ok": True}
+            if operation == "poll_device":
+                return {"messages": []}
+            raise AssertionError(operation)
+
+        def status(record):
+            fetches.append(time.monotonic())
+            if len(fetches) == 1:
+                # A truncated response is an http.client error, not an OSError or a ServiceError.
+                raise http.client.IncompleteRead(b"partial")
+            return [{"id": "after", "status": "live"}], []
+
+        with mock.patch.object(bus, "STATUS_INTERVAL", 0.3), mock.patch.object(bus, "STATUS_TICK", 0.1), \
+                mock.patch.object(bus_service, "publish_status", side_effect=status):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"), timeout=15)
+        carried = [entry["agents"][0]["id"] for entries in heartbeats for entry in entries if "agents" in entry]
+        self.assertEqual(carried[:1], ["after"], "the status loop died on the first call")
+        published = json.loads((state / "worker.json").read_text())
+        self.assertTrue(any("IncompleteRead" in item["error"]["error"] for item in published["recent_errors"]), published["recent_errors"])
+
     def test_lists_in_one_heartbeat_stay_under_the_hub_body_limit(self):
         state = self.root / "many-lists-worker"
         state.mkdir()
