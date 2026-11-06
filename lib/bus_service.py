@@ -29,6 +29,10 @@ from uuid import UUID
 MAX_BODY = 65536
 MAX_REPLY = 32768
 MAX_PENDING = 128
+# A service may publish this many agents of its own, with these fields only.
+MAX_PUBLISHED_AGENTS = 256
+MAX_PUBLISHED_AGENTS_BYTES = 32768
+PUBLISHED_AGENT_FIELDS = {"id": 128, "name": 128, "status": 16, "role": 64, "parent": 128}
 PROTOCOL = "service-fence/epoch-v1"
 _LOCKS = {}
 _LOCKS_MUTEX = threading.Lock()
@@ -97,7 +101,8 @@ def registration(args):
     credential(token_file)
     return {"kind": "service", "session_key": "service:" + service_id, "name": args.name,
             "service_id": service_id, "endpoint": args.endpoint, "token_file": token_file,
-            "contract_version": contract_version(getattr(args, "contract_version", 1)), "status": "queueable"}
+            "contract_version": contract_version(getattr(args, "contract_version", 1)), "status": "queueable",
+            "publish_agents": bool(getattr(args, "publish_agents", False))}
 
 
 def configured(record):
@@ -670,10 +675,56 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _published_text(value, label, limit):
+    if (not isinstance(value, str) or not 1 <= len(value) <= limit
+            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
+        raise ServiceError("invalid published agent " + label)
+    return value
+
+
+def validate_agents(value):
+    """A service's own agent list: bounded, known fields only, never message text."""
+    if not isinstance(value, list) or len(value) > MAX_PUBLISHED_AGENTS:
+        raise ServiceError("published agents must be a list of at most %d" % MAX_PUBLISHED_AGENTS)
+    agents, seen = [], set()
+    for entry in value:
+        if not isinstance(entry, dict) or set(entry) - set(PUBLISHED_AGENT_FIELDS) or "id" not in entry:
+            raise ServiceError("a published agent carries only id, name, status, role and parent")
+        row = {key: _published_text(entry[key], key, limit) for key, limit in PUBLISHED_AGENT_FIELDS.items() if key in entry}
+        row.setdefault("name", row["id"])
+        row.setdefault("status", "queueable")
+        if row["status"] not in ("live", "queueable", "offline") or row["id"] in seen:
+            raise ServiceError("published agents need distinct ids and a status of live, queueable or offline")
+        seen.add(row["id"])
+        agents.append(row)
+    if any("parent" in row and row["parent"] not in seen for row in agents):
+        raise ServiceError("a published agent's parent must be in the same list")
+    if len(json.dumps(agents, separators=(",", ":")).encode()) > MAX_PUBLISHED_AGENTS_BYTES:
+        raise ServiceError("published agents exceed %d bytes" % MAX_PUBLISHED_AGENTS_BYTES)
+    return agents
+
+
+def validate_status(result):
+    if not isinstance(result, dict) or set(result) != {"agents"}:
+        raise ServiceError("invalid service status response")
+    return validate_agents(result["agents"])
+
+
+def publish_status(record):
+    """Ask the endpoint which agents it runs; the answer is the service's claim, bounded."""
+    return validate_status(_post(record, {"version": contract_version(record.get("contract_version", 1)), "op": "status",
+                                          "hub": record["url"], "recipient_id": record["id"],
+                                          "service_id": record["service_id"]}))
+
+
 def bridge(record, job):
-    payload = {"version": contract_version(job["contract_version"]), "op": job["operation"], "hub": job["hub"],
-               "recipient_id": job["recipient"], "service_id": job["service_id"],
-               "envelope": json.loads(job["envelope"])}
+    return validate_response(_post(record, {"version": contract_version(job["contract_version"]), "op": job["operation"],
+                                            "hub": job["hub"], "recipient_id": job["recipient"],
+                                            "service_id": job["service_id"], "envelope": json.loads(job["envelope"])}),
+                             job["contract_version"])
+
+
+def _post(record, payload):
     body = json.dumps(payload).encode()
     if len(body) > MAX_BODY:
         raise ServiceError("service request exceeds limit")
@@ -695,7 +746,7 @@ def bridge(record, job):
         raw = response.read(MAX_BODY + 1)
     if len(raw) > MAX_BODY:
         raise ServiceError("service response exceeds limit")
-    return validate_response(json.loads(raw), job["contract_version"])
+    return json.loads(raw)
 
 
 def validate_response(result, version):

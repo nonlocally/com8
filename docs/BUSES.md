@@ -256,6 +256,11 @@ receipt capabilities, or conversation transcripts are exposed. A shared bus
 alone does not create an arrow. Local socket/SSH traffic that bypasses this
 broker and unpublished general-bus senders are absent from the graph.
 
+A service registered with `--publish-agents` is drawn with the agents it says
+it runs as nodes under it, joined by dashed lines; those are the service's
+claim, refreshed every 30 seconds, not traffic, and they carry only an id, a
+name, a status and a role. See [service adapters](SERVICE-ADAPTERS.md).
+
 This is retained activity rather than a complete history. Terminal receipts
 remain for seven days after their last update, then their counts disappear.
 Leaving a bus, device revocation, and viewer access changes also remove the

@@ -97,6 +97,21 @@ endpoints cannot use this disposition. Explicit application reply tools should
 provide the single final result to this worker, rather than also sending it via
 a separate outbound reply operation.
 
+A service registered with `--publish-agents` is also asked, every 30 seconds,
+`{"version": V, "op": "status", "hub", "recipient_id", "service_id"}` (no
+envelope) and answers exactly `{"agents": [...]}`: at most 256 entries, each
+with `id` (required), `name`, `status` (`live`, `queueable` or `offline`;
+default `queueable`), `role` and `parent` (another entry's `id`), every value
+a printable string of at most 128 characters (`role` 64), the whole list at
+most 32 KiB, and no other field; the worker refuses anything else and keeps
+the previous list. The list rides on the heartbeat that follows each answer
+(`agents` on the service's heartbeat entry); the hub stores it, drops it when
+the service registers again, and shows it on the service's roster row and in
+the dashboard graph as nodes under the service. It is the service's claim
+about itself, never message text or traffic. A hub older than this field
+accepts the heartbeat and ignores the list. A failed status call is reported
+in `worker.json`'s `recent_errors` and retried at the next interval.
+
 A service can also start a conversation with the ordinary send, using its own
 registered agent ID: `com8 bus send RECIPIENT_ID --bus general --from SERVICE_AGENT_ID -- MESSAGE`.
 The recipient's answer arrives as a normal `deliver` whose authenticated

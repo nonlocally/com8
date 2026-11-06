@@ -361,6 +361,46 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(polls[2]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": 8})
         self.assertEqual(polls[3]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": bus.SERVICE_LEASE_BATCH})
 
+    def test_publishing_service_status_is_fetched_on_its_interval_and_sent_in_the_heartbeat(self):
+        state = self.root / "publishing-worker"
+        state.mkdir()
+        url = "https://service-status.invalid"
+        records = self.service_records(state, url)
+        records["svc"]["publish_agents"] = True
+        records["quiet"] = dict(records["svc"], id="agent-quiet", session_key="service:quiet",
+                                service_id="00000000-0000-4000-8000-000000000001", publish_agents=False)
+        cfg = {"connections": {url: {"url": url}}}
+        heartbeats, fetches = [], []
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                heartbeats.append(payload["agents"])
+                if len(fetches) >= 3:
+                    (state / "worker.stop").touch()
+                return {"ok": True}
+            if operation == "poll_device":
+                return {"messages": []}
+            raise AssertionError(operation)
+
+        def status(record):
+            fetches.append((time.monotonic(), record["id"]))
+            if len(fetches) == 2:
+                raise bus_service.ServiceError("service endpoint returned invalid status")
+            return [{"id": "prover-%d" % len(fetches), "name": "Prover", "status": "live"}]
+
+        with mock.patch.object(bus, "STATUS_INTERVAL", 0.5), mock.patch.object(bus_service, "publish_status", side_effect=status):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"))
+        self.assertGreaterEqual(len(fetches), 3)
+        self.assertTrue(all(ident == "agent-service" for _, ident in fetches), fetches)
+        self.assertTrue(all(later - earlier >= 0.45 for (earlier, _), (later, _) in zip(fetches, fetches[1:])))
+        carried = [entry for entries in heartbeats for entry in entries if "agents" in entry]
+        # The heartbeat after each successful fetch carries the list; a failed fetch sends nothing and is reported.
+        self.assertEqual([entry["agents"][0]["id"] for entry in carried][:2], ["prover-1", "prover-3"])
+        self.assertTrue(all(entry["id"] == "agent-service" for entry in carried))
+        self.assertTrue(all(entry["id"] != "agent-quiet" or "agents" not in entry for entries in heartbeats for entry in entries))
+        published = json.loads((state / "worker.json").read_text())
+        self.assertTrue(any("status" in item["error"]["error"] for item in published["recent_errors"]), published["recent_errors"])
+
     def test_worker_is_ready_before_network_and_heartbeats_continue_during_delivery(self):
         state = self.root / "worker-state"
         state.mkdir()

@@ -480,6 +480,14 @@ class ServiceFenceClientTest(unittest.TestCase):
                          (original["id"], 2, "service-fence/epoch-v1"))
         return current
 
+    def test_publish_agents_is_an_explicit_local_registration_choice(self):
+        registered = self.run_cli(*self.arguments, "--publish-agents")
+        record = next(row for row in bus.registrations().values() if row["id"] == registered["id"])
+        self.assertTrue(record["publish_agents"])
+        again = self.run_cli(*self.arguments)
+        self.assertEqual(again["id"], registered["id"])
+        self.assertFalse(next(row for row in bus.registrations().values() if row["id"] == registered["id"])["publish_agents"])
+
     def test_export_cli_pages_through_the_cursor_and_prints_json_lines(self):
         import bus_broker
         registered = self.run_cli(*self.arguments)

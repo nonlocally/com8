@@ -61,6 +61,9 @@ SERVICE_DRAIN_BUDGET = 5.0
 ACK_CONCURRENCY = 8
 # A replacement waits this long for the running worker to finish its iteration and release its lock.
 WORKER_STOP_TIMEOUT = 30
+# A service that publishes its agents is asked for them this often; the list
+# rides on the heartbeat that follows each answer.
+STATUS_INTERVAL = 30.0
 
 
 def service_epoch(record):
@@ -789,7 +792,7 @@ def worker():
                 state["errors"] = (state["heartbeat_errors"] + state["delivery_errors"])[:256]
                 # `errors` is the current picture; an iteration can be shorter than
                 # a reader's glance, so the last distinct errors are kept with times.
-                for item in updates.get("delivery_errors", []):
+                for item in updates.get("delivery_errors", []) + updates.get("heartbeat_errors", []):
                     if not any(previous["error"] == item for previous in state["recent_errors"]):
                         state["recent_errors"] = (state["recent_errors"] + [{"at": state["updated_at"], "error": item}])[-32:]
                 write_json(root / "worker.json", state)
@@ -799,6 +802,27 @@ def worker():
                 stop.set()
             return stop.is_set()
 
+        published = {}
+        status_errors = {}
+
+        def published_agents(record):
+            """The service's agent list, fetched once per interval; None when there is nothing new to send."""
+            from bus_service import publish_status, ServiceError
+            key = (record["url"], record["id"])
+            last = published.get(key, 0)
+            if time.monotonic() - last < STATUS_INTERVAL:
+                return None
+            published[key] = time.monotonic()
+            try:
+                agents = publish_status(record)
+            except (ServiceError, OSError, ValueError, KeyError) as exc:
+                with status_lock:
+                    status_errors[key] = {"agent": record["id"], "error": "service status unavailable: " + " ".join(str(exc).split())[:160]}
+                return None
+            with status_lock:
+                status_errors.pop(key, None)
+            return agents
+
         def heartbeat_hub(conn, records):
             entries = []
             for record in records:
@@ -807,6 +831,10 @@ def worker():
                 entry = {"id": record["id"], "status": current_status(record)}
                 if service_epoch(record) is not None:
                     entry["epoch"] = service_epoch(record)
+                if record.get("kind") == "service" and record.get("publish_agents") and entry["status"] != "offline":
+                    agents = published_agents(record)
+                    if agents is not None:
+                        entry["agents"] = agents
                 entries.append(entry)
             for offset in range(0, len(entries), 128):
                 if stopping():
@@ -839,7 +867,9 @@ def worker():
                             except (BusError, OSError, ValueError, KeyError) as exc:
                                 counts[url] = 0
                                 errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
-                            updates.update(adapters=sum(counts.values()), heartbeat_errors=list(errors.values()))
+                            with status_lock:
+                                fetch_errors = list(status_errors.values())
+                            updates.update(adapters=sum(counts.values()), heartbeat_errors=list(errors.values()) + fetch_errors)
                             publish(**updates)
                     except (BusError, OSError, ValueError, KeyError) as exc:
                         publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
@@ -1168,6 +1198,8 @@ def parser():
     service.add_argument("--token-file", required=True, help="private bearer-token file; never token bytes")
     service.add_argument("--contract-version", type=int, choices=(1, 2), default=1,
                          help="bridge contract (2 requires broker-authored reply correlation)")
+    service.add_argument("--publish-agents", action="store_true",
+                         help="ask the endpoint for its agents every 30 s and publish that list on the hub for the dashboard")
     service.add_argument("--bus", default="general")
     service.add_argument("--description", default="")
     service.add_argument("--json", action="store_true")
@@ -1297,6 +1329,7 @@ def run(args):
                 selectors["service_config_hash"] = hashlib.sha256(json.dumps(
                     {**{key: ident[key] for key in ("service_id", "endpoint", "token_file")},
                      "contract_version": ident["contract_version"],
+                     **({"publish_agents": True} if ident.get("publish_agents") else {}),
                      "token_fingerprint": hashlib.sha256(credential(ident["token_file"]).encode()).hexdigest()},
                     sort_keys=True, separators=(",", ":")).encode()).hexdigest()
             else:

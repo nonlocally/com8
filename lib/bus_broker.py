@@ -49,6 +49,10 @@ MAX_INVITES = 4096
 MAX_RECORDS = 20000
 # Receipts per export page; a caller continues with the returned cursor.
 MAX_EXPORT_PAGE = 1000
+# A service may publish this many agents of its own, as its claim, with these fields only.
+MAX_PUBLISHED_AGENTS = 256
+MAX_PUBLISHED_AGENTS_BYTES = 32768
+PUBLISHED_AGENT_FIELDS = {"id": 128, "name": 128, "status": 16, "role": 64, "parent": 128}
 MAX_SSO_REPLAYS = 4096
 MAX_VIEW_HEADER = 8192
 MAX_CHATS = 4096
@@ -328,7 +332,8 @@ class Broker:
                                               ("messages", "sender_epoch", "INTEGER"),
                                               ("messages", "target_epoch", "INTEGER"),
                                               ("conversations", "initiator_epoch", "INTEGER"),
-                                              ("conversations", "published_epoch", "INTEGER")):
+                                              ("conversations", "published_epoch", "INTEGER"),
+                                              ("agents", "published_agents", "TEXT")):
                 columns = {row[1] for row in db.execute("PRAGMA table_info(%s)" % table)}
                 if name not in columns:
                     db.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, declaration))
@@ -1171,8 +1176,9 @@ class Broker:
             # Reactivation advances the epoch, so clients can order lifecycle responses.
             agent = existing[0]
             epoch = existing["epoch"] + (1 if existing["retired_at"] is not None else 0)
-            db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?
-                          WHERE id=?""", (name, kind, description, status, now, epoch, agent))
+            # A registration starts without a published agent list; the worker republishes it.
+            db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?,
+                          published_agents=NULL WHERE id=?""", (name, kind, description, status, now, epoch, agent))
         else:
             if (db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
                     or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
@@ -1193,6 +1199,32 @@ class Broker:
             return self._service_finish(db, p, r, service_context, result, now, {agent: epoch})
         return result
 
+    @staticmethod
+    def _published_agents(value):
+        """A service's own agent list: bounded, known fields only, never message text."""
+        if not isinstance(value, list) or len(value) > MAX_PUBLISHED_AGENTS:
+            raise BusError("published agents must be a list of at most %d" % MAX_PUBLISHED_AGENTS)
+        agents, seen = [], set()
+        for entry in value:
+            if not isinstance(entry, dict) or set(entry) - set(PUBLISHED_AGENT_FIELDS) or "id" not in entry:
+                raise BusError("a published agent carries only id, name, status, role and parent")
+            row = {}
+            for key, limit in PUBLISHED_AGENT_FIELDS.items():
+                if key in entry:
+                    row[key] = _text(entry[key], "published agent " + key, limit)
+            row.setdefault("name", row["id"])
+            row.setdefault("status", "queueable")
+            if row["status"] not in ("live", "queueable", "offline") or row["id"] in seen:
+                raise BusError("published agents need distinct ids and a status of live, queueable or offline")
+            seen.add(row["id"])
+            agents.append(row)
+        if any("parent" in row and row["parent"] not in seen for row in agents):
+            raise BusError("a published agent's parent must be in the same list")
+        encoded = json.dumps(agents, separators=(",", ":"))
+        if len(encoded.encode()) > MAX_PUBLISHED_AGENTS_BYTES:
+            raise BusError("published agents exceed %d bytes" % MAX_PUBLISHED_AGENTS_BYTES)
+        return encoded
+
     def _op_heartbeat(self, db, p, r, now):
         rows = r.get("agents")
         if not isinstance(rows, list) or len(rows) > MAX_AGENTS:
@@ -1204,6 +1236,10 @@ class Broker:
             agent = self._owned(db, p, entry.get("id"))
             if "epoch" in entry:
                 self._epoch(entry["epoch"])
+            if "agents" in entry:
+                if agent["kind"] != "service":
+                    raise BusError("published agents require a service registration")
+                entry = dict(entry, agents=self._published_agents(entry["agents"]))
             validated.append((entry, agent))
         refused = []
         updated = 0
@@ -1217,6 +1253,8 @@ class Broker:
             # A stale adapter's heartbeat never revives a retired registration.
             db.execute("UPDATE agents SET status=?,last_seen=? WHERE id=? AND retired_at IS NULL",
                        (entry["status"], now, agent["id"]))
+            if "agents" in entry:
+                db.execute("UPDATE agents SET published_agents=? WHERE id=? AND retired_at IS NULL", (entry["agents"], agent["id"]))
             updated += 1
         result = {"updated": updated, "ts": now}
         if refused:
@@ -1249,6 +1287,9 @@ class Broker:
                     row["principal"] = a["principal"]
                 if self._service_fence(db, a["id"]) is not None:
                     row.update(fence_protocol=SERVICE_FENCE_PROTOCOL, epoch=a["epoch"])
+                if a["published_agents"] is not None:
+                    # The service's own claim about its agents, as it last published it.
+                    row["agents"] = json.loads(a["published_agents"])
                 agents.append(row)
             role = self._bus_role(db, p, definition)
             account_owned = definition["owner_user"] is not None and bus != "general"

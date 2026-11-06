@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_EXPORT_PAGE, MAX_MESSAGE, MAX_PENDING, MESSAGE_TTL, RECEIPT_RETENTION, handler_factory, serve
+from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_EXPORT_PAGE, MAX_MESSAGE, MAX_PENDING, MAX_PUBLISHED_AGENTS, MESSAGE_TTL, RECEIPT_RETENTION, handler_factory, serve
 
 
 class BrokerTests(unittest.TestCase):
@@ -287,6 +287,37 @@ class BrokerTests(unittest.TestCase):
         self.now[0] += RECEIPT_RETENTION + 1
         self.assertEqual(self.call("export", token=w["token"], agent=w["service"])["receipts"], [])
         self.assertEqual([r["id"] for r in first["receipts"]], sent[:2])
+
+    def published(self, token, agent):
+        return next(row for bus in self.call("snapshot", token=token)["buses"] for row in bus["agents"] if row["id"] == agent)
+
+    def test_service_publishes_a_bounded_agent_list_that_the_snapshot_shows(self):
+        a, w = self.service_pair()
+        published = [{"id": "prover-1", "name": "Prover 1", "status": "live", "role": "prover"},
+                     {"id": "lemma-7", "name": "Lemma 7", "status": "queueable", "role": "worker", "parent": "prover-1"}]
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        # Every viewer of the service sees the same claim; agents that publish nothing carry no field.
+        self.assertEqual(self.published(a["token"], w["service"])["agents"], published)
+        self.assertNotIn("agents", self.published(a["token"], w["codex"]))
+        # Only a service publishes; the list is bounded and carries only the known fields, never message text.
+        self.refused("heartbeat", token=w["token"], agents=[{"id": w["codex"], "status": "queueable", "agents": published}])
+        for bad in ([{"id": "x", "message": "secret"}], [{"name": "no id"}], [{"id": ""}], [{"id": "x", "status": "busy"}],
+                    [{"id": "x"}, {"id": "x"}], [{"id": "x", "parent": "missing"}], "list", [{"id": "x" * 129}],
+                    [{"id": "x", "name": "\x00"}], [{"id": "p%d" % i} for i in range(MAX_PUBLISHED_AGENTS + 1)]):
+            self.refused("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": bad}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        # A heartbeat without the field keeps the list; an empty list clears it; a registration drops it.
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable"}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": []}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [])
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}])
+        self.register(token=w["token"], name="service:" + "1" * 32, kind="service", status="queueable")
+        self.assertNotIn("agents", self.published(w["token"], w["service"]))
+        # Defaults: status queueable, name the id.
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": [{"id": "solo"}]}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [{"id": "solo", "name": "solo", "status": "queueable"}])
 
     def test_atomic_invitation_and_registration_concurrency(self):
         invitation = self.call("invite")["invite"]

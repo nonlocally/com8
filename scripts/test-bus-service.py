@@ -373,6 +373,38 @@ class Services(unittest.TestCase):
         self.assertEqual(len(next_at), 16)
         self.assertTrue(all(value > time.time() + 4 for value in next_at))
 
+    def test_publish_status_fetches_a_bounded_agent_list_through_the_bridge(self):
+        self.record["publish_agents"] = True
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.read.return_value = json.dumps({"agents": [{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
+                                                            {"id": "w1", "parent": "p1"}]}).encode()
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(service.urllib.request, "build_opener", return_value=opener):
+            agents = service.publish_status(self.record)
+            req = opener.open.call_args.args[0]
+            payload = json.loads(req.data)
+        self.assertEqual((payload["op"], payload["version"], payload["service_id"], payload["recipient_id"], payload["hub"]),
+                         ("status", 1, self.sid, self.target, self.record["url"]))
+        self.assertNotIn("envelope", payload)
+        self.assertTrue(req.headers["Authorization"].startswith("Bearer "))
+        self.assertEqual(agents, [{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
+                                  {"id": "w1", "name": "w1", "status": "queueable", "parent": "p1"}])
+        for bad in ({"agents": [{"id": "p1", "message": "text"}]}, {"agents": "p1"}, {"agents": [], "extra": 1}, {},
+                    {"agents": [{"id": "p1"}, {"id": "p1"}]}, {"agents": [{"id": "w1", "parent": "absent"}]},
+                    {"agents": [{"id": "p%d" % i} for i in range(service.MAX_PUBLISHED_AGENTS + 1)]},
+                    {"agents": [{"id": "p1", "status": "busy"}]}, {"agents": [{"id": "p1", "name": "a\nb"}]}):
+            with self.assertRaises(service.ServiceError):
+                service.validate_status(bad)
+        self.assertEqual(service.validate_status({"agents": []}), [])
+        record = service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service", publish_agents=True,
+            endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))
+        self.assertTrue(record["publish_agents"])
+        self.assertFalse(service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service",
+            endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))["publish_agents"])
+
     def test_real_bridge_payload_auth_and_no_redirect_or_unbounded_response(self):
         service.enqueue(self.root, self.record, self.envelope)
         response = mock.MagicMock()
