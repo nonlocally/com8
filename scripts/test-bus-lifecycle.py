@@ -17,6 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
 import bus
+import bus_service
 
 
 class EnrollmentInputTests(unittest.TestCase):
@@ -171,11 +172,26 @@ class LifecycleTests(unittest.TestCase):
                 mock.patch.object(bus, "locked", side_effect=lock), \
                 mock.patch.object(bus.time, "monotonic", side_effect=[0, 10, 20, 31]), \
                 mock.patch.object(bus.time, "sleep"), mock.patch.object(bus, "spawn_daemon") as spawn:
-            with self.assertRaisesRegex(bus.BusError, "did not stop within 30 seconds"):
+            with self.assertRaisesRegex(bus.BusError, "did not stop within 30 seconds.*withdrawn"):
                 bus.start_worker()
         spawn.assert_not_called()
-        self.assertTrue((state / "worker.stop").exists())
+        # The request is withdrawn: the old worker keeps running rather than exiting later unreplaced.
+        self.assertFalse((state / "worker.stop").exists())
         self.assertFalse((state / "broker.stop").exists())
+
+    def test_start_worker_withdraws_its_stop_request_when_the_old_worker_keeps_its_lock(self):
+        state = self.root / "stuck-worker"
+        state.mkdir()
+        bus.write_json(state / "worker.json", {"pid": 1, "runtime": "other-source", "state": "running"})
+        spawned = []
+        with mock.patch.object(bus, "state_dir", return_value=state), mock.patch.object(bus, "WORKER_STOP_TIMEOUT", 0.5), \
+                mock.patch.object(bus, "spawn_daemon", side_effect=lambda command: spawned.append(command)):
+            with bus.locked("worker"):
+                # The running worker is mid-iteration and keeps its lock past the wait.
+                with self.assertRaisesRegex(bus.BusError, "withdrawn"):
+                    bus.start_worker()
+                self.assertFalse((state / "worker.stop").exists(), "a withdrawn stop request must not linger")
+        self.assertEqual(spawned, [], "no competitor is started while the old worker runs")
 
     def test_device_poll_batches_hidden_adapters_and_journals_other_ack_failures(self):
         state = self.root / "batched-worker"
@@ -235,6 +251,115 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(set(acknowledged), {"message-0", "message-1"})
         with sqlite3.connect(state / "receipts.sqlite") as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM delivered WHERE status='queued'").fetchone()[0], 2)
+        # The lost acknowledgment is kept with its time, so it stays visible after
+        # later quiet iterations replace `errors`.
+        published = json.loads((state / "worker.json").read_text())
+        self.assertEqual(published["errors"], published["delivery_errors"])
+        self.assertEqual([item["error"]["agent"] for item in published["recent_errors"]], ["agent-0"])
+        self.assertLessEqual(published["recent_errors"][0]["at"], published["updated_at"])
+        self.assertIn("simulated lost ACK", published["recent_errors"][0]["error"]["error"])
+
+    def service_records(self, state, url):
+        token = state / "service.token"
+        token.write_text("fixture-service-token-" + "t" * 40)
+        token.chmod(0o600)
+        return {"svc": {"id": "agent-service", "kind": "service", "url": url, "buses": ["general"],
+                        "session_key": "service:fixture", "service_id": "00000000-0000-4000-8000-000000000000",
+                        "endpoint": "https://service.invalid/bridge", "token_file": str(token), "contract_version": 2},
+                "native": {"id": "agent-native", "kind": "codex", "binary": sys.executable, "url": url, "buses": ["general"]}}
+
+    def run_worker(self, state, cfg, records, request, deliver, timeout=12):
+        errors = []
+        def run():
+            try:
+                bus.worker()
+            except Exception as exc:
+                errors.append(exc)
+        with mock.patch.object(bus, "state_dir", return_value=state), \
+                mock.patch.object(bus, "config", return_value=cfg), \
+                mock.patch.object(bus, "registrations", return_value=records), \
+                mock.patch.object(bus, "request", side_effect=request), \
+                mock.patch.object(bus, "deliver", side_effect=deliver), mock.patch.object(bus.signal, "signal"):
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+            thread.join(timeout)
+            (state / "worker.stop").touch()
+            thread.join(4)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+
+    def test_service_backlog_is_leased_in_batches_and_polled_without_the_two_second_wait(self):
+        state = self.root / "batched-service-worker"
+        state.mkdir()
+        url = "https://service-batch.invalid"
+        records = self.service_records(state, url)
+        cfg = {"connections": {url: {"url": url}}}
+        polls, acks, lock = [], [], threading.Lock()
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                return {"ok": True}
+            if operation == "poll_device":
+                with lock:
+                    polls.append({"at": time.monotonic(), "agents": payload["agents"], "batch": payload.get("batch")})
+                    count = len(polls)
+                size = {1: 32, 2: 5}.get(count, 0)
+                if count == 4:
+                    (state / "worker.stop").touch()
+                return {"messages": [{"id": "message-%d-%d" % (count, i), "target": "agent-service",
+                                      "lease": "lease-%d-%d" % (count, i)} for i in range(size)]}
+            if operation == "ack":
+                time.sleep(.05)
+                with lock:
+                    acks.append(payload["id"])
+                return {"ok": True}
+            raise AssertionError(operation)
+
+        self.run_worker(state, cfg, records, request, lambda record, envelope: ("queued", "fixture queued"))
+        self.assertEqual(len(polls), 4)
+        self.assertEqual(sorted(polls[0]["agents"]), ["agent-native", "agent-service"])
+        # Service recipients ask for batch leases; native sessions keep one message at a time.
+        self.assertEqual(polls[0]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH})
+        self.assertEqual(len(acks), 37)
+        # Thirty-two acknowledgments took well under their sequential 1.6 s, and a poll that leased
+        # service messages is followed by the next poll at once; an empty poll waits two seconds.
+        self.assertLess(polls[1]["at"] - polls[0]["at"], 1.0)
+        self.assertLess(polls[2]["at"] - polls[1]["at"], 1.0)
+        self.assertGreaterEqual(polls[3]["at"] - polls[2]["at"], 1.9)
+        with sqlite3.connect(state / "receipts.sqlite") as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM delivered WHERE status='queued'").fetchone()[0], 37)
+
+    def test_full_service_journal_leaves_messages_on_the_hub(self):
+        state = self.root / "full-journal-worker"
+        state.mkdir()
+        url = "https://service-full.invalid"
+        records = self.service_records(state, url)
+        records["second"] = dict(records["svc"], id="agent-second", session_key="service:second",
+                                 service_id="00000000-0000-4000-8000-000000000002")
+        cfg = {"connections": {url: {"url": url}}}
+        polls = []
+        capacities = [0, 5, 40, 400]
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                return {"ok": True}
+            if operation == "poll_device":
+                polls.append({"agents": payload["agents"], "batch": payload.get("batch")})
+                if len(polls) == 4:
+                    (state / "worker.stop").touch()
+                return {"messages": []}
+            raise AssertionError(operation)
+
+        with mock.patch.object(bus_service, "capacity", side_effect=lambda root: capacities[min(len(polls), 3)]):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"))
+        self.assertEqual(len(polls), 4)
+        # No journal room: no service is polled, so the hub keeps its messages (24 h) instead of the worker
+        # failing them. Room is shared: the batches requested in one poll never add up to more than it.
+        self.assertEqual((polls[0]["agents"], polls[0]["batch"]), (["agent-native"], None))
+        self.assertEqual(polls[1]["batch"], {"agent-service": 5})
+        self.assertEqual(sorted(polls[1]["agents"]), ["agent-native", "agent-service"])
+        self.assertEqual(polls[2]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": 8})
+        self.assertEqual(polls[3]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": bus.SERVICE_LEASE_BATCH})
 
     def test_worker_is_ready_before_network_and_heartbeats_continue_during_delivery(self):
         state = self.root / "worker-state"
