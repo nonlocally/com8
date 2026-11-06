@@ -991,32 +991,40 @@ class Com8:
         seat = sp["seat"]
         self._do_seat_bind(seat, name)
         adopted = False
+        adopt_err = None
         if adopt:
-            drv = self._seat_drv()
-            t0 = time.time()
-            # let the agent boot to a ready prompt
-            while time.time() - t0 < boot_wait:
-                if drv.state(seat) in ("idle", "approval"):
-                    break
-                time.sleep(0.5)
-            try:
-                drv.send(seat, "/rename %s" % name)
-            except com8_seat.SeatError as e:
-                self.log("adopt send failed:", e)
-            for _ in range(16):
-                if name in self._scan_sidecars():
-                    adopted = True
-                    break
-                time.sleep(0.5)
+            # /rename only on a REAL idle prompt. Breaking out on "approval"
+            # typed it into Claude Code's workspace-trust dialog, whose
+            # default row is "No, exit": every spawn in a directory not yet
+            # trusted exited within a second. rename_when_ready answers that
+            # dialog itself and types nothing into a blank pane or any other
+            # dialog; its err says why adoption was not attempted.
+            r = com8_seat.rename_when_ready(self._seat_drv(), seat, name,
+                                            boot_wait=boot_wait, log=self.log)
+            if r.get("ok"):
+                for _ in range(16):
+                    if name in self._scan_sidecars():
+                        adopted = True
+                        break
+                    time.sleep(0.5)
+                if not adopted:
+                    adopt_err = "/rename submitted, but no sidecar took the name"
+            else:
+                adopt_err = r.get("err")
+                self.log("adopt", name, "in seat", seat, "not attempted:", adopt_err)
         with self.mu:
             if name in self.identities:
                 self.identities[name]["supervision"] = {
                     "cmd": cmd, "cli": cli, "cwd": work_cwd,
                     "spawned_at": time.time()}
         self._persist_identities()
-        self.log("spawned", name, "in seat", seat, "adopted" if adopted else "")
-        return {"ok": True, "name": name, "seat": seat, "adopted": adopted,
-                "tmux_server": sp.get("tmux_server")}
+        self.log("spawned", name, "in seat", seat,
+                 "adopted" if adopted else ("NOT adopted" if adopt else ""))
+        out = {"ok": True, "name": name, "seat": seat, "adopted": adopted,
+               "tmux_server": sp.get("tmux_server")}
+        if adopt_err:
+            out["adopt_err"] = adopt_err
+        return out
 
     def _do_restart(self, name):
         """Bring a spawned agent back using the supervision record. com8 is not
@@ -5292,7 +5300,8 @@ def cli_call(argv):
                 print(json.dumps(r))
             else:
                 for s in (r.get("seats") or []):
-                    print("%-7s %-12s %s" % (s["seat"], s["cmd"], s["title"]))
+                    print("%-7s %-12s %s" % (s["seat"], "dead" if s.get("dead")
+                                             else s["cmd"], s["title"]))
             return 0 if r.get("ok") else 1
         if sub == "spawn":
             cwd = winname = dev = None

@@ -56,8 +56,10 @@ alone does not start it, and neither action joins a remote bus.
    not reasons to claim a model is running.
 3. For Claude, inspect the spawn result's `adopted` flag and the identity's
    reported `route`, `seat` and `surface`. A usable native route is live and
-   unambiguous; `ok:true` from spawning alone is insufficient. If adoption is
-   incomplete, inspect that returned seat for startup, trust or login prompts.
+   unambiguous; `ok:true` from spawning alone is insufficient. The spawn answers
+   Claude Code's workspace-trust dialog itself and types `/rename` only into an
+   idle prompt; if adoption is incomplete, `adopt_err` says why — inspect that
+   returned seat for startup or login prompts.
    Resolve only actions already authorized; do not substitute another session
    or automatically enable keyboard relay. Codex spawning does not bind
    its durable name to a queue. Establish the exact thread belonging to the

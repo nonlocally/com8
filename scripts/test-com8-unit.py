@@ -240,5 +240,144 @@ if (w.startswith("[com8 mail from @alice] hi there")
 else:
     bad("_seat_wrap shape (w=%r w2=%r)" % (w[:80], w2[:80]))
 
+# 10. _do_spawn's adoption. Claude Code's workspace-trust dialog highlights
+#     "No, exit" by default and /rename's submit is a bare Enter: the boot
+#     loop used to break on "approval" and type /rename into that dialog, so
+#     every spawn in a directory not yet trusted exited within a second
+#     (Claude Code 2.1.318, 2026-11-05). The seat must answer the dialog with
+#     the affirmative row, type NOTHING while the pane is blank or holds any
+#     other dialog, and /rename only once a real idle prompt is up.
+import com8_seat   # noqa: E402
+
+
+class Seat:
+    """A scripted seat driver: state() reports `states` in order (the last
+    repeats). With trust=True the approval on screen is the trust dialog,
+    and answering it boots on to an idle composer."""
+
+    def __init__(self, states, trust=False):
+        self.states, self.trust, self.calls = list(states), trust, []
+
+    def state(self, seat):
+        st = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+        self.calls.append(("state", st))
+        return st
+
+    def is_trust_prompt(self, seat):
+        return self.trust
+
+    def respond(self, seat, decision="allow"):
+        self.calls.append(("respond", decision))
+        if self.trust and decision == "allow":
+            self.trust, self.states = False, ["booting", "idle"]
+            return {"ok": True, "responded": "allow: Yes, I trust this folder"}
+        return {"ok": False, "err": "no clearly-affirmative option"}
+
+    def send(self, seat, text):
+        # record the text and the state it was typed into
+        self.calls.append(("send", text, self.calls[-1][1]))
+        return {"ok": True, "sent": True}
+
+
+class Spawner(com8.Com8):
+    """A Com8 with only what _do_spawn touches: claim, seat spawn/bind, the
+    seat driver and the sidecar scan — no sockets, no tmux, no daemon."""
+
+    def __init__(self, drv):
+        self.mu = threading.RLock()
+        self.identities = {}
+        self.drv = drv
+        self.logged = []
+
+    def log(self, *a):
+        self.logged.append(" ".join(str(x) for x in a))
+
+    def _persist_identities(self):
+        pass
+
+    def _do_claim(self, name, cwd=None, worktree=False):
+        self.identities[name] = {"kind": "local"}
+        return {"ok": True, "name": name, "workspace": {"path": cwd or "/tmp"}}
+
+    def _do_seat(self, sub, req):
+        return {"ok": True, "seat": "%7",
+                "tmux_server": {"socket_path": None, "pid": None}}
+
+    def _do_seat_bind(self, seat, name):
+        self.identities[name]["seat"] = seat
+        return {"ok": True}
+
+    def _seat_drv(self):
+        return self.drv
+
+    def _scan_sidecars(self):
+        # claude's sidecar carries the name only after /rename was submitted
+        return {"w"} if any(c[0] == "send" for c in self.drv.calls) else set()
+
+
+class Clock:
+    """Virtual time: boot waits and settle sleeps cost nothing here."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        self.now += s
+
+
+def spawn_with(states, trust=False):
+    drv = Seat(states, trust=trust)
+    sp = Spawner(drv)
+    saved = com8.time, com8_seat.time
+    com8.time = com8_seat.time = Clock()
+    try:
+        res = sp._do_spawn("w", "claude", cwd="/tmp", adopt=True)
+    finally:
+        com8.time, com8_seat.time = saved
+    return res, drv, [c for c in drv.calls if c[0] == "send"]
+
+
+# blank -> trust dialog -> (answered) -> blank -> idle: ONE /rename, typed into idle
+res, drv, sends = spawn_with(["booting", "booting", "approval"], trust=True)
+responded = [c for c in drv.calls if c[0] == "respond"]
+if (res.get("ok") and res.get("adopted") is True
+        and responded == [("respond", "allow")]
+        and sends == [("send", "/rename w", "idle")]
+        and drv.calls.index(responded[0]) < drv.calls.index(sends[0])):
+    ok("spawn answers the trust dialog with allow, then /renames once a real idle prompt is up")
+else:
+    bad("trust-dialog adoption: res=%s calls=%s" % (res, drv.calls))
+
+# an already-trusted workspace: straight to /rename on the first idle prompt
+res, drv, sends = spawn_with(["idle"])
+if res.get("adopted") is True and sends == [("send", "/rename w", "idle")]:
+    ok("a trusted workspace still adopts on the first idle prompt")
+else:
+    bad("trusted adoption: res=%s calls=%s" % (res, drv.calls))
+
+# any OTHER dialog (a Write permission prompt, a resume picker) is never typed into
+res, drv, sends = spawn_with(["booting", "approval"])
+if (res.get("ok") and res.get("adopted") is False and not sends
+        and not [c for c in drv.calls if c[0] == "respond"]
+        and "approval" in (res.get("adopt_err") or "")):
+    ok("a non-trust dialog is left alone: no /rename, and adopted:false says why")
+else:
+    bad("foreign dialog: res=%s calls=%s" % (res, drv.calls))
+
+# a pane that never renders, or dies while booting: nothing typed
+for states, what in ((["booting"], "a pane that never renders"),
+                     (["booting", "dead"], "a seat that dies while booting")):
+    res, drv, sends = spawn_with(states)
+    if res.get("ok") and res.get("adopted") is False and not sends:
+        ok("%s gets no /rename" % what)
+    else:
+        bad("%s: res=%s calls=%s" % (what, res, drv.calls))
+
 print("\npass=%d fail=%d" % (pass_[0], fail_[0]))
 sys.exit(1 if fail_[0] else 0)

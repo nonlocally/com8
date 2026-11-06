@@ -695,6 +695,117 @@ print('COM8_SELF=' not in seen[0], 'XDG_RUNTIME_DIR' in seen[0])")"
 if [ "$r" = "True True" ]; then ok "no name, no COM8_SELF in the launch; the runtime dir still rides"
 else bad "empty com8_self guard (got: $r)"; fi
 
+echo "== remote spawn: the trust dialog is answered; /rename waits for an idle prompt"
+# Claude Code 2.1.318 highlights "No, exit" on its workspace-trust dialog, so
+# the old blind `send-keys Enter` exited the far claude. The far tmux here
+# answers over a fake ssh (with banner noise before every reply): session
+# com8-lathe is pane %3, blank for two reads, then the dialog, then — once
+# the affirmative row is confirmed — the idle composer.
+RS="$(mktemp -d /tmp/com8-adopt-spawn.XXXXXX)"
+cat > "$RS/remote_spawn.py" <<'PY'
+import re
+import shlex
+import sys
+sys.path.insert(0, sys.argv[1])
+import com8_adopt as ha
+import com8_seat
+
+TRUST = ("\n Accessing workspace:\n\n /home/example/project\n\n"
+         " Quick safety check: Is this a project you created or one you trust?\n\n"
+         " Security guide\n\n ❯ No, exit\n   Yes, I trust this folder\n\n"
+         " Enter to confirm · Esc to cancel")
+TRUST_YES = TRUST.replace(" ❯ No, exit\n   Yes, I trust this folder",
+                          "   No, exit\n ❯ Yes, I trust this folder")
+COMPOSER = '❯ Try "create a util logging.py that..."'
+IDLE = ("\n ▐▛███▛█   Claude Code v2.1.318\n" + "\n" * 24 + "─────────\n"
+        + COMPOSER + "\n─────────\n  ⏵⏵ auto mode on (shift+tab to cycle)")
+VALS = {"pane_id": "%3", "pane_dead": "0", "pane_current_command": "2.1.318",
+        "pane_title": "✳ Claude Code", "pane_in_mode": "0"}
+
+
+class FarTmux:
+    def __init__(self):
+        self.screen, self.reads, self.staged = "", 0, ""
+        self.events, self.cmds = [], []
+
+    def shown(self):
+        if self.staged and self.screen == IDLE:
+            return IDLE.replace(COMPOSER, "❯ " + self.staged)
+        return self.screen
+
+    def ssh(self, addr, cmd, timeout=60):
+        self.cmds.append(cmd)
+        toks = shlex.split(cmd)
+        if "__com8_seat__" not in cmd:       # provisioning lines, the sidecar check
+            if "python3" in toks:
+                return (0, "REG 4242\n" if ("rename", "idle") in self.events else "")
+            return (0, "")
+        argv = [t for t in toks[toks.index("/x/tmux") + 1:] if t != "2>/dev/null"]
+        head = "Banner: authorized use only\n__com8_seat__\n"
+        if argv[0] == "display":
+            return (0, head + re.sub(r"#\{(\w+)\}",
+                                     lambda m: VALS.get(m.group(1), ""), argv[-1]) + "\n")
+        if argv[0] == "capture-pane":
+            self.reads += 1
+            if self.reads == 3 and self.screen == "":
+                self.screen = TRUST
+            return (0, head + self.shown() + "\n")
+        if argv[0] == "send-keys":
+            keys = argv[argv.index("-t") + 2:]
+            if self.screen == "":
+                self.events.append(("typed-into-blank", tuple(keys)))
+            if keys == ["Down"] and self.screen == TRUST:
+                self.screen = TRUST_YES
+            elif keys == ["Enter"] and self.screen == TRUST_YES:
+                self.screen = IDLE
+                self.events.append(("enter", "trust-yes"))
+            elif keys == ["Enter"] and self.screen == TRUST:
+                self.screen = ""
+                self.events.append(("enter", "trust-no"))
+            elif keys[:2] == ["-l", "--"]:
+                self.staged = keys[2]
+            elif keys == ["Enter"] and self.staged:
+                self.events.append(("rename" if self.staged.startswith("/rename lathe")
+                                    else "typed", "idle" if self.screen == IDLE else "not-idle"))
+                self.staged = ""
+            return (0, head)
+        return (1, head + "unknown command\n")
+
+
+class Clock:
+    now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, s):
+        Clock.now += s
+
+
+com8_seat.time = ha.time = Clock()
+far, said = FarTmux(), []
+facts = dict(os="Linux", login_shell="/bin/bash", home="/h", xdg="",
+             tmux_bin="/x/tmux", claude_bin="/x/claude")
+okd = ha.spawn("u@h", "lathe", facts, "far", ssh=far.ssh, say=said.append, ask=None)
+assert ("enter", "trust-no") not in far.events, far.events
+assert not [e for e in far.events if e[0] == "typed-into-blank"], far.events
+assert far.events.count(("rename", "idle")) == 1, far.events
+assert far.events.index(("enter", "trust-yes")) < far.events.index(("rename", "idle")), far.events
+assert not [e for e in far.events if e[0] == "typed"], far.events
+assert okd is True and any("registered" in s and "NOT" not in s for s in said), said
+blind = [c for c in ha.spawn_cmds("lathe", facts) if c.endswith("Enter") and "claude" not in c]
+assert not blind, blind
+print("OK")
+PY
+r="$(python3 "$RS/remote_spawn.py" "$HERE/lib" 2>&1 | tail -1)"
+rm -rf "$RS"
+if [ "$r" = "OK" ]; then
+  ok "trust answered with the affirmative row; /rename only on the idle composer; nothing typed into a blank pane; no blind Enter in spawn_cmds"
+else bad "remote spawn (got: $r)"; fi
+
 echo
 echo "pass=$pass fail=$fail"
 [ "$fail" -eq 0 ]

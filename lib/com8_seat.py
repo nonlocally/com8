@@ -51,6 +51,10 @@ _PERM_ASK = re.compile(
     r"held message|deliver this message|drop it and tell the sender", re.I)
 _AFFORD = re.compile(r"❯\s*\d|›\s*\d|^\s*\d[.)]\s|\(y/n\)|\[y/n\]|\by/n\b"
                      r"|^\s*[❯›]\s+\S", re.M)  # bare highlighted row (unnumbered menus)
+# Claude Code's workspace-trust dialog ("Yes, I trust this folder" / "No, exit").
+# Its highlighted default row is "No, exit" (2.1.318, measured 2026-11-05), so
+# the bare Enter that submits any typed text exits the CLI instead.
+_TRUST_ASK = re.compile(r"trust this folder", re.I)
 # Choosing a menu row. An "allow" must be the plain, one-shot affirmative: never a row that would
 # widen permissions beyond this one action. Claude Code 2.1.278 offers "Yes, and switch to accept
 # edits (auto-approve file edits ... for this session)" as option 2 of a Write prompt; the older
@@ -198,13 +202,25 @@ class SeatDriver:
     def state(self, seat):
         if not self._pane_exists(seat):
             return "dead"
-        cmd = self._field(seat, "#{pane_current_command}")
+        dead, _, cmd = self._field(
+            seat, "#{pane_dead}\t#{pane_current_command}").partition("\t")
+        if dead == "1":
+            # remain-on-exit kept the pane after its program exited so the
+            # last screen stays readable; tmux then reports the shell as its
+            # command, which would read as an idle shell seat. It is not one.
+            return "dead"
         bottom = "\n".join(self._capture(seat, 14))
         if _PERM_ASK.search(bottom) and _AFFORD.search(bottom):
             return "approval"
         is_agent = self._cmd_is_agent(cmd)
         if _BUSY_HINT.search(bottom):
             return "busy"
+        if not bottom.strip():
+            # Nothing drawn yet: claude for its first second (the command is
+            # already its version string), `zsh -c claude` before the exec.
+            # No prompt has been shown, so this cannot be idle, and anything
+            # typed now lands in a buffer nothing has read.
+            return "booting"
         if is_agent:
             # Agent CLI: the title spinner is the one signal that survives
             # answer-streaming. Animation => busy; frozen frame => idle.
@@ -220,6 +236,12 @@ class SeatDriver:
         if cmd in _SHELLS or cmd in _TRANSPORTS or cmd in ("", "tmux"):
             return "busy" if self._screen_changing(seat) else "idle"
         return "busy"  # some foreground process holds the pane
+
+    def is_trust_prompt(self, seat):
+        """True when Claude Code's workspace-trust dialog is on screen. Its
+        default row exits the CLI, so callers answer it through respond()
+        — the affirmative row, driven and verified — never with an Enter."""
+        return bool(_TRUST_ASK.search("\n".join(self._capture(seat, 16))))
 
     def _title(self, seat):
         return self._field(seat, "#{pane_title}")
@@ -278,6 +300,10 @@ class SeatDriver:
     def send(self, seat, text):
         if not self._pane_exists(seat):
             raise self._missing(seat)
+        if self._field(seat, "#{pane_dead}") == "1":
+            # tmux accepts keys for a kept, exited pane and drops them
+            raise SeatError("seat %s is dead (its program exited); nothing to type into"
+                            % seat)
         # Flatten newlines/tabs to spaces and strip control bytes, so the
         # payload cannot drive the target's terminal.
         msg = text.replace("\n", " ").replace("\r", " ").replace("\t", " ")
@@ -337,6 +363,12 @@ class SeatDriver:
         args += [cmd]  # the command the window runs
         r = self._tmux(*args, check=True)
         seat = r.stdout.strip()
+        # Keep the pane when its program exits — state "dead", last screen
+        # under seat read — instead of a window that silently vanishes: a
+        # spawn that died on a dialog left no evidence at all. New windows do
+        # not inherit the option, so set it on this one only and leave an
+        # ambient server's own windows alone.
+        self._tmux("set-option", "-w", "-t", seat, "remain-on-exit", "on")
         return {"ok": True, "seat": seat, "tmux_server": self.server()}
 
     def read(self, seat, lines=40, raw=False):
@@ -369,6 +401,11 @@ class SeatDriver:
             if not sawbusy and time.time() - t0 > startwin:
                 return {"ok": True, "state": st, "seat": seat, "sawbusy": False,
                         "tail": "\n".join(self._capture(seat, 12))}
+            if st == "booting":
+                # nothing rendered (or a startup banner): not settled, so a
+                # quiet tick here must not end the wait as "idle"
+                time.sleep(0.5)
+                continue
             quiet += 1
             if sawbusy and quiet >= 2:
                 return {"ok": True, "state": "idle", "seat": seat, "sawbusy": True,
@@ -532,15 +569,61 @@ class SeatDriver:
 
     def ls(self):
         r = self._tmux("list-panes", "-a", "-F",
-                       "#{pane_id}\t#{pane_current_command}\t#{pane_title}")
+                       "#{pane_id}\t#{pane_current_command}\t#{pane_title}\t#{pane_dead}")
         seats = []
         if r.returncode == 0:
             for ln in r.stdout.splitlines():
                 parts = ln.split("\t")
                 if len(parts) >= 3:
                     seats.append({"seat": parts[0], "cmd": parts[1],
-                                  "title": parts[2]})
+                                  "title": parts[2],
+                                  # a kept pane whose program exited: readable,
+                                  # not a live seat
+                                  "dead": len(parts) > 3 and parts[3] == "1"})
         return {"ok": True, "seats": seats, "tmux_server": self.server()}
+
+
+def rename_when_ready(drv, seat, name, boot_wait=25, log=None):
+    """Wait for a freshly spawned claude's REAL idle composer, then /rename it.
+
+    Booting in a workspace not yet trusted shows the trust dialog, whose
+    default row exits the CLI; /rename's submit is a bare Enter. Typed there,
+    the agent died within a second and its window vanished. So: answer that
+    dialog through respond("allow") — the affirmative row, driven and
+    verified, never an Enter — and type nothing while the pane is blank
+    (booting) or holds any other dialog. Returns {"ok", "state", "trusted"},
+    plus "err" when nothing was sent, so the caller can report why."""
+    log = log or (lambda *a: None)
+    t0 = time.time()
+    st, trusted = None, False
+    while True:
+        try:
+            st = drv.state(seat)
+        except SeatError as e:
+            return {"ok": False, "state": "unknown", "trusted": trusted, "err": str(e)}
+        if st == "idle":
+            break
+        if st == "dead":
+            return {"ok": False, "state": st, "trusted": trusted,
+                    "err": "seat %s died while booting" % seat}
+        if st == "approval" and not trusted and drv.is_trust_prompt(seat):
+            r = drv.respond(seat, "allow")
+            trusted = bool(r.get("ok"))
+            log("trust dialog on", seat,
+                "accepted" if trusted else "not answered: %s" % r.get("err"))
+        if time.time() - t0 >= boot_wait:
+            return {"ok": False, "state": st, "trusted": trusted,
+                    "err": "no idle prompt within %ss (seat %s is %s); /rename not sent"
+                           % (boot_wait, seat, st)}
+        time.sleep(0.5)
+    try:
+        r = drv.send(seat, "/rename %s" % name)
+    except SeatError as e:
+        return {"ok": False, "state": st, "trusted": trusted, "err": str(e)}
+    out = {"ok": bool(r.get("ok")), "state": st, "trusted": trusted}
+    if not r.get("ok"):
+        out["err"] = r.get("err") or "/rename staged but not submitted"
+    return out
 
 
 def adopt_pane(name, seat, sessions_dir, *, socket_path=None, timeout=6):

@@ -94,6 +94,24 @@ sleep 0.5
 st="$("$COMM" com8 seat state "$SEAT" 2>/dev/null)"
 if [ "$st" = "dead" ]; then ok "killed seat reads dead"; else bad "dead detection (got $st)"; fi
 
+echo "== a seat whose program exits stays readable as a DEAD pane"
+# remain-on-exit keeps the window: the corpse is evidence (seat read shows the
+# screen with tmux's exit notice on its bottom row), never a live seat — state
+# and ls say dead, send refuses instead of dropping keys into it.
+DSEAT="$("$COMM" com8 seat spawn 'bash -c "echo DEAD_SEAT_MARKER_4471; exit 3"' --name doomed 2>/dev/null)"
+sleep 1.2
+dst="$("$COMM" com8 seat state "$DSEAT" 2>/dev/null)"
+if [ "$dst" = "dead" ]; then ok "an exited program's kept pane reads dead"; else bad "kept dead pane state (got $dst)"; fi
+if "$COMM" com8 seat ls 2>/dev/null | grep "^$DSEAT " | grep -q "dead"; then ok "seat ls shows the kept pane as dead"
+else bad "seat ls kept-pane marking ($("$COMM" com8 seat ls 2>/dev/null | grep "^$DSEAT " || echo missing))"; fi
+dread="$("$COMM" com8 seat read "$DSEAT" 2>&1)"
+if printf '%s' "$dread" | grep -qi 'pane is dead'; then ok "seat read shows the kept pane with its exit notice"
+else bad "dead pane not readable (got: $(printf '%s' "$dread" | tail -1))"; fi
+dsend="$("$COMM" com8 seat send "$DSEAT" 'echo never' 2>&1)"
+if printf '%s' "$dsend" | grep -qi 'dead'; then ok "seat send refuses the dead pane"
+else bad "seat send into a dead pane did not refuse (got: $dsend)"; fi
+"$COMM" com8 seat kill "$DSEAT" >/dev/null 2>&1
+
 echo "== the surface is measured, never asserted"
 "$COMM" com8 claim surf >/dev/null 2>&1
 S2="$("$COMM" com8 seat spawn 'bash --norc --noprofile' 2>/dev/null)"
@@ -126,10 +144,13 @@ echo "== the seat relay: opt-in per binding is the boundary"
 # "node" — the reviewer's spoof. pane_current_command reads "node", so any
 # surface-sniffing gate is fooled; only the opt-in stops it.
 mkdir -p "$T/fakebin"; cp "$(command -v bash)" "$T/fakebin/node"
-ASEAT="$("$COMM" com8 seat spawn 'node -e "process.stdin.resume()"' --name relayagent 2>/dev/null)"
+# The stand-in agents print one line first: a real agent CLI shows its
+# composer when idle, and a pane that has rendered NOTHING reads booting
+# (nothing may be typed into a program that has not drawn a prompt).
+ASEAT="$("$COMM" com8 seat spawn 'node -e "console.log(42); process.stdin.resume()"' --name relayagent 2>/dev/null)"
 BSEAT="$("$COMM" com8 seat spawn 'bash --norc --noprofile' --name relayshell 2>/dev/null)"
 CSEAT="$("$COMM" com8 seat spawn 'node -i' --name relaybooting 2>/dev/null)"
-QSEAT="$("$COMM" com8 seat spawn 'node -e "process.stdin.resume()"' --name relayquiet 2>/dev/null)"
+QSEAT="$("$COMM" com8 seat spawn 'node -e "console.log(42); process.stdin.resume()"' --name relayquiet 2>/dev/null)"
 SSEAT="$("$COMM" com8 seat spawn "$T/fakebin/node --norc --noprofile" --name relayspoof 2>/dev/null)"
 sleep 2
 # opted IN: agent, shell, booting-agent
