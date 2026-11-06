@@ -604,7 +604,14 @@ The conversation ends 24 hours after the initiating send. Replies retain that
 deadline. Leaving the bus or losing its access closes affected conversations
 permanently; rejoining does not revive them. The worker retains unpublished
 adapters only through their outstanding reply windows and batches their inbox
-polling by device. Per-agent queue order is preserved.
+polling by device. Per-agent queue order is preserved: a native session is
+leased one message at a time, and the next is leased only after the worker
+acknowledges it. A service registration may be leased a batch of up to 32
+queued messages at once, in queue order, each with its own 60-second lease; the
+worker journals them before acknowledging and calls the endpoint for up to eight
+at a time, so a service must not depend on the arrival order of distinct
+messages. While a poll leases service messages the worker polls again at once;
+an idle worker polls every two seconds.
 
 The hub stores messages and receipts in SQLite. Queues are bounded to 256 pending
 messages per recipient, each at most 32 KiB, expiring after 24 hours. The broker
@@ -639,7 +646,9 @@ It is an observation from the participating installation, not remote attestation
 ## Recovery and verification
 
 `communicate bus status --json` reports worker errors and the selected hub.
-`bus receipt ID` reads a message outcome. `bus stop` cooperatively stops this
+`bus receipt ID` reads a message outcome; `bus export AGENT --since T` prints every
+retained receipt of one of this device's registrations as JSON lines, for a record
+that must outlive the hub's seven-day retention. `bus stop` cooperatively stops this
 machine's worker and owned broker while retaining registration state. A successful
 `bus send` or `bus reply` resumes the worker for its reply windows; `bus register`
 also resumes published/joined agents. Send and reply print the hub's receipt as soon
