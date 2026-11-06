@@ -51,10 +51,18 @@ _PERM_ASK = re.compile(
     r"held message|deliver this message|drop it and tell the sender", re.I)
 _AFFORD = re.compile(r"❯\s*\d|›\s*\d|^\s*\d[.)]\s|\(y/n\)|\[y/n\]|\by/n\b"
                      r"|^\s*[❯›]\s+\S", re.M)  # bare highlighted row (unnumbered menus)
-# Claude Code's workspace-trust dialog ("Yes, I trust this folder" / "No, exit").
-# Its highlighted default row is "No, exit" (2.1.318, measured 2026-11-05), so
-# the bare Enter that submits any typed text exits the CLI instead.
-_TRUST_ASK = re.compile(r"trust this folder", re.I)
+# Claude Code's workspace-trust dialog, recognized by its OWN rows ("Yes, I
+# trust this folder" with "No, exit" — or "No, continue without these
+# permissions"), never by those words elsewhere on screen (a command preview
+# can quote them). Its highlighted default row is "No, exit" (2.1.318,
+# measured 2026-11-05), so the bare Enter that submits any typed text exits
+# the CLI. When the folder pre-approves tool permissions (.claude/settings.json
+# allow rules, added directories, a headersHelper) the dialog says so, and the
+# same Yes also enables every one of them.
+_TRUST_YES = re.compile(r"^\s*[❯›]?\s*Yes, I trust this folder\s*$", re.M)
+_TRUST_NO = re.compile(r"^\s*[❯›]?\s*No, (exit|continue without these permissions)\s*$", re.M)
+_TRUST_CONTINUE = re.compile(r"^\s*[❯›]?\s*No, continue without these permissions\s*$", re.M)
+_TRUST_WIDEN = re.compile(r"pre-approves \d+ tool permissions?|will apply without asking", re.I)
 # Choosing a menu row. An "allow" must be the plain, one-shot affirmative: never a row that would
 # widen permissions beyond this one action. Claude Code 2.1.278 offers "Yes, and switch to accept
 # edits (auto-approve file edits ... for this session)" as option 2 of a Write prompt; the older
@@ -74,6 +82,19 @@ def choose_option(menu, decision="allow"):
         return next((r for r in menu if _NEG.search(r["text"]) and not _AFF.search(r["text"])), None)
     return next((r for r in menu if _AFF.search(r["text"]) and not _STICKY.search(r["text"])
                  and not _NEG.search(r["text"])), None)
+
+
+def trust_dialog(text):
+    """Pure: None when the workspace-trust dialog is not on screen; "trust"
+    for the plain one (Yes / No, exit); "widen" when the folder pre-approves
+    tool permissions and the only other row exits; "widen-continue" when that
+    dialog offers "No, continue without these permissions", the row that
+    keeps the seat without enabling anything."""
+    if not (_TRUST_YES.search(text) and _TRUST_NO.search(text)):
+        return None
+    if _TRUST_CONTINUE.search(text):
+        return "widen-continue"
+    return "widen" if _TRUST_WIDEN.search(text) else "trust"
 # Secret shapes to mask on read unless --raw.
 _SECRETS = [
     # Distinctive credential prefixes — matched anywhere (a leading word char,
@@ -237,11 +258,12 @@ class SeatDriver:
             return "busy" if self._screen_changing(seat) else "idle"
         return "busy"  # some foreground process holds the pane
 
-    def is_trust_prompt(self, seat):
-        """True when Claude Code's workspace-trust dialog is on screen. Its
-        default row exits the CLI, so callers answer it through respond()
-        — the affirmative row, driven and verified — never with an Enter."""
-        return bool(_TRUST_ASK.search("\n".join(self._capture(seat, 16))))
+    def trust_prompt(self, seat):
+        """Which workspace-trust dialog is on screen, by its own rows: None,
+        "trust", "widen" or "widen-continue" (see trust_dialog). Its default
+        row exits the CLI, so callers answer it through respond() — a driven,
+        verified row — never with an Enter."""
+        return trust_dialog("\n".join(self._capture(seat, 20)))
 
     def _title(self, seat):
         return self._field(seat, "#{pane_title}")
@@ -292,9 +314,20 @@ class SeatDriver:
         except SeatError as e:
             st = "dead"
             self.log("measure failed for", seat, e)
-        return {"driver": "tmux", "handle": seat, "state": st,
-                "measured_at": time.time(),
-                "tmux_server": self.server(observe=st not in ("dead", "unknown"))}
+        out = {"driver": "tmux", "handle": seat, "state": st,
+               "measured_at": time.time(),
+               "tmux_server": self.server(observe=st not in ("dead", "unknown"))}
+        if st == "dead":
+            # A remain-on-exit corpse (the pane is still there, its program
+            # exited) is reapable with seat kill; a pane that is gone is not.
+            out["kept"] = self._kept(seat)
+        return out
+
+    def _kept(self, seat):
+        try:
+            return self._pane_exists(seat) and self._field(seat, "#{pane_dead}") == "1"
+        except SeatError:
+            return False
 
     # -- send discipline -------------------------------------------------------
     def send(self, seat, text):
@@ -442,6 +475,15 @@ class SeatDriver:
             return self._drive_menu(seat, menu, tgt, "deny")
         if not menu:
             return {"ok": False, "err": "no menu block found on screen"}
+        if trust_dialog("\n".join(self._capture(seat, 20))) in ("widen", "widen-continue"):
+            # The workspace-trust Yes of a folder that pre-approves tool
+            # permissions enables them all: the widening row this method
+            # promises never to pick.
+            return {"ok": False,
+                    "err": "'Yes, I trust this folder' here also enables the folder's "
+                           "pre-approved tool permissions — refusing to widen them "
+                           "(respond deny keeps the seat without them when the dialog "
+                           "offers that; otherwise answer in the pane by hand)"}
         target = choose_option(menu, "allow")
         if target is None:
             return {"ok": False,
@@ -575,11 +617,13 @@ class SeatDriver:
             for ln in r.stdout.splitlines():
                 parts = ln.split("\t")
                 if len(parts) >= 3:
-                    seats.append({"seat": parts[0], "cmd": parts[1],
-                                  "title": parts[2],
-                                  # a kept pane whose program exited: readable,
-                                  # not a live seat
-                                  "dead": len(parts) > 3 and parts[3] == "1"})
+                    row = {"seat": parts[0], "cmd": parts[1], "title": parts[2],
+                           "dead": len(parts) > 3 and parts[3] == "1"}
+                    if row["dead"]:
+                        # a kept pane whose program exited: readable, not a
+                        # live seat; restart reaps it, seat kill clears it
+                        row["hint"] = "program exited; com8 seat kill %s clears it" % parts[0]
+                    seats.append(row)
         return {"ok": True, "seats": seats, "tmux_server": self.server()}
 
 
@@ -588,38 +632,54 @@ def rename_when_ready(drv, seat, name, boot_wait=25, log=None):
 
     Booting in a workspace not yet trusted shows the trust dialog, whose
     default row exits the CLI; /rename's submit is a bare Enter. Typed there,
-    the agent died within a second and its window vanished. So: answer that
-    dialog through respond("allow") — the affirmative row, driven and
+    the agent died within a second and its window vanished. So: answer the
+    plain dialog through respond("allow") — the affirmative row, driven and
     verified, never an Enter — and type nothing while the pane is blank
-    (booting) or holds any other dialog. Returns {"ok", "state", "trusted"},
-    plus "err" when nothing was sent, so the caller can report why."""
+    (booting) or holds any other dialog. A folder that pre-approves tool
+    permissions makes that same Yes enable them all: when the dialog offers
+    "No, continue without these permissions" that row is chosen (the seat
+    lives, nothing is widened); when its only other row exits, the dialog is
+    left to a human and reported. Returns {"ok", "state", "trusted"}, plus
+    "err" when nothing was sent, so the caller can report why; tmux or the
+    ssh carrying it going quiet is reported the same way, never raised."""
     log = log or (lambda *a: None)
     t0 = time.time()
     st, trusted = None, False
-    while True:
-        try:
-            st = drv.state(seat)
-        except SeatError as e:
-            return {"ok": False, "state": "unknown", "trusted": trusted, "err": str(e)}
-        if st == "idle":
-            break
-        if st == "dead":
-            return {"ok": False, "state": st, "trusted": trusted,
-                    "err": "seat %s died while booting" % seat}
-        if st == "approval" and not trusted and drv.is_trust_prompt(seat):
-            r = drv.respond(seat, "allow")
-            trusted = bool(r.get("ok"))
-            log("trust dialog on", seat,
-                "accepted" if trusted else "not answered: %s" % r.get("err"))
-        if time.time() - t0 >= boot_wait:
-            return {"ok": False, "state": st, "trusted": trusted,
-                    "err": "no idle prompt within %ss (seat %s is %s); /rename not sent"
-                           % (boot_wait, seat, st)}
-        time.sleep(0.5)
     try:
+        while True:
+            st = drv.state(seat)
+            if st == "idle":
+                break
+            if st == "dead":
+                return {"ok": False, "state": st, "trusted": trusted,
+                        "err": "seat %s died while booting" % seat}
+            if st == "approval" and not trusted:
+                kind = drv.trust_prompt(seat)
+                if kind == "widen":
+                    return {"ok": False, "state": st, "trusted": False,
+                            "err": "the trust dialog in seat %s says the folder pre-approves "
+                                   "tool permissions (.claude/settings.json) and its Yes would "
+                                   "enable them all; left for a human — answer it in the pane, "
+                                   "or drop the allow rules and restart" % seat}
+                if kind:
+                    r = drv.respond(seat, "allow" if kind == "trust" else "deny")
+                    trusted = bool(r.get("ok"))
+                    log("trust dialog on", seat,
+                        ("accepted" if kind == "trust"
+                         else "answered: continue without the pre-approved permissions")
+                        if trusted else "not answered: %s" % r.get("err"))
+            if time.time() - t0 >= boot_wait:
+                return {"ok": False, "state": st, "trusted": trusted,
+                        "err": "no idle prompt within %ss (seat %s is %s); /rename not sent"
+                               % (boot_wait, seat, st)}
+            time.sleep(0.5)
         r = drv.send(seat, "/rename %s" % name)
+    except SeatUnavailable as e:
+        # tmux, or the ssh carrying it, stopped answering: nothing is known
+        # about the seat — not that it died, not that it was renamed.
+        return {"ok": False, "state": "unknown", "trusted": trusted, "err": str(e)}
     except SeatError as e:
-        return {"ok": False, "state": st, "trusted": trusted, "err": str(e)}
+        return {"ok": False, "state": st or "unknown", "trusted": trusted, "err": str(e)}
     out = {"ok": bool(r.get("ok")), "state": st, "trusted": trusted}
     if not r.get("ok"):
         out["err"] = r.get("err") or "/rename staged but not submitted"

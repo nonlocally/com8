@@ -102,7 +102,7 @@ DSEAT="$("$COMM" com8 seat spawn 'bash -c "echo DEAD_SEAT_MARKER_4471; exit 3"' 
 sleep 1.2
 dst="$("$COMM" com8 seat state "$DSEAT" 2>/dev/null)"
 if [ "$dst" = "dead" ]; then ok "an exited program's kept pane reads dead"; else bad "kept dead pane state (got $dst)"; fi
-if "$COMM" com8 seat ls 2>/dev/null | grep "^$DSEAT " | grep -q "dead"; then ok "seat ls shows the kept pane as dead"
+if "$COMM" com8 seat ls 2>/dev/null | grep "^$DSEAT " | grep "dead" | grep -q "seat kill $DSEAT"; then ok "seat ls shows the kept pane as dead and how to clear it"
 else bad "seat ls kept-pane marking ($("$COMM" com8 seat ls 2>/dev/null | grep "^$DSEAT " || echo missing))"; fi
 dread="$("$COMM" com8 seat read "$DSEAT" 2>&1)"
 if printf '%s' "$dread" | grep -qi 'pane is dead'; then ok "seat read shows the kept pane with its exit notice"

@@ -107,6 +107,19 @@ if res.get("ok") and not r.killed:
 else:
     bad("dead seat: res=%s killed=%s" % (res, r.killed))
 
+# 3b. A seat measured dead but KEPT (remain-on-exit held the exited program's
+#     pane) is this identity's own corpse: restart reaps it once the new seat
+#     is bound, so dead windows do not pile up.
+r = Rig({"a": ident("%1")},
+        surfaces={"%1": {"driver": "tmux", "handle": "%1", "state": "dead",
+                         "kept": True, "measured_at": 1.0}})
+res = r._do_restart("a")
+if res.get("ok") and r.killed == ["%1"] and res.get("previous_killed") is True \
+        and r.identities["a"]["seat"] == "%99":
+    ok("a kept dead pane is reaped on restart, after the new seat is bound")
+else:
+    bad("kept dead pane: res=%s killed=%s" % (res, r.killed))
+
 # 4. UNKNOWN is not a licence to kill: an unmeasurable seat (tmux timed out) is
 #    left alone. Never act on what you have not measured.
 r = Rig({"a": ident("%1")},
@@ -252,25 +265,30 @@ import com8_seat   # noqa: E402
 
 class Seat:
     """A scripted seat driver: state() reports `states` in order (the last
-    repeats). With trust=True the approval on screen is the trust dialog,
-    and answering it boots on to an idle composer."""
+    repeats). `trust` is what trust_prompt() reports for the approval on
+    screen (None, "trust", "widen", "widen-continue"); the answer that keeps
+    the seat boots it on to an idle composer."""
 
-    def __init__(self, states, trust=False):
+    def __init__(self, states, trust=None, raise_in=None):
         self.states, self.trust, self.calls = list(states), trust, []
+        self.raise_in = raise_in
 
     def state(self, seat):
         st = self.states.pop(0) if len(self.states) > 1 else self.states[0]
         self.calls.append(("state", st))
         return st
 
-    def is_trust_prompt(self, seat):
+    def trust_prompt(self, seat):
+        if self.raise_in == "trust_prompt":
+            raise com8_seat.SeatUnavailable("tmux did not answer: timed out")
         return self.trust
 
     def respond(self, seat, decision="allow"):
         self.calls.append(("respond", decision))
-        if self.trust and decision == "allow":
-            self.trust, self.states = False, ["booting", "idle"]
-            return {"ok": True, "responded": "allow: Yes, I trust this folder"}
+        keeps = {"trust": "allow", "widen-continue": "deny"}.get(self.trust)
+        if keeps and decision == keeps:
+            self.trust, self.states = None, ["booting", "idle"]
+            return {"ok": True, "responded": decision}
         return {"ok": False, "err": "no clearly-affirmative option"}
 
     def send(self, seat, text):
@@ -331,8 +349,8 @@ class Clock:
         self.now += s
 
 
-def spawn_with(states, trust=False):
-    drv = Seat(states, trust=trust)
+def spawn_with(states, trust=None, raise_in=None):
+    drv = Seat(states, trust=trust, raise_in=raise_in)
     sp = Spawner(drv)
     saved = com8.time, com8_seat.time
     com8.time = com8_seat.time = Clock()
@@ -344,7 +362,7 @@ def spawn_with(states, trust=False):
 
 
 # blank -> trust dialog -> (answered) -> blank -> idle: ONE /rename, typed into idle
-res, drv, sends = spawn_with(["booting", "booting", "approval"], trust=True)
+res, drv, sends = spawn_with(["booting", "booting", "approval"], trust="trust")
 responded = [c for c in drv.calls if c[0] == "respond"]
 if (res.get("ok") and res.get("adopted") is True
         and responded == [("respond", "allow")]
@@ -369,6 +387,37 @@ if (res.get("ok") and res.get("adopted") is False and not sends
     ok("a non-trust dialog is left alone: no /rename, and adopted:false says why")
 else:
     bad("foreign dialog: res=%s calls=%s" % (res, drv.calls))
+
+# the dialog that offers to continue WITHOUT the folder's pre-approved
+# permissions: that row is chosen (deny), then /rename on idle
+res, drv, sends = spawn_with(["approval"], trust="widen-continue")
+responded = [c for c in drv.calls if c[0] == "respond"]
+if (res.get("adopted") is True and responded == [("respond", "deny")]
+        and sends == [("send", "/rename w", "idle")]):
+    ok("'No, continue without these permissions' is chosen; /rename follows on idle")
+else:
+    bad("continue-without adoption: res=%s calls=%s" % (res, drv.calls))
+
+# the dialog whose Yes would enable the folder's pre-approved permissions and
+# whose only other row exits: left to a human, nothing widened, reason given
+res, drv, sends = spawn_with(["approval"], trust="widen")
+if (res.get("ok") and res.get("adopted") is False and not sends
+        and not [c for c in drv.calls if c[0] == "respond"]
+        and "pre-approve" in (res.get("adopt_err") or "")):
+    ok("the pre-approval dialog is left to a human: no answer, no /rename, adopt_err says why")
+else:
+    bad("pre-approval dialog: res=%s calls=%s" % (res, drv.calls))
+
+# tmux (or the ssh carrying it) stops answering mid-dialog: reported, not raised
+try:
+    res, drv, sends = spawn_with(["approval"], trust="trust", raise_in="trust_prompt")
+except Exception as e:   # noqa: BLE001
+    res, sends = {"raised": repr(e)}, []
+if (res.get("ok") and res.get("adopted") is False and not sends
+        and "did not answer" in (res.get("adopt_err") or "")):
+    ok("an unreachable tmux mid-dialog leaves adopted:false with the reason, no traceback")
+else:
+    bad("unreachable tmux mid-dialog: res=%s" % (res,))
 
 # a pane that never renders, or dies while booting: nothing typed
 for states, what in ((["booting"], "a pane that never renders"),

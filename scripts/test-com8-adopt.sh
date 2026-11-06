@@ -698,9 +698,12 @@ else bad "empty com8_self guard (got: $r)"; fi
 echo "== remote spawn: the trust dialog is answered; /rename waits for an idle prompt"
 # Claude Code 2.1.318 highlights "No, exit" on its workspace-trust dialog, so
 # the old blind `send-keys Enter` exited the far claude. The far tmux here
-# answers over a fake ssh (with banner noise before every reply): session
-# com8-lathe is pane %3, blank for two reads, then the dialog, then — once
-# the affirmative row is confirmed — the idle composer.
+# answers over a fake ssh shaped like _run_ssh's merged output — stdout (a
+# login notice, the sentinel, the answer, the end mark) FOLLOWED by the ssh
+# client's stderr (a known-hosts warning): session com8-lathe is pane %3,
+# blank for two reads, then the dialog, then — once the affirmative row is
+# confirmed — the idle composer. Two more far devices: one whose ssh times
+# out mid-dialog, one where no session came up.
 RS="$(mktemp -d /tmp/com8-adopt-spawn.XXXXXX)"
 cat > "$RS/remote_spawn.py" <<'PY'
 import re
@@ -723,10 +726,21 @@ VALS = {"pane_id": "%3", "pane_dead": "0", "pane_current_command": "2.1.318",
         "pane_title": "✳ Claude Code", "pane_in_mode": "0"}
 
 
+MARK = ha._SEAT_MARK
+
+
 class FarTmux:
-    def __init__(self):
+    def __init__(self, timeout_at=None, no_session=False):
         self.screen, self.reads, self.staged = "", 0, ""
         self.events, self.cmds = [], []
+        self.timeout_at, self.no_session = timeout_at, no_session
+
+    def answer(self, body, ok=True):
+        # stdout first (login notice, sentinel, body, end mark), then stderr
+        return (0 if ok else 1,
+                "Last login: today from somewhere\n" + MARK + "\n" + body
+                + MARK + ("-ok" if ok else "-err") + "\n"
+                + "Warning: Permanently added 'far' (ED25519) to the list of known hosts.\n")
 
     def shown(self):
         if self.staged and self.screen == IDLE:
@@ -736,20 +750,24 @@ class FarTmux:
     def ssh(self, addr, cmd, timeout=60):
         self.cmds.append(cmd)
         toks = shlex.split(cmd)
-        if "__com8_seat__" not in cmd:       # provisioning lines, the sidecar check
+        if MARK not in cmd:                  # provisioning lines, the sidecar check
             if "python3" in toks:
                 return (0, "REG 4242\n" if ("rename", "idle") in self.events else "")
             return (0, "")
-        argv = [t for t in toks[toks.index("/x/tmux") + 1:] if t != "2>/dev/null"]
-        head = "Banner: authorized use only\n__com8_seat__\n"
+        argv = toks[toks.index("/x/tmux") + 1:]
+        argv = argv[:min(argv.index(t) for t in ("2>/dev/null", "&&", "||") if t in argv)]
+        if self.no_session:
+            return self.answer("", ok=False)
         if argv[0] == "display":
-            return (0, head + re.sub(r"#\{(\w+)\}",
-                                     lambda m: VALS.get(m.group(1), ""), argv[-1]) + "\n")
+            return self.answer(re.sub(r"#\{(\w+)\}",
+                                      lambda m: VALS.get(m.group(1), ""), argv[-1]) + "\n")
         if argv[0] == "capture-pane":
             self.reads += 1
+            if self.reads == self.timeout_at:
+                return (124, "ssh timed out after 60s (device hung or unreachable)")
             if self.reads == 3 and self.screen == "":
                 self.screen = TRUST
-            return (0, head + self.shown() + "\n")
+            return self.answer(self.shown() + "\n")
         if argv[0] == "send-keys":
             keys = argv[argv.index("-t") + 2:]
             if self.screen == "":
@@ -768,8 +786,8 @@ class FarTmux:
                 self.events.append(("rename" if self.staged.startswith("/rename lathe")
                                     else "typed", "idle" if self.screen == IDLE else "not-idle"))
                 self.staged = ""
-            return (0, head)
-        return (1, head + "unknown command\n")
+            return self.answer("")
+        return self.answer("unknown command\n", ok=False)
 
 
 class Clock:
@@ -798,12 +816,25 @@ assert not [e for e in far.events if e[0] == "typed"], far.events
 assert okd is True and any("registered" in s and "NOT" not in s for s in said), said
 blind = [c for c in ha.spawn_cmds("lathe", facts) if c.endswith("Enter") and "claude" not in c]
 assert not blind, blind
+
+# ssh stops answering while the dialog is up: an honest NOT REGISTERED line, no traceback
+far2, said2 = FarTmux(timeout_at=4), []
+okd2 = ha.spawn("u@h", "lathe", facts, "far", ssh=far2.ssh, say=said2.append, ask=None)
+assert okd2 is False and any("NOT REGISTERED" in s and "did not reach tmux" in s
+                             for s in said2), said2
+assert not [e for e in far2.events if e[0] == "rename"], far2.events
+
+# no session came up at all: reported, nothing typed anywhere
+far3, said3 = FarTmux(no_session=True), []
+okd3 = ha.spawn("u@h", "lathe", facts, "far", ssh=far3.ssh, say=said3.append, ask=None)
+assert okd3 is False and any("no tmux pane came up" in s for s in said3), said3
+assert not far3.events, far3.events
 print("OK")
 PY
 r="$(python3 "$RS/remote_spawn.py" "$HERE/lib" 2>&1 | tail -1)"
 rm -rf "$RS"
 if [ "$r" = "OK" ]; then
-  ok "trust answered with the affirmative row; /rename only on the idle composer; nothing typed into a blank pane; no blind Enter in spawn_cmds"
+  ok "trust answered with the affirmative row; /rename only on the idle composer; nothing typed into a blank pane; ssh stderr after the answer survives; a timeout and a missing session are reported"
 else bad "remote spawn (got: $r)"; fi
 
 echo

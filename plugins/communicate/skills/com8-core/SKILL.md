@@ -58,8 +58,9 @@ alone does not start it, and neither action joins a remote bus.
    reported `route`, `seat` and `surface`. A usable native route is live and
    unambiguous; `ok:true` from spawning alone is insufficient. The spawn answers
    Claude Code's workspace-trust dialog itself and types `/rename` only into an
-   idle prompt; if adoption is incomplete, `adopt_err` says why — inspect that
-   returned seat for startup or login prompts.
+   idle prompt; a folder that pre-approves tool permissions is left for a human
+   (nothing is widened). If adoption is incomplete, `adopt_err` says why —
+   inspect that returned seat for startup, trust or login prompts.
    Resolve only actions already authorized; do not substitute another session
    or automatically enable keyboard relay. Codex spawning does not bind
    its durable name to a queue. Establish the exact thread belonging to the

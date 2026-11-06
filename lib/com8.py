@@ -1050,12 +1050,19 @@ class Com8:
         surf = self._measure_surface(old) if old else None
         killable = bool(surf and surf.get("handle") == old
                         and surf.get("state") not in ("dead", "unknown"))
-        if killable:
+        # A kept pane (remain-on-exit) whose program exited is this
+        # identity's own corpse, reaped once the replacement is bound — not
+        # a live pane that may belong to somebody else. "dead" without
+        # "kept" means the pane is gone: nothing to kill, and the id may be
+        # recycled.
+        reap = bool(surf and surf.get("handle") == old
+                    and surf.get("state") == "dead" and surf.get("kept"))
+        if killable or reap:
             with self.mu:
                 others = [n for n, e in self.identities.items()
                           if n != name and e.get("seat") == old]
             if others:
-                killable = False
+                killable = reap = False
                 self.log("restart: seat", old, "is bound to", ",".join(others),
                          "-- refusing to kill another identity's surface")
         # 2. Spawn the replacement FIRST. Kill-before-spawn had no rollback: a
@@ -1069,7 +1076,7 @@ class Com8:
         # 3. Bind the new seat, then retire the old one.
         self._do_seat_bind(sp["seat"], name)
         killed = False
-        if killable:
+        if killable or reap:
             try:
                 killed = bool((self._do_seat("kill", {"seat": old}) or {}).get("ok"))
             except Exception as e:
@@ -3607,8 +3614,13 @@ def _cli_adopt(args):
                                "from_name": "adopt", "timeout": 90})
                     return bool(r.get("ok")), (r.get("reply") or "")
                 steered = any(a.get("step") == "runtime_dir" for a in acts)
-                ha.spawn(addr, spawn_name, facts, fardev, ask=_ask,
-                         steered=steered)
+                try:
+                    ha.spawn(addr, spawn_name, facts, fardev, ask=_ask,
+                             steered=steered)
+                except com8_seat.SeatError as e:
+                    checklist.append(
+                        "spawn of %s did not complete (%s) — inspect tmux session "
+                        "com8-%s on %s" % (spawn_name, e, spawn_name, addr))
 
     if checklist:
         print("adopt: NEEDS YOU —")
@@ -5300,8 +5312,9 @@ def cli_call(argv):
                 print(json.dumps(r))
             else:
                 for s in (r.get("seats") or []):
-                    print("%-7s %-12s %s" % (s["seat"], "dead" if s.get("dead")
-                                             else s["cmd"], s["title"]))
+                    print("%-7s %-12s %s%s" % (
+                        s["seat"], "dead" if s.get("dead") else s["cmd"], s["title"],
+                        "  (%s)" % s["hint"] if s.get("hint") else ""))
             return 0 if r.get("ok") else 1
         if sub == "spawn":
             cwd = winname = dev = None

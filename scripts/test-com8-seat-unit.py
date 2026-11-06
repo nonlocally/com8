@@ -160,6 +160,34 @@ TRUST = (
     " Enter to confirm · Esc to cancel")
 TRUST_YES = TRUST.replace(" ❯ No, exit\n   Yes, I trust this folder",
                           "   No, exit\n ❯ Yes, I trust this folder")
+# The same dialog for a folder that ships .claude/settings.json allow rules
+# (also: added directories, a headersHelper) — captured the same day. Same two
+# rows, but "Yes" also enables every pre-approved permission.
+WIDEN = TRUST.replace(
+    " Claude Code'll be able to read, edit, and execute files here.\n",
+    " Claude Code'll be able to read, edit, and execute files here.\n"
+    "\n"
+    " ⚠ This folder pre-approves 2 tool permissions in .claude/settings.json:\n"
+    "   Bash(ls:*) and Read\n"
+    " These will apply without asking. Only proceed if you trust this configuration.\n")
+WIDEN_YES = WIDEN.replace(" ❯ No, exit\n   Yes, I trust this folder",
+                          "   No, exit\n ❯ Yes, I trust this folder")
+# The shape that offers to keep going WITHOUT the pre-approved permissions.
+WCONT = WIDEN.replace(" ❯ No, exit\n   Yes, I trust this folder",
+                      " ❯ No, continue without these permissions\n   Yes, I trust this folder")
+WCONT_YES = WIDEN.replace(" ❯ No, exit\n   Yes, I trust this folder",
+                          "   No, continue without these permissions\n ❯ Yes, I trust this folder")
+# A permission prompt whose command preview happens to contain the words.
+CMD_PREVIEW = ("\n⏺ Bash(echo 'I trust this folder')\n\n"
+               "─────────────────────────────────────────────────────────\n"
+               " Bash command\n"
+               " echo 'I trust this folder'\n"
+               " Do you want to proceed?\n"
+               " ❯ 1. Yes\n"
+               "   2. Yes, and don't ask again for echo commands in this project\n"
+               "   3. No, and tell Claude what to do differently (esc)\n"
+               "\n"
+               " Esc to cancel · Tab to amend")
 IDLE = ("\n ▐▛███▛█   Claude Code v2.1.318\n"
         "▝▜██████▀  Opus 5.5 with high effort\n"
         " ▝▝   ▝▝   ~/project\n" + "\n" * 24 +
@@ -169,15 +197,24 @@ IDLE = ("\n ▐▛███▛█   Claude Code v2.1.318\n"
         "  ⏵⏵ auto mode on (shift+tab to cycle)")
 
 
+# What the dialog does with Down/Up (the highlight moves) and Enter (the
+# highlighted row is confirmed): "No, exit" ends claude; the Yes rows of the
+# pre-approval variants ALSO enable the folder's permissions.
+_DOWN = {TRUST: TRUST_YES, WIDEN: WIDEN_YES, WCONT: WCONT_YES}
+_UP = {v: k for k, v in _DOWN.items()}
+_CONTINUES = {TRUST_YES, WIDEN_YES, WCONT, WCONT_YES}
+_WIDENS = {WIDEN_YES, WCONT_YES}
+
+
 class Pane(com8_seat.SeatDriver):
     """A pane as tmux answers for it — screen, foreground command, dead flag —
-    plus the two keys the trust dialog reacts to: Down moves the highlight,
-    Enter confirms the highlighted row."""
+    plus the keys the trust dialog reacts to."""
 
     def __init__(self, screen, cmd="2.1.318", dead=False):
         super().__init__()
         self.screen, self.cmd, self.dead = screen, cmd, dead
         self.exists = True
+        self.widened = False
         self.keys = []
 
     def _vals(self, seat):
@@ -211,11 +248,15 @@ class Pane(com8_seat.SeatDriver):
             stdout = ""
             stderr = ""
         if a[:1] == ("send-keys",):
-            if a[-1] == "Down" and self.screen == TRUST:
-                self.screen = TRUST_YES
-            elif a[-1] == "Enter" and self.screen == TRUST_YES:
+            key = a[-1]
+            if key == "Down":
+                self.screen = _DOWN.get(self.screen, self.screen)
+            elif key == "Up":
+                self.screen = _UP.get(self.screen, self.screen)
+            elif key == "Enter" and self.screen in _CONTINUES:
+                self.widened = self.widened or self.screen in _WIDENS
                 self.screen = IDLE
-            elif a[-1] == "Enter" and self.screen == TRUST:
+            elif key == "Enter" and self.screen in (TRUST, WIDEN):
                 self.screen, self.exists = "", False   # "No, exit": claude is gone
         elif a[:1] == ("list-panes",):
             R.stdout = re.sub(r"#\{(\w+)\}",
@@ -235,15 +276,22 @@ for cmd in ("2.1.318", "zsh", "node"):
 
 p = Pane(TRUST)
 st = p.state("%1")
-if st == "approval" and p.is_trust_prompt("%1"):
-    ok("the trust dialog reads approval and is recognized as the trust prompt")
+if st == "approval" and p.trust_prompt("%1") == "trust":
+    ok("the trust dialog reads approval and is recognized as the plain trust prompt")
 else:
-    bad("trust dialog read %s (trust prompt: %s)" % (st, p.is_trust_prompt("%1")))
-if not Pane(IDLE).is_trust_prompt("%1") and Pane(IDLE).state("%1") == "idle":
+    bad("trust dialog read %s (trust prompt: %s)" % (st, p.trust_prompt("%1")))
+if Pane(IDLE).trust_prompt("%1") is None and Pane(IDLE).state("%1") == "idle":
     ok("an idle composer is idle and not the trust prompt")
 else:
     bad("idle composer: state=%s trust=%s" % (Pane(IDLE).state("%1"),
-                                              Pane(IDLE).is_trust_prompt("%1")))
+                                              Pane(IDLE).trust_prompt("%1")))
+# The matcher is anchored to the dialog's own rows: a permission prompt whose
+# command preview contains the words is an approval, not the trust dialog.
+cp = Pane(CMD_PREVIEW)
+if cp.state("%1") == "approval" and cp.trust_prompt("%1") is None:
+    ok("a command preview containing 'trust this folder' is not the trust dialog")
+else:
+    bad("command preview: state=%s trust=%s" % (cp.state("%1"), cp.trust_prompt("%1")))
 
 # allow drives the affirmative row: Down off "No, exit", verify, Enter.
 r = p.respond("%1", "allow")
@@ -254,6 +302,79 @@ if r.get("ok") and pressed == ["Down", "Enter"] and p.state("%1") == "idle":
 else:
     bad("allow on the trust dialog: %s keys=%s state=%s" % (r, pressed, p.state("%1")))
 
+# -- the pre-approval variant: Yes would also enable the folder's permissions
+w = Pane(WIDEN)
+if w.state("%1") == "approval" and w.trust_prompt("%1") == "widen":
+    ok("the pre-approval dialog is recognized as the widening variant")
+else:
+    bad("pre-approval dialog: state=%s trust=%s" % (w.state("%1"), w.trust_prompt("%1")))
+r = w.respond("%1", "allow")
+pressed = [k[-1] for k in w.keys if k[:1] == ("send-keys",)]
+if (not r.get("ok") and not pressed and w.screen == WIDEN
+        and "pre-approve" in (r.get("err") or "")):
+    ok("allow refuses to widen: no key pressed, the dialog stays up, the error says why")
+else:
+    bad("allow on the pre-approval dialog: %s keys=%s" % (r, pressed))
+res = com8_seat.rename_when_ready(w, "%1", "w", boot_wait=2)
+pressed = [k[-1] for k in w.keys if k[:1] == ("send-keys",)]
+if (not res.get("ok") and res.get("state") == "approval" and not pressed
+        and not w.widened and w.exists and "pre-approve" in (res.get("err") or "")):
+    ok("adoption leaves the pre-approval dialog to a human: seat alive, nothing widened, "
+       "no /rename, the reason reported")
+else:
+    bad("adoption on the pre-approval dialog: %s keys=%s widened=%s exists=%s"
+        % (res, pressed, w.widened, w.exists))
+
+# The shape that offers "No, continue without these permissions": that row
+# keeps the seat and widens nothing — chosen whether it is highlighted or not.
+for screen, where in ((WCONT, "highlighted"), (WCONT_YES, "below a highlighted Yes")):
+    c = Pane(screen)
+    kind = c.trust_prompt("%1")
+    res = com8_seat.rename_when_ready(c, "%1", "w", boot_wait=5)
+    pressed = [k[-1] for k in c.keys if k[:1] == ("send-keys",)]
+    if (kind == "widen-continue" and res.get("ok") and not c.widened
+            and pressed[-2:] == ["/rename w", "Enter"] and "Enter" in pressed[:-2]
+            and not c.keys.count(("send-keys", "-t", "%1", "Down"))):
+        ok("'No, continue without these permissions' (%s) is chosen, then /rename on idle"
+           % where)
+    else:
+        bad("continue-without (%s): kind=%s res=%s keys=%s widened=%s"
+            % (where, kind, res, pressed, c.widened))
+
+
+# -- SeatUnavailable mid-dialog (an ssh timeout) is reported, never raised ----
+class Flaky(Pane):
+    def __init__(self, screen, where):
+        super().__init__(screen)
+        self.where = where
+
+    def trust_prompt(self, seat):
+        if self.where == "trust_prompt":
+            raise com8_seat.SeatUnavailable("tmux did not answer: timed out")
+        return super().trust_prompt(seat)
+
+    def respond(self, seat, decision="allow"):
+        if self.where == "respond":
+            raise com8_seat.SeatUnavailable("tmux did not answer: timed out")
+        return super().respond(seat, decision)
+
+    def send(self, seat, text):
+        if self.where == "send":
+            raise com8_seat.SeatUnavailable("tmux did not answer: timed out")
+        return super().send(seat, text)
+
+
+for where, screen in (("trust_prompt", TRUST), ("respond", TRUST), ("send", IDLE)):
+    try:
+        res = com8_seat.rename_when_ready(Flaky(screen, where), "%1", "w", boot_wait=2)
+    except Exception as e:   # noqa: BLE001 — the point is that nothing escapes
+        res = {"raised": repr(e)}
+    if (not res.get("ok") and not res.get("raised") and res.get("state") == "unknown"
+            and "did not answer" in (res.get("err") or "")):
+        ok("an unreachable tmux inside %s() is reported as unknown, not raised" % where)
+    else:
+        bad("unreachable tmux inside %s(): %s" % (where, res))
+
 # -- remain-on-exit: an exited program's pane is dead, not a live seat -------
 d = Pane("", cmd="zsh", dead=True)
 if d.state("%1") == "dead":
@@ -261,10 +382,11 @@ if d.state("%1") == "dead":
 else:
     bad("exited pane read %s" % d.state("%1"))
 seats = d.ls()["seats"]
-if seats and seats[0]["seat"] == "%1" and seats[0].get("dead") is True:
-    ok("seat ls flags the exited pane dead")
+if (seats and seats[0]["seat"] == "%1" and seats[0].get("dead") is True
+        and "seat kill %1" in (seats[0].get("hint") or "")):
+    ok("seat ls flags the exited pane dead and says how to clear it")
 else:
-    bad("seat ls listed the exited pane as live: %s" % seats)
+    bad("seat ls listed the exited pane as live or without a hint: %s" % seats)
 live = Pane(IDLE).ls()["seats"]
 if live and live[0].get("dead") is False:
     ok("seat ls lists a live pane as not dead")
@@ -279,6 +401,13 @@ if not d.is_agent_seat("%1") and d.measure("%1")["state"] == "dead":
     ok("a dead pane is not an agent seat and measures dead")
 else:
     bad("dead pane: agent=%s measure=%s" % (d.is_agent_seat("%1"), d.measure("%1")))
+# measure() tells a kept corpse (reapable) from a pane that is gone.
+gone = Pane("")
+gone.exists = False
+if d.measure("%1").get("kept") is True and gone.measure("%1").get("kept") is False:
+    ok("measure marks the kept corpse reapable and a gone pane not")
+else:
+    bad("measure kept flags: %s / %s" % (d.measure("%1"), gone.measure("%1")))
 
 
 # -- wait(): a booting tick (nothing rendered) never counts as settling -----

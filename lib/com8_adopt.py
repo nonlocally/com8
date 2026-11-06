@@ -410,9 +410,11 @@ _SEAT_MARK = "__com8_seat__"
 class _RemoteSeat(com8_seat.SeatDriver):
     """The seat driver with every tmux call sent over ssh, so a remote spawn
     gets the same classifier and the same fail-closed respond() as a local
-    seat. `ssh(addr, cmd)` is the injected (rc, merged output) runner; the
-    answer is read after a sentinel line, so ssh banners and warnings in
-    the merged stream cannot pose as a pane id or a screen."""
+    seat. `ssh(addr, cmd)` is the injected (rc, merged output) runner: its
+    output is stdout FOLLOWED by the ssh client's stderr, so the answer is
+    read between a start and an end mark on stdout — a login notice before
+    the command, or a banner or known-hosts warning after it, cannot pose as
+    a pane id or a screen."""
 
     def __init__(self, addr, ssh, tmux="tmux"):
         super().__init__()
@@ -420,17 +422,22 @@ class _RemoteSeat(com8_seat.SeatDriver):
         self._base = [tmux]
 
     def _tmux(self, *args, check=False, timeout=10):
-        cmd = ("printf '%%s\\n' %s; %s 2>/dev/null"
-               % (_SEAT_MARK, shlex.join(self._base + list(args))))
-        rc, out = self._ssh(self._addr, cmd)
-        if _SEAT_MARK + "\n" not in out:
-            # the command never ran: ssh hung, was refused or could not start
+        cmd = ("printf '%%s\\n' %s; %s 2>/dev/null && printf '%%s\\n' %s-ok"
+               " || printf '%%s\\n' %s-err"
+               % (_SEAT_MARK, shlex.join(self._base + list(args)),
+                  _SEAT_MARK, _SEAT_MARK))
+        _, out = self._ssh(self._addr, cmd)
+        _, started, rest = out.partition(_SEAT_MARK + "\n")
+        body, ended, status = rest.partition(_SEAT_MARK + "-")
+        if not (started and ended):
+            # the command never ran or never finished: ssh hung, was refused
+            # or could not start — nothing is known about the seat
             raise com8_seat.SeatUnavailable("ssh did not reach tmux: %s"
                                             % out.strip()[-200:])
-        out = out.split(_SEAT_MARK + "\n", 1)[1]
+        rc = 0 if status.startswith("ok") else 1
         if check and rc != 0:
-            raise com8_seat.SeatError(out.strip() or "tmux error")
-        return subprocess.CompletedProcess(args, rc, stdout=out, stderr="")
+            raise com8_seat.SeatError(body.strip() or "tmux error")
+        return subprocess.CompletedProcess(args, rc, stdout=body, stderr="")
 
     def pane_of(self, session):
         """The pane id behind a session name; "" when there is no such session."""
