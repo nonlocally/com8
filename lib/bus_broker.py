@@ -12,6 +12,7 @@ import hmac
 import http.server
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -46,6 +47,8 @@ MAX_ACTIVE_EVENTS_PER_BUS = 8
 MAX_EVENT_HISTORY = 20
 MAX_INVITES = 4096
 MAX_RECORDS = 20000
+# Receipts per export page; a caller continues with the returned cursor.
+MAX_EXPORT_PAGE = 1000
 MAX_SSO_REPLAYS = 4096
 MAX_VIEW_HEADER = 8192
 MAX_CHATS = 4096
@@ -1849,6 +1852,45 @@ class Broker:
                 "created_at": m["created_at"], "updated_at": m["updated_at"], "expires_at": m["expires_at"],
                 "correlation_version": m["correlation_version"],
                 "conversation_id": m["conversation"], "in_reply_to": m["in_reply_to"]}
+
+    def _op_export(self, db, p, r, now):
+        """Receipts of one owned agent's messages, oldest update first, for the caller's own record.
+
+        The hub's retention is unchanged (seven days after a receipt's last
+        update, with bounded storage); a service that must keep its receipts
+        longer exports them before then. Bodies and leases never leave.
+        """
+        agent = self._owned(db, p, r.get("agent"), admin=True)
+        limit = r.get("limit", MAX_EXPORT_PAGE)
+        if type(limit) is not int or not 1 <= limit <= MAX_EXPORT_PAGE:
+            raise BusError("limit must be 1 to %d" % MAX_EXPORT_PAGE)
+        since = r.get("since", 0)
+        if type(since) not in (int, float) or not math.isfinite(since) or since < 0:
+            raise BusError("since must be a non-negative timestamp")
+        after = r.get("after")
+        if after is None:
+            after = {"updated_at": -1.0, "id": ""}
+        elif (not isinstance(after, dict) or set(after) != {"updated_at", "id"}
+              or type(after["updated_at"]) not in (int, float) or not math.isfinite(after["updated_at"])
+              or not isinstance(after["id"], str) or len(after["id"]) > 128):
+            raise BusError("invalid export cursor")
+        self._cancel_invalid(db, now)
+        rows = db.execute("""SELECT * FROM (
+                             SELECT m.id,m.sender,m.target,m.bus,m.status,m.detail,m.created_at,m.updated_at,m.expires_at,
+                                    m.conversation AS conversation_id,m.in_reply_to,m.correlation_version,'agent' AS kind
+                             FROM messages m WHERE m.sender=? OR m.target=?
+                             UNION ALL
+                             SELECT m.id,CASE m.role WHEN 'user' THEN 'human.'||m.identity ELSE c.agent END,
+                                    CASE m.role WHEN 'user' THEN c.agent ELSE 'human.'||m.identity END,
+                                    c.bus,m.status,m.detail,m.created_at,m.updated_at,m.expires_at,m.chat,m.in_reply_to,1,'human'
+                             FROM human_chat_messages m JOIN human_chats c ON c.id=m.chat WHERE c.agent=?)
+                             WHERE updated_at>=? AND (updated_at>? OR (updated_at=? AND id>?))
+                             ORDER BY updated_at,id LIMIT ?""",
+                          (agent["id"], agent["id"], agent["id"], since, after["updated_at"], after["updated_at"],
+                           after["id"], limit + 1)).fetchall()
+        receipts = [dict(row) for row in rows[:limit]]
+        cursor = {"updated_at": receipts[-1]["updated_at"], "id": receipts[-1]["id"]} if len(rows) > limit else None
+        return {"agent": agent["id"], "receipts": receipts, "next": cursor, "retention_seconds": RECEIPT_RETENTION, "ts": now}
 
     def _op_leave(self, db, p, r, now):
         agent = self._owned(db, p, r.get("agent"), admin=True)

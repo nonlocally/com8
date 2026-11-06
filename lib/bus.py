@@ -10,6 +10,7 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -1193,6 +1194,11 @@ def parser():
     reply.add_argument("id", help="ID of the received message")
     reply.add_argument("--from", dest="sender", default="self")
     reply.add_argument("message", nargs="*")
+    export = commands.add_parser("export", help="receipts of one of this device's registrations, oldest update first, "
+                                 "as JSON lines; keeps a record beyond the hub's seven-day retention")
+    export.add_argument("target", nargs="?", default="self", help="registration ID or name; default self")
+    export.add_argument("--since", type=float, default=0, help="only receipts updated at or after this Unix time")
+    export.add_argument("--json", action="store_true", help="one JSON document instead of JSON lines")
     receipt = commands.add_parser("receipt")
     receipt.add_argument("id")
     invite = commands.add_parser("invite")
@@ -1499,6 +1505,27 @@ def run(args):
             return None
     if cmd == "receipt":
         return request(conn, "receipt", id=args.id)
+    if cmd == "export":
+        try:
+            agent = local_agent(conn, args.target)["id"]
+        except BusError:
+            # The hub enforces ownership, so an exact ID exports after its local record was lost.
+            if not re.fullmatch(r"a_[0-9a-f]{32}", args.target):
+                raise
+            agent = args.target
+        if not math.isfinite(args.since) or args.since < 0:
+            raise BusError("--since must be a non-negative Unix time")
+        receipts, cursor = [], None
+        while True:
+            page = request(conn, "export", agent=agent, since=args.since, **({"after": cursor} if cursor else {}))
+            receipts.extend(page.get("receipts", []))
+            cursor = page.get("next")
+            if not cursor:
+                break
+        if args.json:
+            return {"agent": agent, "hub": conn["url"], "since": args.since, "count": len(receipts),
+                    "retention_seconds": page.get("retention_seconds"), "receipts": receipts}
+        return "\n".join(json.dumps(item, sort_keys=True) for item in receipts) or None
     if cmd == "invite":
         url = validate_url(args.url)
         payload = {"bus": args.bus, "ttl": args.ttl}

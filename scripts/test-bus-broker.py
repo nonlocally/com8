@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
-from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_MESSAGE, MAX_PENDING, MESSAGE_TTL, handler_factory, serve
+from bus_broker import Broker, BusHTTPServer, LEASE_TTL, LIVE_TTL, MAX_EXPORT_PAGE, MAX_MESSAGE, MAX_PENDING, MESSAGE_TTL, RECEIPT_RETENTION, handler_factory, serve
 
 
 class BrokerTests(unittest.TestCase):
@@ -235,6 +235,58 @@ class BrokerTests(unittest.TestCase):
             self.assertEqual({row["status"] for row in db.execute("SELECT status FROM messages")}, {"accepted"})
         leased = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 1})["messages"]
         self.assertEqual(len(leased), 2)
+
+    def test_export_pages_an_agents_receipts_and_outlives_hub_retention(self):
+        a, w = self.service_pair()
+        sent = [self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general",
+                          message="secret body %d" % i)["id"] for i in range(3)]
+        other = self.send(a, {"agent": w["codex"]})["id"]
+        leased = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        acked_at = {}
+        for m in leased:
+            self.now[0] += 1
+            self.call("ack", token=w["token"], agent=w["service"], id=m["id"], lease=m["lease"], status="queued")
+            acked_at[m["id"]] = self.now[0]
+        self.now[0] += 1
+        reply = self.call("reply", token=w["token"], sender=w["service"], id=sent[0], message="secret answer")
+        # Everything the service sent or received, oldest update first, in bounded pages.
+        first = self.call("export", token=w["token"], agent=w["service"], limit=2)
+        self.assertEqual([r["id"] for r in first["receipts"]], sent[:2])
+        self.assertEqual(first["retention_seconds"], RECEIPT_RETENTION)
+        second = self.call("export", token=w["token"], agent=w["service"], limit=2, after=first["next"])
+        self.assertEqual([r["id"] for r in second["receipts"]], [sent[2], reply["id"]])
+        self.assertIsNone(second["next"])
+        row = first["receipts"][0]
+        self.assertEqual({key: row[key] for key in ("sender", "target", "bus", "status", "kind", "correlation_version")},
+                         {"sender": a["agent"], "target": w["service"], "bus": "general", "status": "queued", "kind": "agent",
+                          "correlation_version": 1})
+        self.assertEqual((row["updated_at"], row["created_at"]), (acked_at[sent[0]], 1800000000.0))
+        self.assertEqual(row["expires_at"], 1800000000.0 + MESSAGE_TTL)
+        answer = second["receipts"][1]
+        self.assertEqual((answer["sender"], answer["target"], answer["status"], answer["in_reply_to"], answer["conversation_id"]),
+                         (w["service"], a["agent"], "accepted", sent[0], row["conversation_id"]))
+        # Receipts, never bodies or leases; the other agent's traffic is not this agent's.
+        self.assertNotIn("secret", json.dumps(first) + json.dumps(second))
+        self.assertFalse(any("lease" in r for r in first["receipts"] + second["receipts"]))
+        self.assertNotIn(other, [r["id"] for r in first["receipts"] + second["receipts"]])
+        self.assertEqual([r["id"] for r in self.call("export", token=w["token"], agent=w["codex"])["receipts"]], [other])
+        # `since` selects by last update; the owner's device or the administrator may export, nobody else.
+        recent = self.call("export", token=w["token"], agent=w["service"], since=acked_at[sent[2]])
+        self.assertEqual([r["id"] for r in recent["receipts"]], [sent[2], reply["id"]])
+        self.assertEqual(len(self.call("export", agent=w["service"])["receipts"]), 4)
+        self.refused("export", token=a["token"], agent=w["service"], code="not_found")
+        for fields in ({"limit": 0}, {"limit": MAX_EXPORT_PAGE + 1}, {"limit": "2"}, {"since": -1}, {"since": "0"},
+                       {"after": "cursor"}, {"after": {"updated_at": "1", "id": "x"}}, {"after": {"id": "x"}}):
+            self.refused("export", token=w["token"], agent=w["service"], **fields)
+        # After the hub's retention the acknowledged receipts are gone from it; the reply the requester
+        # never fetched has just expired, so its receipt is fresh for one more retention period.
+        self.now[0] += RECEIPT_RETENTION + 1
+        self.refused("receipt", token=a["token"], id=sent[0], code="not_found")
+        remaining = self.call("export", token=w["token"], agent=w["service"])["receipts"]
+        self.assertEqual([(r["id"], r["status"], r["updated_at"]) for r in remaining], [(reply["id"], "expired", self.now[0])])
+        self.now[0] += RECEIPT_RETENTION + 1
+        self.assertEqual(self.call("export", token=w["token"], agent=w["service"])["receipts"], [])
+        self.assertEqual([r["id"] for r in first["receipts"]], sent[:2])
 
     def test_atomic_invitation_and_registration_concurrency(self):
         invitation = self.call("invite")["invite"]

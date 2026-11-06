@@ -170,6 +170,36 @@ existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
 
+## Keeping receipts beyond seven days
+
+The hub keeps a message's receipt for seven days after its last update, with
+bounded storage; `export` copies an agent's receipts out before then. The
+device that owns a registration (or the hub administrator) calls `export`
+with `agent`, an optional `since` (Unix time; receipts updated at or after it),
+`limit` (at most 1000 per page) and, to continue, the `next` cursor the
+previous page returned. Each receipt names `id`, `sender`, `target`, `bus`,
+`status`, `detail`, `created_at`, `updated_at`, `expires_at`,
+`conversation_id`, `in_reply_to`, `correlation_version` and `kind` (`agent`,
+or `human` for a human chat, whose human side is `human.<identity>`), oldest
+update first; message bodies and leases never leave the hub. The CLI pages for
+you: `com8 bus export AGENT_ID --since UNIX_TIME` prints one JSON object per
+line (`--json` for one document with `count`).
+
+For the kimi-infer dispatch service: a daily job on the login node beside the
+worker (the same user, so the enrolled device credential is in its COM8 state)
+runs
+
+```
+com8 bus --hub https://HUB export a_SERVICE --since $(( $(date +%s) - 2 * 86400 )) \
+  >> "$RECORD/receipts/$(date -u +%F).jsonl"
+```
+
+and the service deduplicates by `id` and `updated_at` when it reads the files;
+the two-day window tolerates a missed day and catches late updates such as an
+expiry. The swarm's journal remains the record; the export is the hub's side of
+it (what the hub accepted, leased, acknowledged, delivered, cancelled or expired,
+and when). It does not change hub retention or the hub's 20,000-message bound.
+
 ## Measuring delivery cadence
 
 `scripts/measure-bus-delivery.py` measures how fast this checkout's outbound

@@ -646,7 +646,9 @@ It is an observation from the participating installation, not remote attestation
 ## Recovery and verification
 
 `communicate bus status --json` reports worker errors and the selected hub.
-`bus receipt ID` reads a message outcome. `bus stop` cooperatively stops this
+`bus receipt ID` reads a message outcome; `bus export AGENT --since T` prints every
+retained receipt of one of this device's registrations as JSON lines, for a record
+that must outlive the hub's seven-day retention. `bus stop` cooperatively stops this
 machine's worker and owned broker while retaining registration state. A successful
 `bus send` or `bus reply` resumes the worker for its reply windows; `bus register`
 also resumes published/joined agents. Send and reply print the hub's receipt as soon
