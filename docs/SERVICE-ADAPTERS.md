@@ -187,8 +187,19 @@ An upgrade changes the code, never that directory or the registration.
 2. `com8 bus start` from the new code (the same user, the same `COMM_STATE`).
    It refuses when no active registration exists; otherwise it compares the
    running worker's `runtime` with the new source, asks an older worker to
-   stop (the worker finishes its current iteration, at most one bounded
-   request), waits up to 30 seconds for its lock, and starts the new worker.
+   stop, waits up to 30 seconds for its lock, and starts the new worker.
+   The old worker stops at the end of its current loop iteration, which can
+   be long: it finishes the leases it holds (journaling and acknowledging up
+   to 32 of them, eight hub requests at a time, each bounded by the 12 s
+   request timeout and one retry), any native delivery in flight (a Codex
+   queue call of up to 20 s), and its service drain (rounds of eight endpoint
+   calls of up to 15 s each, no new round after 5 s, plus one hub reply per
+   answered job). That is typically 2-5 s and, with a hung endpoint or hub,
+   30-60 s. If the lock is not released within the 30 s wait, `bus start`
+   withdraws its stop request, the old worker keeps running on the old code,
+   and the command fails with that reason; run it again when the old worker's
+   work has ended (if the old worker did read the request just before it was
+   withdrawn and exited, the next `bus start` simply starts the replacement).
    `register-service` with the registration's original arguments does the
    same after re-registering (the same service UUID keeps the same agent id),
    as does any successful `bus send` or `bus reply`. An unchanged source is
@@ -198,17 +209,20 @@ An upgrade changes the code, never that directory or the registration.
    under `worker`, with `worker_recent` once it has heartbeated, and
    `com8 bus agents --json` lists the service with its unchanged id.
 
-Messages in the gap: the hub keeps every message addressed to the service as
-`accepted` for 24 hours and leases it to the first poll of the new worker. A
-message the old worker had leased but not acknowledged is leased again when
-that lease expires (60 seconds); one it acknowledged after journaling is not
-delivered twice (`receipts.sqlite` answers the repeat offer); a job the old
-worker had queued for the endpoint continues from `service-jobs.sqlite`,
-including a pending `poll`. The roster shows the service `offline` 45 seconds
-after the old worker's last heartbeat until the new one's first, which does
-not stop senders. `com8 bus stop` is only needed to hold a gap deliberately
-(for instance to move the state directory); `bus start` closes it.
-`scripts/test-bus-worker-upgrade.py` runs this sequence against an isolated hub.
+Messages in the gap (the old worker's remaining iteration plus about a second
+for the new worker to start and poll): the hub keeps every message addressed
+to the service as `accepted` for 24 hours and leases it to the first poll of
+the new worker. A message the old worker had leased but not acknowledged is
+leased again when that lease expires (60 seconds); one it acknowledged after
+journaling is not delivered twice (`receipts.sqlite` answers the repeat
+offer); a job the old worker had queued for the endpoint continues from
+`service-jobs.sqlite`, including a pending `poll`. The roster shows the
+service `offline` 45 seconds after the old worker's last heartbeat until the
+new one's first, which does not stop senders. `com8 bus stop` is only needed
+to hold a gap deliberately (for instance to move the state directory);
+`bus start` closes it. `scripts/test-bus-worker-upgrade.py` runs the
+hash-based replacement, the deliberate gap and a lease left in flight at the
+stop against an isolated hub.
 
 Against a hub older than the worker (the hosted hub until it is updated), the
 new worker is leased one message per poll, as before, but polls again at once

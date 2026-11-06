@@ -172,11 +172,26 @@ class LifecycleTests(unittest.TestCase):
                 mock.patch.object(bus, "locked", side_effect=lock), \
                 mock.patch.object(bus.time, "monotonic", side_effect=[0, 10, 20, 31]), \
                 mock.patch.object(bus.time, "sleep"), mock.patch.object(bus, "spawn_daemon") as spawn:
-            with self.assertRaisesRegex(bus.BusError, "did not stop within 30 seconds"):
+            with self.assertRaisesRegex(bus.BusError, "did not stop within 30 seconds.*withdrawn"):
                 bus.start_worker()
         spawn.assert_not_called()
-        self.assertTrue((state / "worker.stop").exists())
+        # The request is withdrawn: the old worker keeps running rather than exiting later unreplaced.
+        self.assertFalse((state / "worker.stop").exists())
         self.assertFalse((state / "broker.stop").exists())
+
+    def test_start_worker_withdraws_its_stop_request_when_the_old_worker_keeps_its_lock(self):
+        state = self.root / "stuck-worker"
+        state.mkdir()
+        bus.write_json(state / "worker.json", {"pid": 1, "runtime": "other-source", "state": "running"})
+        spawned = []
+        with mock.patch.object(bus, "state_dir", return_value=state), mock.patch.object(bus, "WORKER_STOP_TIMEOUT", 0.5), \
+                mock.patch.object(bus, "spawn_daemon", side_effect=lambda command: spawned.append(command)):
+            with bus.locked("worker"):
+                # The running worker is mid-iteration and keeps its lock past the wait.
+                with self.assertRaisesRegex(bus.BusError, "withdrawn"):
+                    bus.start_worker()
+                self.assertFalse((state / "worker.stop").exists(), "a withdrawn stop request must not linger")
+        self.assertEqual(spawned, [], "no competitor is started while the old worker runs")
 
     def test_device_poll_batches_hidden_adapters_and_journals_other_ack_failures(self):
         state = self.root / "batched-worker"

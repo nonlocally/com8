@@ -4,10 +4,13 @@
 Two copies of this checkout stand in for two releases: the "old" one is a copy
 whose worker runtime hash differs. The old release registers a service against
 an isolated TLS hub and delivers; `bus start` from this checkout then replaces
-the running worker cooperatively; `bus stop` opens a gap during which the hub
-holds new messages; `bus start` closes it. Throughout, the agent id and the
-state directory stay the same and every message reaches the fake service once.
-Isolated temporary state only; no network.
+the running worker cooperatively (the hash-based replacement); `bus stop` opens
+a gap during which the hub holds new messages; `bus start` closes it. A second
+case stops the worker while it holds a lease it could not acknowledge (the hub
+refused the acknowledgment), and shows the new worker acknowledging it from the
+journal once the hub offers the message again, without a second delivery.
+Throughout, the agent id and the state directory stay the same and every
+message reaches the fake service once. Isolated temporary state only; no network.
 """
 import importlib.util
 import json
@@ -47,7 +50,18 @@ class WorkerUpgrade(unittest.TestCase):
             stream.write("\n# old release fixture\n")
         self.recorder = self.harness.Recorder()
         cert, key = self.harness.make_certificate(self.temp)
-        self.broker, hub, hub_thread, self.hub_url = self.harness.start_hub(self.temp, cert, key, self.recorder)
+        # The hub's clock can be moved forward to expire a lease without waiting a minute.
+        self.offset = [0.0]
+        self.broker, hub, hub_thread, self.hub_url = self.harness.start_hub(
+            self.temp, cert, key, self.recorder, clock=lambda: time.time() + self.offset[0])
+        inner = self.broker.handle
+        self.outage = False
+        def handle(token, request, **context):
+            # An outage only for acknowledgments: the worker journals the outcome but the lease stays.
+            if self.outage and isinstance(request, dict) and request.get("op") == "ack":
+                return {"ok": False, "error": "simulated hub outage", "code": "unavailable"}
+            return inner(token, request, **context)
+        self.broker.handle = handle
         self.token = "upgrade-bridge-token-" + uuid.uuid4().hex + uuid.uuid4().hex
         service, service_thread, self.endpoint = self.harness.start_service(cert, key, self.token, "immediate", self.recorder)
         self.servers = [(hub, hub_thread), (service, service_thread)]
@@ -156,8 +170,53 @@ class WorkerUpgrade(unittest.TestCase):
         self.assertEqual({self.receipt(mid) for mid in first + second + held}, {"queued"})
         delivers = [event["id"] for event in self.recorder.snapshot("bridge") if event["op"] == "deliver"]
         self.assertEqual(sorted(delivers), sorted(first + second + held))
-        self.assertEqual(json.loads((self.state / "registrations.json").read_text()).__len__(), 1)
-        self.assertEqual(self.worker()["errors"], [])
+        self.assertEqual(len(json.loads((self.state / "registrations.json").read_text())), 1)
+        self.assertEqual(self.worker()["recent_errors"], [])
+
+    def register(self, root):
+        self.cli(root, "connect", self.harness.invitation(self.broker, self.hub_url, "upgrade-account"))
+        token_file = self.temp / "service.token"
+        token_file.write_text(self.token)
+        token_file.chmod(0o600)
+        registered = self.cli(root, "register-service", "upgraded-service", "--service-id", str(uuid.uuid4()),
+                              "--endpoint", self.endpoint, "--token-file", str(token_file), "--contract-version", "2", "--json")
+        self.agent = registered["id"]
+        self.sender = self.broker.handle(self.broker.admin_token, {"op": "register", "session_key": "upgrade-sender",
+                                                                   "name": "upgrade-sender", "kind": "codex"})["id"]
+        return registered
+
+    def wait_until(self, condition, timeout=20, what="condition"):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if condition():
+                return
+            time.sleep(.2)
+        self.fail("%s not met within %ss" % (what, timeout))
+
+    def test_a_lease_in_flight_at_stop_is_recovered_by_the_new_worker_without_a_second_delivery(self):
+        self.register(ROOT)
+        first = self.worker()
+        # The hub refuses acknowledgments: the worker journals the outcome, delivers, and keeps the lease.
+        self.outage = True
+        held = self.send(1)[0]
+        self.wait_delivered([held])
+        self.wait_until(lambda: any(item["error"].get("agent") == self.agent for item in self.worker()["recent_errors"]),
+                        what="the refused acknowledgment in recent_errors")
+        self.assertEqual(self.receipt(held), "leased")
+        self.cli(ROOT, "stop")
+        self.assertFalse(self.alive(first["pid"]))
+        self.assertEqual(self.receipt(held), "leased")
+        # The outage ends and the lease expires while no worker runs.
+        self.outage = False
+        self.offset[0] += 61
+        resumed = self.cli(ROOT, "start")
+        self.assertTrue(resumed["current"])
+        self.wait_until(lambda: self.receipt(held) == "queued", what="the re-offered lease acknowledged from the journal")
+        delivers = [event["id"] for event in self.recorder.snapshot("bridge") if event["op"] == "deliver"]
+        self.assertEqual(delivers, [held], "the journal answered the second offer; the service saw the message once")
+        acks = [event for event in self.recorder.snapshot("hub") if event["op"] == "ack" and event["id"] == held]
+        self.assertEqual([event["ok"] for event in acks].count(True), 1)
+        self.assertEqual(self.worker()["recent_errors"], [])
 
     def test_start_refuses_without_a_registration(self):
         proc = subprocess.run([str(ROOT / "bin/communicate"), "bus", "start"], env=self.env, text=True,

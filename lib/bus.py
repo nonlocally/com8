@@ -59,6 +59,8 @@ SERVICE_LEASE_BATCH = 32
 SERVICE_DRAIN_BUDGET = 5.0
 # Acknowledgments of one poll's leases go to the hub concurrently, this many at a time.
 ACK_CONCURRENCY = 8
+# A replacement waits this long for the running worker to finish its iteration and release its lock.
+WORKER_STOP_TIMEOUT = 30
 
 
 def service_epoch(record):
@@ -638,14 +640,19 @@ def start_worker():
                 return
         if not available:
             (root / "worker.stop").touch(mode=0o600)
-            deadline = time.monotonic() + 30
+            deadline = time.monotonic() + WORKER_STOP_TIMEOUT
             while time.monotonic() < deadline:
                 with locked("worker", blocking=False) as available:
                     if available:
                         break
                 time.sleep(.05)
             else:
-                raise BusError("previous bus worker did not stop within 30 seconds; inspect %s; broker and local routes were not stopped" % (root / "worker.log"))
+                # Withdraw the request: the old worker keeps running instead of
+                # exiting later with nobody to replace it.
+                (root / "worker.stop").unlink(missing_ok=True)
+                raise BusError("previous bus worker did not stop within %d seconds; the stop request was withdrawn and it "
+                               "keeps running; retry when its current work ends (inspect %s); broker and local routes "
+                               "were not stopped" % (WORKER_STOP_TIMEOUT, root / "worker.log"))
         (root / "worker.stop").unlink(missing_ok=True)
         process = spawn_daemon(["__worker"])
         for _ in range(40):

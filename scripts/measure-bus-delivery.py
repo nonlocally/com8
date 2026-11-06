@@ -140,8 +140,8 @@ def tls_server(cert, key, handler, server_class=http.server.ThreadingHTTPServer)
     return server, thread
 
 
-def start_hub(temp, cert, key, recorder, latency=0.0, old_hub=False):
-    broker = Broker(temp / "hub")
+def start_hub(temp, cert, key, recorder, latency=0.0, old_hub=False, clock=None):
+    broker = Broker(temp / "hub", clock=clock)
     instrument(broker, recorder, latency, old_hub)
     # The release's own server: its listen backlog and connection slots are part of the measurement.
     server, thread = tls_server(cert, key, handler_factory(broker), BusHTTPServer)
