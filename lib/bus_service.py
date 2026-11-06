@@ -26,13 +26,11 @@ import urllib.parse
 import urllib.request
 from uuid import UUID
 
+from bus_published import MAX_PUBLISHED_AGENTS, MAX_PUBLISHED_AGENTS_BYTES, PUBLISHED_AGENT_FIELDS, validate_published_agents
+
 MAX_BODY = 65536
 MAX_REPLY = 32768
 MAX_PENDING = 128
-# A service may publish this many agents of its own, with these fields only.
-MAX_PUBLISHED_AGENTS = 256
-MAX_PUBLISHED_AGENTS_BYTES = 32768
-PUBLISHED_AGENT_FIELDS = {"id": 128, "name": 128, "status": 16, "role": 64, "parent": 128}
 PROTOCOL = "service-fence/epoch-v1"
 _LOCKS = {}
 _LOCKS_MUTEX = threading.Lock()
@@ -675,43 +673,18 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _published_text(value, label, limit):
-    if (not isinstance(value, str) or not 1 <= len(value) <= limit
-            or any(ord(ch) < 32 or ord(ch) == 127 for ch in value)):
-        raise ServiceError("invalid published agent " + label)
-    return value
-
-
-def validate_agents(value):
-    """A service's own agent list: bounded, known fields only, never message text."""
-    if not isinstance(value, list) or len(value) > MAX_PUBLISHED_AGENTS:
-        raise ServiceError("published agents must be a list of at most %d" % MAX_PUBLISHED_AGENTS)
-    agents, seen = [], set()
-    for entry in value:
-        if not isinstance(entry, dict) or set(entry) - set(PUBLISHED_AGENT_FIELDS) or "id" not in entry:
-            raise ServiceError("a published agent carries only id, name, status, role and parent")
-        row = {key: _published_text(entry[key], key, limit) for key, limit in PUBLISHED_AGENT_FIELDS.items() if key in entry}
-        row.setdefault("name", row["id"])
-        row.setdefault("status", "queueable")
-        if row["status"] not in ("live", "queueable", "offline") or row["id"] in seen:
-            raise ServiceError("published agents need distinct ids and a status of live, queueable or offline")
-        seen.add(row["id"])
-        agents.append(row)
-    if any("parent" in row and row["parent"] not in seen for row in agents):
-        raise ServiceError("a published agent's parent must be in the same list")
-    if len(json.dumps(agents, separators=(",", ":")).encode()) > MAX_PUBLISHED_AGENTS_BYTES:
-        raise ServiceError("published agents exceed %d bytes" % MAX_PUBLISHED_AGENTS_BYTES)
-    return agents
-
-
 def validate_status(result):
+    """The endpoint's status answer: exactly {"agents": [...]}; returns (kept, dropped) from the shared validator."""
     if not isinstance(result, dict) or set(result) != {"agents"}:
         raise ServiceError("invalid service status response")
-    return validate_agents(result["agents"])
+    try:
+        return validate_published_agents(result["agents"])
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from None
 
 
 def publish_status(record):
-    """Ask the endpoint which agents it runs; the answer is the service's claim, bounded."""
+    """Ask the endpoint which agents it runs; returns (kept, dropped): the service's claim, bounded."""
     return validate_status(_post(record, {"version": contract_version(record.get("contract_version", 1)), "op": "status",
                                           "hub": record["url"], "recipient_id": record["id"],
                                           "service_id": record["service_id"]}))

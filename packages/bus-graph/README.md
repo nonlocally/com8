@@ -113,8 +113,11 @@ graph.destroy();
   with `id`, `name`, `status`, `role` and `parent`. They are drawn as nodes
   under the service (`service id/agent id`, the service's device and buses,
   a "via" line instead of a device) joined by dashed, unlabelled lines, in the
-  service's listed order, at most 256; they take part in no message link or
-  analysis weight. Anything else in an entry is dropped.
+  service's listed order, at most 256; a child's `parent` resolves against the
+  whole list whatever the order. They take part in no message link, analysis
+  weight, community or flow inference, and in the spectral and flow layouts
+  they stack under their service; an offline service shows them offline.
+  Anything else in an entry is dropped.
 - `buses` contains only selected/permitted snapshot buses. Each has `name`,
   `agents`, and optional `graph: {basis: "retained_bus_messages", edges,
   retention_seconds}`. Each directed edge has `source`, `target`,

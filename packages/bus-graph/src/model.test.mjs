@@ -422,3 +422,24 @@ test('published agents are ignored on non-services, bounded, and keep their own 
   assert.equal(JSON.stringify(model).includes('secret'), false);
   assert.deepEqual(model.connections.map(edge => [edge.source, edge.target]), [['b', 'svc']]);
 });
+
+test('a child listed before its parent still hangs under that parent, and an offline service takes its children with it', () => {
+  const service = agent('svc', {kind: 'service', agents: [{id: 'lemma-7', parent: 'prover-1', status: 'live'}, {id: 'prover-1', status: 'live'}]});
+  const model = snapshotModel(snapshot([service], []));
+  assert.deepEqual(model.containment, [{source: 'svc/prover-1', target: 'svc/lemma-7'}, {source: 'svc', target: 'svc/prover-1'}]);
+  assert.equal(model.agents.find(entry => entry.id === 'svc/lemma-7').parent, 'svc/prover-1');
+  const down = snapshotModel(snapshot([agent('svc', {kind: 'service', status: 'offline', agents: [{id: 'prover-1', status: 'live'}]})], []));
+  assert.equal(down.agents.find(entry => entry.id === 'svc/prover-1').status, 'offline');
+});
+
+test('children sit under their service in the spectral and flow layouts', () => {
+  const service = agent('svc', {kind: 'service', agents: [{id: 'a'}, {id: 'b'}]});
+  const model = snapshotModel(snapshot([service, agent('peer')], [message('peer', 'svc')]));
+  const analysis = {positions: new Map([['svc', {x: 900, y: 400}], ['peer', {x: 100, y: 400}]])};
+  for (const nodes of [spectralNodes(model, analysis), flowNodes(model, analysis)]) {
+    const by = new Map(nodes.map(node => [node.data.agent.id, node.position]));
+    assert.deepEqual(by.get('svc'), {x: 900, y: 400});
+    assert.ok(by.get('svc/a').y > 400 && by.get('svc/b').y > by.get('svc/a').y, 'children stack below the service');
+    assert.ok(Math.abs(by.get('svc/a').x - 900) < 80, 'children stay in the service\'s column');
+  }
+});

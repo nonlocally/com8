@@ -3,10 +3,12 @@
 from concurrent.futures import ThreadPoolExecutor
 import http.client
 import http.server
+import importlib.util
 import json
 from pathlib import Path
 import sqlite3
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -300,13 +302,23 @@ class BrokerTests(unittest.TestCase):
         # Every viewer of the service sees the same claim; agents that publish nothing carry no field.
         self.assertEqual(self.published(a["token"], w["service"])["agents"], published)
         self.assertNotIn("agents", self.published(a["token"], w["codex"]))
-        # Only a service publishes; the list is bounded and carries only the known fields, never message text.
+        # Only a service publishes, and a malformed field is a bad request; a bad entry is dropped on its own,
+        # counted in the result, and never stops the rest of the list or the heartbeat from landing.
         self.refused("heartbeat", token=w["token"], agents=[{"id": w["codex"], "status": "queueable", "agents": published}])
-        for bad in ([{"id": "x", "message": "secret"}], [{"name": "no id"}], [{"id": ""}], [{"id": "x", "status": "busy"}],
-                    [{"id": "x"}, {"id": "x"}], [{"id": "x", "parent": "missing"}], "list", [{"id": "x" * 129}],
-                    [{"id": "x", "name": "\x00"}], [{"id": "p%d" % i} for i in range(MAX_PUBLISHED_AGENTS + 1)]):
-            self.refused("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": bad}])
+        self.refused("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": "list"}])
         self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
+        mixed = [{"id": "x", "message": "secret"}, {"name": "no id"}, {"id": ""}, {"id": "  "}, {"id": "x", "status": "busy"},
+                 {"id": "keep"}, {"id": "keep"}, {"id": "orphan", "parent": "missing"}, {"id": "x" * 129}, {"id": "\u00e9" * 128},
+                 {"id": "x", "name": "a\x00b"}, {"id": "x", "name": "a\x7fb"}, "text", {"id": "child", "parent": "keep"}]
+        result = self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": mixed}])
+        self.assertEqual(result["dropped_agents"], {w["service"]: 11})
+        self.assertEqual(self.published(w["token"], w["service"])["agents"],
+                         [{"id": "keep", "name": "keep", "status": "queueable"}, {"id": "orphan", "name": "orphan", "status": "queueable"},
+                          {"id": "child", "name": "child", "status": "queueable", "parent": "keep"}])
+        many = [{"id": "p%d" % i} for i in range(MAX_PUBLISHED_AGENTS + 10)]
+        result = self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": many}])
+        self.assertEqual((result["dropped_agents"], len(self.published(w["token"], w["service"])["agents"])), ({w["service"]: 10}, MAX_PUBLISHED_AGENTS))
+        self.assertNotIn("dropped_agents", self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": published}]))
         # A heartbeat without the field keeps the list; an empty list clears it; a registration drops it.
         self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable"}])
         self.assertEqual(self.published(w["token"], w["service"])["agents"], published)
@@ -318,6 +330,35 @@ class BrokerTests(unittest.TestCase):
         # Defaults: status queueable, name the id.
         self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable", "agents": [{"id": "solo"}]}])
         self.assertEqual(self.published(w["token"], w["service"])["agents"], [{"id": "solo", "name": "solo", "status": "queueable"}])
+        # Only a live row carries the list: a service whose heartbeats stopped shows offline without agents.
+        self.now[0] += LIVE_TTL + 1
+        offline = self.published(w["token"], w["service"])
+        self.assertEqual(offline["status"], "offline")
+        self.assertNotIn("agents", offline)
+        self.call("heartbeat", token=w["token"], agents=[{"id": w["service"], "status": "queueable"}])
+        self.assertEqual(self.published(w["token"], w["service"])["agents"], [{"id": "solo", "name": "solo", "status": "queueable"}])
+
+    def test_a_hub_without_published_agents_accepts_the_heartbeat_and_drops_the_field(self):
+        # The 0.6.1 broker, as released, from this repository's history; a shallow checkout cannot qualify this.
+        shown = subprocess.run(["git", "show", "b3c6815:lib/bus_broker.py"], cwd=Path(__file__).resolve().parents[1],
+                               capture_output=True, text=True)
+        if shown.returncode:
+            self.skipTest("0.6.1 source is not in this checkout; old-hub acceptance is unqualified here")
+        with tempfile.TemporaryDirectory(prefix="broker-0.6.1-") as temp:
+            Path(temp, "bus_broker_061.py").write_text(shown.stdout)
+            spec = importlib.util.spec_from_file_location("bus_broker_061", Path(temp, "bus_broker_061.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            old = module.Broker(Path(temp) / "hub", clock=lambda: self.now[0])
+            service = old.handle(old.admin_token, {"op": "register", "session_key": "service:" + "2" * 32, "name": "svc",
+                                                   "kind": "service", "status": "queueable"})
+            result = old.handle(old.admin_token, {"op": "heartbeat", "agents": [{"id": service["id"], "status": "queueable",
+                                                  "agents": [{"id": "w1", "name": "Worker", "status": "live"}]}]})
+            self.assertEqual((result["ok"], result["updated"]), (True, 1))
+            row = next(agent for bus in old.handle(old.admin_token, {"op": "snapshot"})["buses"] for agent in bus["agents"]
+                       if agent["id"] == service["id"])
+            self.assertEqual(row["status"], "queueable")
+            self.assertNotIn("agents", row)
 
     def test_atomic_invitation_and_registration_concurrency(self):
         invitation = self.call("invite")["invite"]

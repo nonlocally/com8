@@ -61,9 +61,13 @@ SERVICE_DRAIN_BUDGET = 5.0
 ACK_CONCURRENCY = 8
 # A replacement waits this long for the running worker to finish its iteration and release its lock.
 WORKER_STOP_TIMEOUT = 30
-# A service that publishes its agents is asked for them this often; the list
-# rides on the heartbeat that follows each answer.
+# A service that publishes its agents is asked for them this often, off the
+# heartbeat path; an answer later than the deadline is dropped, and the list in
+# hand rides on the next heartbeat, at most this many bytes of lists per request.
 STATUS_INTERVAL = 30.0
+STATUS_TICK = 1.0
+STATUS_DEADLINE = 10.0
+HEARTBEAT_AGENTS_BUDGET = 65536
 
 
 def service_epoch(record):
@@ -782,17 +786,17 @@ def worker():
         state = {"pid": os.getpid(), "runtime": WORKER_RUNTIME, "version": worker_version(), "source": str(LIB),
                  "started_at": time.time(), "state": "starting",
                  "heartbeat_at": 0, "heartbeat_success_at": 0, "adapters": 0,
-                 "heartbeat_errors": [], "delivery_errors": [], "errors": [], "recent_errors": [],
+                 "heartbeat_errors": [], "delivery_errors": [], "status_errors": [], "errors": [], "recent_errors": [],
                  **worker_process_metadata(root)}
 
         def publish(**updates):
             with status_lock:
                 state.update(updates)
                 state["updated_at"] = time.time()
-                state["errors"] = (state["heartbeat_errors"] + state["delivery_errors"])[:256]
+                state["errors"] = (state["heartbeat_errors"] + state["delivery_errors"] + state["status_errors"])[:256]
                 # `errors` is the current picture; an iteration can be shorter than
                 # a reader's glance, so the last distinct errors are kept with times.
-                for item in updates.get("delivery_errors", []) + updates.get("heartbeat_errors", []):
+                for item in updates.get("delivery_errors", []) + updates.get("heartbeat_errors", []) + updates.get("status_errors", []):
                     if not any(previous["error"] == item for previous in state["recent_errors"]):
                         state["recent_errors"] = (state["recent_errors"] + [{"at": state["updated_at"], "error": item}])[-32:]
                 write_json(root / "worker.json", state)
@@ -805,26 +809,57 @@ def worker():
         published = {}
         status_errors = {}
 
-        def published_agents(record):
-            """The service's agent list, fetched once per interval; None when there is nothing new to send."""
+        def status_loop():
+            """Ask publishing services for their agents on the interval, in their own threads, with a deadline."""
             from bus_service import publish_status, ServiceError
-            key = (record["url"], record["id"])
-            last = published.get(key, 0)
-            if time.monotonic() - last < STATUS_INTERVAL:
-                return None
-            published[key] = time.monotonic()
-            try:
-                agents = publish_status(record)
-            except (ServiceError, OSError, ValueError, KeyError) as exc:
-                with status_lock:
-                    status_errors[key] = {"agent": record["id"], "error": "service status unavailable: " + " ".join(str(exc).split())[:160]}
-                return None
-            with status_lock:
-                status_errors.pop(key, None)
-            return agents
+            attempted, inflight = {}, {}
+            with ThreadPoolExecutor(max_workers=4, thread_name_prefix="bus-status") as pool:
+                while not stopping():
+                    cfg = config()
+                    now = time.monotonic()
+                    for record in registrations().values():
+                        if not (active_adapter(record) and record["url"] in cfg["connections"]
+                                and record.get("kind") == "service" and record.get("publish_agents")):
+                            continue
+                        key = (record["url"], record["id"])
+                        if key in inflight:
+                            future, started = inflight[key]
+                            if future.done():
+                                del inflight[key]
+                                try:
+                                    agents, dropped = future.result()
+                                except (ServiceError, OSError, ValueError, KeyError) as exc:
+                                    with status_lock:
+                                        status_errors[key] = {"agent": record["id"], "error": "service status unavailable: "
+                                                              + " ".join(str(exc).split())[:160]}
+                                    publish(status_errors=list(status_errors.values()))
+                                    continue
+                                with status_lock:
+                                    previous = published.get(key, {})
+                                    published[key] = {"agents": agents, "version": previous.get("version", 0) + 1, "pending": True}
+                                    if dropped:
+                                        status_errors[key] = {"agent": record["id"], "error": "%d published agents dropped: %s" % (
+                                            len(dropped), "; ".join(sorted({reason for _, reason in dropped}))[:120])}
+                                    else:
+                                        status_errors.pop(key, None)
+                                publish(status_errors=list(status_errors.values()))
+                            elif now - started >= STATUS_DEADLINE:
+                                # The answer, if it ever comes, is dropped; the next interval asks again.
+                                future.cancel()
+                                del inflight[key]
+                                with status_lock:
+                                    status_errors[key] = {"agent": record["id"], "error": "service status call exceeded its "
+                                                          "%.0f s deadline" % STATUS_DEADLINE}
+                                publish(status_errors=list(status_errors.values()))
+                            continue
+                        if now - attempted.get(key, -STATUS_INTERVAL) < STATUS_INTERVAL or current_status(record) == "offline":
+                            continue
+                        attempted[key] = now
+                        inflight[key] = (pool.submit(publish_status, record), now)
+                    stop.wait(STATUS_TICK)
 
         def heartbeat_hub(conn, records):
-            entries = []
+            entries, carried, budget = [], [], HEARTBEAT_AGENTS_BUDGET
             for record in records:
                 if stopping():
                     return 0
@@ -832,14 +867,26 @@ def worker():
                 if service_epoch(record) is not None:
                     entry["epoch"] = service_epoch(record)
                 if record.get("kind") == "service" and record.get("publish_agents") and entry["status"] != "offline":
-                    agents = published_agents(record)
+                    # Send the list in hand once; lists beyond this request's budget wait for the next.
+                    key = (record["url"], record["id"])
+                    with status_lock:
+                        item = published.get(key)
+                        agents = (list(item["agents"]), item["version"]) if item and item["pending"] else None
                     if agents is not None:
-                        entry["agents"] = agents
+                        size = len(json.dumps(agents[0], separators=(",", ":")).encode())
+                        if size <= budget:
+                            budget -= size
+                            entry["agents"] = agents[0]
+                            carried.append((key, agents[1]))
                 entries.append(entry)
             for offset in range(0, len(entries), 128):
                 if stopping():
                     return 0
                 request(conn, "heartbeat", agents=entries[offset:offset + 128])
+            with status_lock:
+                for key, version in carried:
+                    if published.get(key, {}).get("version") == version:
+                        published[key]["pending"] = False
             return len(entries)
 
         def heartbeat_loop():
@@ -867,9 +914,7 @@ def worker():
                             except (BusError, OSError, ValueError, KeyError) as exc:
                                 counts[url] = 0
                                 errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
-                            with status_lock:
-                                fetch_errors = list(status_errors.values())
-                            updates.update(adapters=sum(counts.values()), heartbeat_errors=list(errors.values()) + fetch_errors)
+                            updates.update(adapters=sum(counts.values()), heartbeat_errors=list(errors.values()))
                             publish(**updates)
                     except (BusError, OSError, ValueError, KeyError) as exc:
                         publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
@@ -880,6 +925,8 @@ def worker():
         publish()
         ticker = threading.Thread(target=heartbeat_loop, name="bus-heartbeat-loop", daemon=True)
         ticker.start()
+        asker = threading.Thread(target=status_loop, name="bus-status-loop", daemon=True)
+        asker.start()
         def deliver_if_live(record, envelope):
             # Re-measure after fetching; preserve an offline target's lease for
             # retry rather than dispatching to a recycled socket/session.
@@ -1011,6 +1058,7 @@ def worker():
         finally:
             stop.set()
             ticker.join()
+            asker.join()
             publish(state="stopped")
             db.close()
 

@@ -383,22 +383,37 @@ class Services(unittest.TestCase):
         opener = mock.Mock()
         opener.open.return_value = response
         with mock.patch.object(service.urllib.request, "build_opener", return_value=opener):
-            agents = service.publish_status(self.record)
+            agents, dropped = service.publish_status(self.record)
             req = opener.open.call_args.args[0]
             payload = json.loads(req.data)
         self.assertEqual((payload["op"], payload["version"], payload["service_id"], payload["recipient_id"], payload["hub"]),
                          ("status", 1, self.sid, self.target, self.record["url"]))
         self.assertNotIn("envelope", payload)
         self.assertTrue(req.headers["Authorization"].startswith("Bearer "))
-        self.assertEqual(agents, [{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
-                                  {"id": "w1", "name": "w1", "status": "queueable", "parent": "p1"}])
-        for bad in ({"agents": [{"id": "p1", "message": "text"}]}, {"agents": "p1"}, {"agents": [], "extra": 1}, {},
-                    {"agents": [{"id": "p1"}, {"id": "p1"}]}, {"agents": [{"id": "w1", "parent": "absent"}]},
-                    {"agents": [{"id": "p%d" % i} for i in range(service.MAX_PUBLISHED_AGENTS + 1)]},
-                    {"agents": [{"id": "p1", "status": "busy"}]}, {"agents": [{"id": "p1", "name": "a\nb"}]}):
+        self.assertEqual((agents, dropped), ([{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
+                                             {"id": "w1", "name": "w1", "status": "queueable", "parent": "p1"}], []))
+        # A malformed response is refused whole; a bad entry is dropped with its reason and the rest is kept.
+        for bad in ({"agents": "p1"}, {"agents": [], "extra": 1}, {}):
             with self.assertRaises(service.ServiceError):
                 service.validate_status(bad)
-        self.assertEqual(service.validate_status({"agents": []}), [])
+        self.assertEqual(service.validate_status({"agents": []}), ([], []))
+        import bus_published
+        self.assertIs(service.validate_published_agents, bus_published.validate_published_agents)
+        kept, dropped = service.validate_status({"agents": [
+            {"id": "p1", "message": "text"}, {"id": "p1"}, {"id": "p1"}, {"id": "w1", "parent": "absent"}, {"id": " "},
+            {"id": "p2", "status": "busy"}, {"id": "p3", "name": "a\nb"}, {"id": "p4", "name": "a\x7fb"}, {"id": "\u00e9" * 65},
+            {"id": "\u00e9" * 64}, 7, {"id": "p5", "role": "r" * 65}]})
+        self.assertEqual(kept, [{"id": "p1", "name": "p1", "status": "queueable"}, {"id": "w1", "name": "w1", "status": "queueable"},
+                                {"id": "\u00e9" * 64, "name": "\u00e9" * 64, "status": "queueable"}])
+        self.assertEqual(len(dropped), 9)
+        self.assertTrue(all(isinstance(reason, str) and reason for _, reason in dropped), dropped)
+        many = [{"id": "p%d" % i} for i in range(service.MAX_PUBLISHED_AGENTS + 3)]
+        kept, dropped = service.validate_published_agents(many)
+        self.assertEqual((len(kept), len(dropped)), (service.MAX_PUBLISHED_AGENTS, 3))
+        wide = [{"id": "p%03d" % i, "name": "n" * 128, "role": "r" * 64} for i in range(256)]
+        kept, dropped = service.validate_published_agents(wide)
+        self.assertLessEqual(len(json.dumps(kept, separators=(",", ":")).encode()), service.MAX_PUBLISHED_AGENTS_BYTES)
+        self.assertEqual(len(kept) + len(dropped), 256)
         record = service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service", publish_agents=True,
             endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))
         self.assertTrue(record["publish_agents"])

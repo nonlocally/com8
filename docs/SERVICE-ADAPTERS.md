@@ -102,15 +102,30 @@ A service registered with `--publish-agents` is also asked, every 30 seconds,
 envelope) and answers exactly `{"agents": [...]}`: at most 256 entries, each
 with `id` (required), `name`, `status` (`live`, `queueable` or `offline`;
 default `queueable`), `role` and `parent` (another entry's `id`), every value
-a printable string of at most 128 characters (`role` 64), the whole list at
-most 32 KiB, and no other field; the worker refuses anything else and keeps
-the previous list. The list rides on the heartbeat that follows each answer
-(`agents` on the service's heartbeat entry); the hub stores it, drops it when
-the service registers again, and shows it on the service's roster row and in
-the dashboard graph as nodes under the service. It is the service's claim
-about itself, never message text or traffic. A hub older than this field
-accepts the heartbeat and ignores the list. A failed status call is reported
-in `worker.json`'s `recent_errors` and retried at the next interval.
+a printable string of at most 128 UTF-8 bytes (`role` 64; not blank, no
+control characters), the whole list at most 32 KiB, and no other field. The
+worker and the hub validate with the same code (`lib/bus_published.py`): an
+answer that is not `{"agents": [list]}` is refused whole, while a bad entry is
+dropped on its own, the rest of the list stands, a parent outside the list is
+removed so the entry hangs from the service, and the list is cut at 256
+entries and 32 KiB; the hub reports what it dropped as `dropped_agents` on
+the heartbeat result and the worker in `recent_errors`.
+
+The status calls run off the heartbeat path, in their own threads, each with a
+10 s deadline after which its answer is dropped and the next interval asks
+again; a slow or unreachable endpoint never delays a heartbeat. The list in
+hand rides once on the next heartbeat (`agents` on the service's entry), at
+most 64 KiB of lists per heartbeat request, so several maximal lists go out
+over successive heartbeats. The hub stores the list, drops it when the service
+registers again, and carries it only while the service is heard from: it is
+present only on the service's row in the snapshot JSON (`com8 bus agents
+--json`, the dashboard's data) and only while that row is not `offline`; the
+roster table and text output do not show it. The dashboard graph draws the
+entries as nodes under the service. The list is the service's claim about
+itself, never message text or traffic. A hub older than this field accepts
+the heartbeat and ignores the list (checked against the 0.6.1 broker by
+`scripts/test-bus-broker.py` when the checkout has that history). A failed
+or late status call is reported in `worker.json`'s `recent_errors`.
 
 A service can also start a conversation with the ordinary send, using its own
 registered agent ID: `com8 bus send RECIPIENT_ID --bus general --from SERVICE_AGENT_ID -- MESSAGE`.

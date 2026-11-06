@@ -34,20 +34,26 @@ function publishedAgents(service, input) {
   const children = [];
   if (service.kind !== 'service' || !Array.isArray(input)) return children;
   const ids = new Set();
+  const parents = new Map();
   for (const entry of input) {
     if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string' || !entry.id || ids.has(entry.id)) continue;
     ids.add(entry.id);
-    const parent = typeof entry.parent === 'string' && entry.parent ? entry.parent : null;
+    if (typeof entry.parent === 'string' && entry.parent) parents.set(entry.id, entry.parent);
     children.push({
       id: `${service.id}/${entry.id}`, name: text(entry.name, entry.id), kind: text(entry.role, 'agent'),
       user: service.user, device: service.device, device_id: service.device_id, device_metadata: service.device_metadata,
-      status: PUBLISHED_STATUSES.includes(entry.status) ? entry.status : 'queueable', last_seen: service.last_seen, description: '',
-      buses: [...service.buses], via: service.id, viaName: service.name, parent: parent && ids.has(parent) ? `${service.id}/${parent}` : parent,
+      // A silent service takes its agents with it: their state is at most the service's.
+      status: service.status === 'offline' ? 'offline' : PUBLISHED_STATUSES.includes(entry.status) ? entry.status : 'queueable',
+      last_seen: service.last_seen, description: '', buses: [...service.buses], via: service.id, viaName: service.name, parent: null,
     });
     if (children.length >= MAX_PUBLISHED_AGENTS) break;
   }
-  // A parent must be in the same list; anything else hangs from the service.
-  for (const child of children) if (child.parent && !ids.has(child.parent.slice(service.id.length + 1))) child.parent = null;
+  // Parents resolve once every id is known, so order in the list does not matter;
+  // a parent outside the list, or the entry itself, means the entry hangs from the service.
+  for (const child of children) {
+    const own = child.id.slice(service.id.length + 1), parent = parents.get(own);
+    if (parent && parent !== own && ids.has(parent)) child.parent = `${service.id}/${parent}`;
+  }
   return children;
 }
 
@@ -213,10 +219,21 @@ export const communityColor = index => COMMUNITY_COLORS[(Number.isInteger(index)
 // deletes its members' visual positions or changes the underlying message graph.
 export function spectralNodes(model, analysis, previous = []) {
   const old = new Map(previous.filter(node => node.type === 'agent').map(node => [node.id, node]));
-  return layoutNodes(model).filter(node => node.type === 'agent').map(node => {
+  const placed = layoutNodes(model).filter(node => node.type === 'agent').map(node => {
     const prior = old.get(node.id);
     const position = prior?.data?.group === node.data.group ? prior.position : analysis.positions.get(node.data.agent.id) || node.position;
     return {...node, position: {...position}};
+  });
+  // Published agents take no part in the analysis; a child without a kept
+  // position stacks under its service wherever the analysis put the service.
+  const byId = new Map(placed.map(node => [node.data.agent.id, node]));
+  const stacked = new Map();
+  return placed.map(node => {
+    const agent = node.data.agent, anchor = agent.via ? byId.get(agent.via) : null;
+    if (!anchor || old.get(node.id)?.data?.group === node.data.group) return node;
+    const index = stacked.get(agent.via) || 0;
+    stacked.set(agent.via, index + 1);
+    return {...node, position: {x: anchor.position.x + 30, y: anchor.position.y + (anchor.height || 120) + 24 + index * 140}};
   });
 }
 

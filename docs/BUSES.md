@@ -259,7 +259,10 @@ broker and unpublished general-bus senders are absent from the graph.
 A service registered with `--publish-agents` is drawn with the agents it says
 it runs as nodes under it, joined by dashed lines; those are the service's
 claim, refreshed every 30 seconds, not traffic, and they carry only an id, a
-name, a status and a role. See [service adapters](SERVICE-ADAPTERS.md).
+name, a status and a role. Only the service's row in the snapshot JSON carries
+the list, and only while the service is heard from; the published agents take
+no part in the graph's analysis, and an offline service shows them offline.
+See [service adapters](SERVICE-ADAPTERS.md).
 
 This is retained activity rather than a complete history. Terminal receipts
 remain for seven days after their last update, then their counts disappear.

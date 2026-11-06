@@ -26,6 +26,8 @@ import unicodedata
 from urllib.parse import urlsplit
 import uuid
 
+from bus_published import MAX_PUBLISHED_AGENTS, validate_published_agents
+
 
 MAX_BODY = 131072
 MAX_MESSAGE = 32768
@@ -49,10 +51,6 @@ MAX_INVITES = 4096
 MAX_RECORDS = 20000
 # Receipts per export page; a caller continues with the returned cursor.
 MAX_EXPORT_PAGE = 1000
-# A service may publish this many agents of its own, as its claim, with these fields only.
-MAX_PUBLISHED_AGENTS = 256
-MAX_PUBLISHED_AGENTS_BYTES = 32768
-PUBLISHED_AGENT_FIELDS = {"id": 128, "name": 128, "status": 16, "role": 64, "parent": 128}
 MAX_SSO_REPLAYS = 4096
 MAX_VIEW_HEADER = 8192
 MAX_CHATS = 4096
@@ -1201,35 +1199,19 @@ class Broker:
 
     @staticmethod
     def _published_agents(value):
-        """A service's own agent list: bounded, known fields only, never message text."""
-        if not isinstance(value, list) or len(value) > MAX_PUBLISHED_AGENTS:
-            raise BusError("published agents must be a list of at most %d" % MAX_PUBLISHED_AGENTS)
-        agents, seen = [], set()
-        for entry in value:
-            if not isinstance(entry, dict) or set(entry) - set(PUBLISHED_AGENT_FIELDS) or "id" not in entry:
-                raise BusError("a published agent carries only id, name, status, role and parent")
-            row = {}
-            for key, limit in PUBLISHED_AGENT_FIELDS.items():
-                if key in entry:
-                    row[key] = _text(entry[key], "published agent " + key, limit)
-            row.setdefault("name", row["id"])
-            row.setdefault("status", "queueable")
-            if row["status"] not in ("live", "queueable", "offline") or row["id"] in seen:
-                raise BusError("published agents need distinct ids and a status of live, queueable or offline")
-            seen.add(row["id"])
-            agents.append(row)
-        if any("parent" in row and row["parent"] not in seen for row in agents):
-            raise BusError("a published agent's parent must be in the same list")
-        encoded = json.dumps(agents, separators=(",", ":"))
-        if len(encoded.encode()) > MAX_PUBLISHED_AGENTS_BYTES:
-            raise BusError("published agents exceed %d bytes" % MAX_PUBLISHED_AGENTS_BYTES)
-        return encoded
+        """A service's own agent list through the shared validator: (stored JSON, dropped count)."""
+        try:
+            kept, dropped = validate_published_agents(value)
+        except ValueError as exc:
+            raise BusError(str(exc)) from None
+        return json.dumps(kept, separators=(",", ":")), len(dropped)
 
     def _op_heartbeat(self, db, p, r, now):
         rows = r.get("agents")
         if not isinstance(rows, list) or len(rows) > MAX_AGENTS:
             raise BusError("agents must be a bounded list")
         validated = []
+        dropped_agents = {}
         for entry in rows:
             if not isinstance(entry, dict) or entry.get("status") not in ("live", "queueable", "offline"):
                 raise BusError("invalid heartbeat")
@@ -1239,7 +1221,10 @@ class Broker:
             if "agents" in entry:
                 if agent["kind"] != "service":
                     raise BusError("published agents require a service registration")
-                entry = dict(entry, agents=self._published_agents(entry["agents"]))
+                encoded, dropped = self._published_agents(entry["agents"])
+                entry = dict(entry, agents=encoded)
+                if dropped:
+                    dropped_agents[agent["id"]] = dropped
             validated.append((entry, agent))
         refused = []
         updated = 0
@@ -1259,6 +1244,8 @@ class Broker:
         result = {"updated": updated, "ts": now}
         if refused:
             result["refusals"] = refused
+        if dropped_agents:
+            result["dropped_agents"] = dropped_agents
         return result
 
     def _op_snapshot(self, db, p, r, now):
@@ -1287,8 +1274,9 @@ class Broker:
                     row["principal"] = a["principal"]
                 if self._service_fence(db, a["id"]) is not None:
                     row.update(fence_protocol=SERVICE_FENCE_PROTOCOL, epoch=a["epoch"])
-                if a["published_agents"] is not None:
-                    # The service's own claim about its agents, as it last published it.
+                if a["published_agents"] is not None and row["status"] != "offline":
+                    # The service's own claim about its agents, as it last published it,
+                    # only while the service itself is heard from.
                     row["agents"] = json.loads(a["published_agents"])
                 agents.append(row)
             role = self._bus_role(db, p, definition)

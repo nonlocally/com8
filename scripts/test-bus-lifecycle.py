@@ -361,21 +361,29 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(polls[2]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": 8})
         self.assertEqual(polls[3]["batch"], {"agent-service": bus.SERVICE_LEASE_BATCH, "agent-second": bus.SERVICE_LEASE_BATCH})
 
-    def test_publishing_service_status_is_fetched_on_its_interval_and_sent_in_the_heartbeat(self):
-        state = self.root / "publishing-worker"
-        state.mkdir()
-        url = "https://service-status.invalid"
+    def publishing_records(self, state, url, count=1):
         records = self.service_records(state, url)
         records["svc"]["publish_agents"] = True
         records["quiet"] = dict(records["svc"], id="agent-quiet", session_key="service:quiet",
                                 service_id="00000000-0000-4000-8000-000000000001", publish_agents=False)
+        for index in range(1, count):
+            records["svc%d" % index] = dict(records["svc"], id="agent-service-%d" % index, session_key="service:%d" % index,
+                                            service_id="00000000-0000-4000-8000-0000000000%02x" % (index + 16))
+        return records
+
+    def test_publishing_service_status_is_fetched_off_the_heartbeat_path_and_sent_when_in_hand(self):
+        state = self.root / "publishing-worker"
+        state.mkdir()
+        url = "https://service-status.invalid"
+        records = self.publishing_records(state, url)
         cfg = {"connections": {url: {"url": url}}}
         heartbeats, fetches = [], []
 
         def request(conn, operation, **payload):
             if operation == "heartbeat":
-                heartbeats.append(payload["agents"])
-                if len(fetches) >= 3:
+                heartbeats.append((time.monotonic(), payload["agents"]))
+                if len(fetches) >= 3 and any("agents" in entry and entry["agents"][0]["id"] == "prover-3"
+                                             for _, entries in heartbeats for entry in entries):
                     (state / "worker.stop").touch()
                 return {"ok": True}
             if operation == "poll_device":
@@ -384,22 +392,94 @@ class LifecycleTests(unittest.TestCase):
 
         def status(record):
             fetches.append((time.monotonic(), record["id"]))
+            if len(fetches) == 1:
+                time.sleep(1.5)  # a slow endpoint must not stretch the heartbeat
             if len(fetches) == 2:
                 raise bus_service.ServiceError("service endpoint returned invalid status")
-            return [{"id": "prover-%d" % len(fetches), "name": "Prover", "status": "live"}]
+            return [{"id": "prover-%d" % len(fetches), "name": "Prover", "status": "live"}], []
 
-        with mock.patch.object(bus, "STATUS_INTERVAL", 0.5), mock.patch.object(bus_service, "publish_status", side_effect=status):
-            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"))
+        with mock.patch.object(bus, "STATUS_INTERVAL", 0.5), mock.patch.object(bus, "STATUS_TICK", 0.2), \
+                mock.patch.object(bus_service, "publish_status", side_effect=status):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"), timeout=20)
         self.assertGreaterEqual(len(fetches), 3)
         self.assertTrue(all(ident == "agent-service" for _, ident in fetches), fetches)
         self.assertTrue(all(later - earlier >= 0.45 for (earlier, _), (later, _) in zip(fetches, fetches[1:])))
-        carried = [entry for entries in heartbeats for entry in entries if "agents" in entry]
-        # The heartbeat after each successful fetch carries the list; a failed fetch sends nothing and is reported.
-        self.assertEqual([entry["agents"][0]["id"] for entry in carried][:2], ["prover-1", "prover-3"])
+        gaps = [later - earlier for (earlier, _), (later, _) in zip(heartbeats, heartbeats[1:])]
+        self.assertTrue(gaps and max(gaps) < 3.0, "the status call stretched the heartbeat: %r" % gaps)
+        carried = [entry for _, entries in heartbeats for entry in entries if "agents" in entry]
+        # A heartbeat carries the latest list in hand, once; the first fetch's list went out before any
+        # other came in, a failed fetch never produces one, and no list is sent twice.
+        sent = [entry["agents"][0]["id"] for entry in carried]
+        self.assertEqual(sent[:1], ["prover-1"])
+        self.assertNotIn("prover-2", sent)
+        self.assertEqual(len(sent), len(set(sent)))
+        self.assertEqual(sent, sorted(sent, key=lambda ident: int(ident.split("-")[1])))
         self.assertTrue(all(entry["id"] == "agent-service" for entry in carried))
-        self.assertTrue(all(entry["id"] != "agent-quiet" or "agents" not in entry for entries in heartbeats for entry in entries))
+        self.assertTrue(all(entry["id"] != "agent-quiet" or "agents" not in entry for _, entries in heartbeats for entry in entries))
         published = json.loads((state / "worker.json").read_text())
         self.assertTrue(any("status" in item["error"]["error"] for item in published["recent_errors"]), published["recent_errors"])
+
+    def test_status_call_past_its_deadline_is_dropped_and_reported(self):
+        state = self.root / "slow-status-worker"
+        state.mkdir()
+        url = "https://service-slow.invalid"
+        records = self.publishing_records(state, url)
+        cfg = {"connections": {url: {"url": url}}}
+        heartbeats, fetches = [], []
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                heartbeats.append(payload["agents"])
+                if any("agents" in entry for entries in heartbeats for entry in entries):
+                    (state / "worker.stop").touch()
+                return {"ok": True}
+            if operation == "poll_device":
+                return {"messages": []}
+            raise AssertionError(operation)
+
+        def status(record):
+            fetches.append(time.monotonic())
+            if len(fetches) == 1:
+                time.sleep(1.2)  # past the deadline: its answer is dropped
+            return [{"id": "late" if len(fetches) == 1 else "fresh", "status": "live"}], []
+
+        with mock.patch.object(bus, "STATUS_INTERVAL", 0.3), mock.patch.object(bus, "STATUS_TICK", 0.1), \
+                mock.patch.object(bus, "STATUS_DEADLINE", 0.4), mock.patch.object(bus_service, "publish_status", side_effect=status):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"), timeout=20)
+        carried = [entry["agents"][0]["id"] for entries in heartbeats for entry in entries if "agents" in entry]
+        self.assertEqual(carried[:1], ["fresh"])
+        self.assertNotIn("late", carried)
+        published = json.loads((state / "worker.json").read_text())
+        self.assertTrue(any("deadline" in item["error"]["error"] for item in published["recent_errors"]), published["recent_errors"])
+
+    def test_lists_in_one_heartbeat_stay_under_the_hub_body_limit(self):
+        state = self.root / "many-lists-worker"
+        state.mkdir()
+        url = "https://service-many.invalid"
+        records = self.publishing_records(state, url, count=4)
+        cfg = {"connections": {url: {"url": url}}}
+        sizes, carried = [], []
+
+        def request(conn, operation, **payload):
+            if operation == "heartbeat":
+                body = json.dumps(dict(payload, op=operation)).encode()
+                sizes.append(len(body))
+                carried.append([entry["id"] for entry in payload["agents"] if "agents" in entry])
+                if len({ident for entries in carried for ident in entries}) == 4:
+                    (state / "worker.stop").touch()
+                return {"ok": True}
+            if operation == "poll_device":
+                return {"messages": []}
+            raise AssertionError(operation)
+
+        big = [{"id": "agent-%03d" % index, "name": "n" * 100, "status": "live"} for index in range(200)]
+        with mock.patch.object(bus, "STATUS_INTERVAL", 60), mock.patch.object(bus, "STATUS_TICK", 0.1), \
+                mock.patch.object(bus_service, "publish_status", side_effect=lambda record: (big, [])):
+            self.run_worker(state, cfg, records, request, lambda record, envelope: self.fail("nothing to deliver"), timeout=25)
+        self.assertEqual(len({ident for entries in carried for ident in entries}), 4)
+        # Four 26 KiB lists would exceed the hub's 128 KiB body in one request; they are spread over heartbeats.
+        self.assertTrue(all(size < 131072 for size in sizes), max(sizes))
+        self.assertTrue(all(len(entries) <= 2 for entries in carried), carried)
 
     def test_worker_is_ready_before_network_and_heartbeats_continue_during_delivery(self):
         state = self.root / "worker-state"
