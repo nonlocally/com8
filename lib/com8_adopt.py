@@ -29,6 +29,7 @@ import shlex
 import subprocess
 import time
 
+import com8_seat
 from com8_payload import KERNEL_FILES
 
 _FAR_PATH = "/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
@@ -382,13 +383,14 @@ def settings_file_cmd():
 
 
 def spawn_cmds(name, facts, steered=False):
-    """Remote commands that spawn agent NAME in tmux session com8-NAME.
+    """Remote commands that launch agent NAME in tmux session com8-NAME.
     Interactive shell + send-keys (claude needs a real pty; a launcher
     script as the pane command died twice). Returned as a list of remote
-    sh lines to run in order, with waits handled by the caller. `steered`:
-    the device was moved to ~/.local/run (collision / no-systemd), so claude
-    must bind its socket there too — otherwise it keeps the OS default that
-    its daemon also uses."""
+    sh lines to run in order. The boot itself — the workspace-trust dialog,
+    the idle prompt, /rename — is driven afterwards through _RemoteSeat,
+    never by keystrokes on a timer. `steered`: the device was moved to
+    ~/.local/run (collision / no-systemd), so claude must bind its socket
+    there too — otherwise it keeps the OS default that its daemon also uses."""
     tmux = facts.get("tmux_bin") or "tmux"
     env = ('export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$HOME/.local/run}"; '
            if steered else "")
@@ -399,9 +401,54 @@ def spawn_cmds(name, facts, steered=False):
         "%s send-keys -t com8-%s \"%sexport PATH=%s; "
         "cd ~ && claude --settings ~/.com8-settings.json\" Enter"
         % (tmux, name, env, _FAR_PATH.replace("$", "\\$")),
-        "%s send-keys -t com8-%s Enter" % (tmux, name),          # trust prompt
-        "%s send-keys -t com8-%s \"/rename %s\" Enter" % (tmux, name, name),
     ]
+
+
+_SEAT_MARK = "__com8_seat__"
+
+
+class _RemoteSeat(com8_seat.SeatDriver):
+    """The seat driver with every tmux call sent over ssh, so a remote spawn
+    gets the same classifier and the same fail-closed respond() as a local
+    seat. `ssh(addr, cmd)` is the injected (rc, merged output) runner: its
+    output is stdout FOLLOWED by the ssh client's stderr, so the answer is
+    read between a start and an end mark on stdout — a login notice before
+    the command, or a banner or known-hosts warning after it, cannot pose as
+    a pane id or a screen."""
+
+    def __init__(self, addr, ssh, tmux="tmux"):
+        super().__init__()
+        self._addr, self._ssh = addr, ssh
+        self._base = [tmux]
+
+    def _tmux(self, *args, check=False, timeout=10):
+        cmd = ("printf '%%s\\n' %s; %s 2>/dev/null && printf '%%s\\n' %s-ok"
+               " || printf '%%s\\n' %s-err"
+               % (_SEAT_MARK, shlex.join(self._base + list(args)),
+                  _SEAT_MARK, _SEAT_MARK))
+        _, out = self._ssh(self._addr, cmd)
+        _, started, rest = out.partition(_SEAT_MARK + "\n")
+        body, ended, status = rest.partition(_SEAT_MARK + "-")
+        if not (started and ended):
+            # the command never ran or never finished: ssh hung, was refused
+            # or could not start — nothing is known about the seat
+            raise com8_seat.SeatUnavailable("ssh did not reach tmux: %s"
+                                            % out.strip()[-200:])
+        rc = 0 if status.startswith("ok") else 1
+        if check and rc != 0:
+            raise com8_seat.SeatError(body.strip() or "tmux error")
+        return subprocess.CompletedProcess(args, rc, stdout=body, stderr="")
+
+    def pane_of(self, session):
+        """The pane id behind a session name; "" when there is no such
+        session. An ssh that never reached tmux (SeatUnavailable) is NOT the
+        absence of a session, and propagates."""
+        try:
+            return self._field(session, "#{pane_id}")
+        except com8_seat.SeatUnavailable:
+            raise
+        except com8_seat.SeatError:
+            return ""
 
 
 def _run_ssh(addr, cmd, timeout=60):
@@ -640,25 +687,42 @@ def execute(addr, acts, facts, local, ssh=_run_ssh, say=print):
 
 
 def spawn(addr, name, facts, fardev, ssh=_run_ssh, say=print, ask=None,
-          steered=False):
+          steered=False, boot_wait=60):
     """Spawn agent NAME on the device and prove it end to end."""
-    cmds = spawn_cmds(name, facts, steered=steered)
-    ssh(addr, cmds[0])
-    ssh(addr, cmds[1])
-    ssh(addr, cmds[2])
-    time.sleep(15)
-    ssh(addr, cmds[3])            # trust prompt: accept
-    time.sleep(12)
-    ssh(addr, cmds[4])            # /rename
-    time.sleep(8)
-    rc, out = ssh(addr,
-                  "python3 -c \"import glob,json,os\n"
-                  "for f in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):\n"
-                  "    try: d=json.load(open(f))\n"
-                  "    except Exception: continue\n"
-                  "    if d.get('name')=='%s' and d.get('version')!='communicate-com8':\n"
-                  "        print('REG', d.get('pid')); break\"" % name)
-    registered = "REG" in out
+    for cmd in spawn_cmds(name, facts, steered=steered):
+        ssh(addr, cmd)
+    seat = _RemoteSeat(addr, ssh, tmux=facts.get("tmux_bin") or "tmux")
+    try:
+        pane = seat.pane_of("com8-%s" % name)
+    except com8_seat.SeatUnavailable as e:
+        say("  spawn: %-18s %s" % (name, "NOT REGISTERED — %s" % e))
+        return False
+    if not pane.startswith("%"):
+        say("  spawn: %-18s %s" % (name, "NOT REGISTERED — no tmux pane came up"))
+        return False
+    # The far claude boots like a local seat: its workspace-trust dialog is
+    # answered with the affirmative row (the default row exits), and /rename
+    # is typed only into a real idle prompt. The timed blind Enter this
+    # replaces selected "No, exit".
+    boot = com8_seat.rename_when_ready(
+        seat, pane, name, boot_wait=boot_wait,
+        log=lambda *a: say("  spawn: %-18s %s" % ("boot", " ".join(str(x) for x in a))))
+    if not boot.get("ok"):
+        say("  spawn: %-18s %s" % (name, "NOT REGISTERED — %s" % boot.get("err")))
+        return False
+    registered = False
+    for _ in range(10):
+        rc, out = ssh(addr,
+                      "python3 -c \"import glob,json,os\n"
+                      "for f in glob.glob(os.path.expanduser('~/.claude/sessions/*.json')):\n"
+                      "    try: d=json.load(open(f))\n"
+                      "    except Exception: continue\n"
+                      "    if d.get('name')=='%s' and d.get('version')!='communicate-com8':\n"
+                      "        print('REG', d.get('pid')); break\"" % name)
+        registered = "REG" in out
+        if registered:
+            break
+        time.sleep(1)
     say("  spawn: %-18s %s" % (name, "registered" if registered
                                else "NOT REGISTERED — check the pane"))
     if registered and ask:
