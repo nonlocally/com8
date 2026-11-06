@@ -136,6 +136,20 @@ existing seven-day retention. Keep journal and enrollment together when
 moving the worker. `rehome` refuses while service jobs are pending; drain them
 first and explicitly update the application's pinned origin after migration.
 
+## Measuring delivery cadence
+
+`scripts/measure-bus-delivery.py` measures how fast this checkout's outbound
+worker delivers to one service recipient. It runs an isolated TLS hub, a fake
+service that answers every bridge call at once, and the real worker started by
+`register-service`, sends `--messages` within `--window` seconds and reports the
+worker's device-poll cadence, the lease size of each poll, the hub and bridge
+round trips per message, the delivery rate the service observed and the
+per-message latencies. `--mode poll` (the default) answers `deliver` with
+`pending` and the first `poll` with the reply; `--mode immediate` answers
+`deliver` with the reply. `--json` or `--out FILE` keeps the full timeline.
+`scripts/test-bus-delivery.py` runs it with a few messages in the bus suite.
+No network, live agent, user configuration or credential is involved.
+
 ## Known-ID retirement prototype (`service-fence/epoch-v1`)
 
 This source-only prototype is inactive until root qualifies matching broker,
