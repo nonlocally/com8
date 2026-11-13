@@ -14,7 +14,10 @@ a substitute agent or target another route silently.
 | `com8 model run CONNECTION --cli claude` | Launch the client with that model, preserving ordinary defaults. |
 | `com8 send NAME MESSAGE` | Durable mail. |
 | `com8 inbox NAME` | Stored JSONL inbox; reading does not imply acknowledgement. |
-| `com8 ask NAME QUESTION --timeout SEC` | Existing durable request/reply path. |
+| `com8 ask NAME QUESTION --timeout SEC` | Existing durable request/reply path. The request carries a reply obligation; see [turn-end replies](REPLIES.md). |
+| `com8 hook install AGENT` | Opt-in turn-end hook for `claude`, `codex`, or `cursor`. `auto` posts the final answer; `remind` blocks once. |
+| `com8 obligation list` | Open and finished reply obligations for this state directory. |
+| `com8 obligation sweep` | Expire unanswered obligations and retry completion webhooks. |
 | `com8 seat ls` | Execution endpoints for the configured seat driver. |
 | `com8 seat ls --json` | Seats plus the configured tmux selector and observed server socket/PID. |
 | `com8 seat spawn --json -- 'bash --norc --noprofile'` | Start a seat and return its pane ID and server coordinates. |
@@ -58,6 +61,8 @@ qualification limits. These commands require release 0.5 or later
 Not every transport implements every level. Legacy weak reply fallbacks are not
 strong correlation. Codex queue success does not establish wake or consumption by
 the exact session. Screen capture is execution observation, not an agent reply.
+A turn-end hook can post the final answer for an open obligation; that post is
+the reply, and a second stop does not send it again. See [turn-end replies](REPLIES.md).
 
 Native filesystem/SSH trust, broker membership, and remote seat control are separate
 capabilities. A bus invitation does not authorize arbitrary shell control. A pane

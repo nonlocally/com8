@@ -123,6 +123,11 @@ it instructs** — SendMessage to the named agent, or run the given
 `communicate send` command verbatim. That block is the sender's live return
 address; answering "in place" only reaches them if the block says so.
 
+A final `[com8-obligation] {…}` line is the same return address in a form the
+turn-end hook can read. When that hook is installed it posts your final answer
+if you have not already replied, and it does not post a second copy. Answering
+only in this pane, with the hook not installed, still does not reach the requester.
+
 ## The inbound gate (why a message may be "held")
 
 Claude Code guards inbound peer messages. Default is **mode parity**: a message

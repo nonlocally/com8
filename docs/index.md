@@ -32,6 +32,7 @@ Communication:
 - [Service adapters](SERVICE-ADAPTERS.md) — publish an application service through
   the bus using a fixed HTTPS bridge and durable, correlated replies.
 - [Mechanism](MECHANISM.md) — how native session routing works underneath.
+- [Turn-end replies](REPLIES.md) — correlation, the Stop hook, and completion webhooks.
 
 Optional modules:
 
