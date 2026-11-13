@@ -44,6 +44,8 @@ COM8 — persistent agent identities, communication, and execution
   com8 send NAME MESSAGE ...       send durable mail
   com8 inbox NAME                  read stored messages
   com8 ask | reply | wait ...       request and receive replies
+  com8 hook install claude|codex|cursor
+  com8 obligation list | sweep     turn-end reply obligations and webhooks
   com8 seat ...                    observe and control execution
 
   com8 bus ...                     register, discover, and message on a bus
@@ -76,6 +78,10 @@ EOF
     ;;
   model)
     exec "${COM8_PYTHON:-python3}" -B "$root/lib/model_connections.py" "$@"
+    ;;
+  hook|obligation)
+    export COM8_BIN="${COM8_BIN:-$root/bin/com8}"
+    exec "${COM8_PYTHON:-python3}" -B "$root/lib/com8_reply.py" "$cmd" "$@"
     ;;
   profile|profiles)
     if [ ! -f "$root/profiles/manage.py" ]; then

@@ -700,6 +700,13 @@ def deliver(record, envelope):
                "[reply-to bus: To reply, run %s. Answering only in your own chat does not send a reply.]" %
                (envelope["id"], sender["name"], sender["id"], envelope["bus"], boundary,
                 boundary, envelope["message"], boundary, reply))
+    try:
+        import com8_reply
+        trailer = com8_reply.bus_trailer(record, envelope)
+    except Exception:
+        trailer = ""
+    if trailer:
+        content += "\n" + trailer
     if record["kind"] == "claude":
         from cc_peer import deliver as socket_deliver
         socket_deliver(record["socket"], content, "")
@@ -1129,6 +1136,8 @@ def parser():
     reply = commands.add_parser("reply", help="reply to a received message within its fixed conversation")
     reply.add_argument("--expected-sender-epoch", type=int)
     reply.add_argument("--request-id")
+    reply.add_argument("--stdin", action="store_true",
+                       help="read the reply body from stdin instead of the command arguments")
     reply.add_argument("id", help="ID of the received message")
     reply.add_argument("--from", dest="sender", default="self")
     reply.add_argument("message", nargs="*")
@@ -1477,6 +1486,10 @@ def main():
             split = argv.index("--")
             message, argv = argv[split + 1:], argv[:split]
         args = parser().parse_args(argv)
+        if getattr(args, "stdin", False):
+            if message is not None:
+                raise BusError("pass the reply on stdin or after --, not both")
+            message = [sys.stdin.read()]
         if message is not None:
             args.message = message
         result = run(args)
