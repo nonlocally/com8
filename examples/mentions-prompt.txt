@@ -1,0 +1,1 @@
+@personal-assistant pls make sure you contribute to this.. and pls make sure that claude code sessions and codex sessions relevant for this project contribute correctly ! eg @com8::dirk-personal:neo4j-ops and @com8::dirk-personal:fleet-ops and @com8::dirk-personal:wilde-qit and @com8::dirk-personal:wilde-qit-astra

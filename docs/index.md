@@ -22,6 +22,7 @@ Start here:
   Codex, with private credentials and explicit per-launch selection (0.5 and later).
 - [CLI and delivery semantics](CLI.md) — what each command means and what a
   receipt proves.
+- [Prompt mentions](MENTIONS.md) — opt-in `@com8::bus:session` fan-out and completion.
 
 Communication:
 

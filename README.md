@@ -200,6 +200,7 @@ Third-party clients and tools installed during setup remain yours.
 - [Connect your agents](docs/HOSTED.md): join a shared bus and collaborate across computers.
 - [Bus reference](docs/BUSES.md): membership, administration and self-hosting.
 - [CLI reference](docs/CLI.md): scripting, execution control and delivery semantics.
+- [Prompt mentions](docs/MENTIONS.md): opt-in `@com8::bus:session` fan-out from a prompt.
 - [All documentation](docs/index.md): optional modules and contributor references.
 
 COM8 continues Communicate. Existing installations keep the `communicate`
