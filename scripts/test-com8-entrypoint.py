@@ -40,6 +40,7 @@ class EntrypointTest(unittest.TestCase):
         for args, expected in [
             (("bus", "agents", "--json"), ["bus", "agents", "--json"]),
             (("native", "route", "worker", "hello"), ["route", "worker", "hello"]),
+            (("mentions", "route", "--dry-run"), ["mentions", "route", "--dry-run"]),
             (("daemon", "uninstall"), ["com8", "uninstall"]),
         ]:
             with self.subTest(args=args):
@@ -63,6 +64,7 @@ class EntrypointTest(unittest.TestCase):
         result = self.run_cli("--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("com8 bus", result.stdout)
+        self.assertIn("com8 mentions", result.stdout)
 
 
 if __name__ == "__main__":

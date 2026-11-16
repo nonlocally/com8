@@ -47,6 +47,7 @@ COM8 — persistent agent identities, communication, and execution
   com8 seat ...                    observe and control execution
 
   com8 bus ...                     register, discover, and message on a bus
+  com8 mentions ...                fan @com8::bus:session mentions through bus send
   com8 native ...                  existing communicate native/session commands
   com8 model ...                   named private model connections for coding clients
   com8 profile ...                 optional terminal and mesh configuration
@@ -70,6 +71,9 @@ EOF
     ;;
   bus)
     exec "$root/bin/communicate" bus "$@"
+    ;;
+  mentions)
+    exec "$root/bin/communicate" mentions "$@"
     ;;
   native)
     exec "$root/bin/communicate" "$@"
