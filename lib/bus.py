@@ -731,6 +731,47 @@ def worker_process_metadata(root):
     return result
 
 
+def worker_is_alive(info):
+    """Whether the worker a status file describes is a process now.
+
+    The kernel start token the worker published is compared with the process
+    holding that pid, so a recycled pid is not mistaken for the worker. Without a
+    usable token the answer is the lock every worker holds for its whole life.
+    """
+    if not info:
+        return False
+    pid, published = info.get("pid"), info.get("process_identity")
+    if type(pid) is int and isinstance(published, dict):
+        try:
+            from bus_service import consumer_process_identity
+            return consumer_process_identity(pid) == published
+        except Exception:
+            # Gone, or unreadable here: the lock still answers.
+            pass
+    with locked("worker-start", blocking=False) as idle:
+        if not idle:
+            # A start is in progress. Taking the worker's lock now, even for an
+            # instant, could make the new worker give up.
+            return True
+        with locked("worker", blocking=False) as free:
+            return not free
+
+
+def observed_worker(info):
+    """The worker's own file, corrected by what the process table shows.
+
+    The worker is the only writer of worker.json, so one that is killed leaves
+    a file that says running for ever.
+    """
+    info = dict(info) if isinstance(info, dict) else {}
+    alive = worker_is_alive(info)
+    recorded = info.get("state")
+    if not alive and recorded in ("starting", "running"):
+        info["state"], info["recorded_state"] = "dead", recorded
+    recent = alive and info.get("state") == "running" and time.time() - info.get("heartbeat_at", 0) < 15
+    return {"worker": info, "worker_alive": alive, "worker_recent": recent}
+
+
 def worker():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1168,6 +1209,14 @@ def parser():
 
 
 def run(args):
+    result = run_command(args)
+    if args.command == "status" and isinstance(result, dict) and "worker" in result:
+        # Both status forms pass the worker's own file through.
+        result.update(observed_worker(result["worker"]))
+    return result
+
+
+def run_command(args):
     cmd = args.command
     if cmd in ("serve", "__serve"):
         return serve_local(args.port)
