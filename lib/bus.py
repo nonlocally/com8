@@ -781,6 +781,30 @@ def observed_worker(info):
     return {"worker": info, "worker_alive": alive, "worker_recent": recent}
 
 
+def revive_worker():
+    """Start the worker again when it is gone without having been asked to stop.
+
+    Nothing supervises the worker: one that is killed, or lost when the machine
+    restarts, stays gone until a command starts it. Returns a sentence for
+    whoever ran the command, or None when there was nothing to do.
+    """
+    root = state_dir()
+    if (root / "worker.stop").exists():
+        return None
+    info = read_json(root / "worker.json", {})
+    if worker_is_alive(info if isinstance(info, dict) else {}):
+        return None
+    connections = config()["connections"]
+    if not any(isinstance(record, dict) and active_adapter(record) and record.get("url") in connections
+               for record in registrations().values()):
+        return None
+    start_worker()
+    last = info.get("heartbeat_at") if isinstance(info, dict) else None
+    seen = (" (last heartbeat %s)" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last))
+            if type(last) in (int, float) and last > 0 else "")
+    return "the outbound worker was not running%s; started it" % seen
+
+
 def worker():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1222,6 +1246,14 @@ def run(args):
     if args.command == "status" and isinstance(result, dict) and "worker" in result:
         # Both status forms pass the worker's own file through.
         result.update(observed_worker(result["worker"]))
+    if args.command in ("list", "agents"):
+        # The listing is the result; what happened to the worker goes to stderr.
+        try:
+            note = revive_worker()
+        except (BusError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            note = "the outbound worker is not running and could not be started: %s" % " ".join(str(exc).split())[:200]
+        if note:
+            print("communicate bus: " + note, file=sys.stderr)
     return result
 
 

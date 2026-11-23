@@ -22,7 +22,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 import bus
 
 
-class WorkerLivenessTests(unittest.TestCase):
+class WorkerFixture(unittest.TestCase):
     def setUp(self):
         # Resolved, because the worker receives the resolved state path in its arguments.
         self.temp = Path(tempfile.mkdtemp(prefix="bus-worker-liveness-")).resolve()
@@ -112,6 +112,8 @@ class WorkerLivenessTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
         return json.loads(proc.stdout)
 
+
+class WorkerLivenessTests(WorkerFixture):
     def test_status_reports_a_killed_worker_as_dead(self):
         pid = self.start_worker()
         self.kill_fixture_worker(pid)
@@ -182,6 +184,56 @@ class WorkerLivenessTests(unittest.TestCase):
         status = self.status()
         self.assertEqual(status["worker"]["state"], "running")
         self.assertIs(status.get("worker_alive"), True)
+
+
+class WorkerRevivalTests(WorkerFixture):
+    """A command that lists agents brings back a worker that is gone without having been asked to stop."""
+
+    def bus(self, *args):
+        proc = subprocess.run([str(ROOT / "bin/communicate"), "bus", *args], env=self.env,
+                              capture_output=True, text=True, timeout=45)
+        self.assertEqual(proc.returncode, 0, proc.stderr + proc.stdout)
+        return proc
+
+    def register_fixture_agent(self):
+        """A local hub, and one saved registration on it that is active (it belongs to a bus)."""
+        self.bus("list")  # starts the temporary local hub and writes its connection
+        root = self.temp / "state/bus"
+        config = json.loads((root / "client.json").read_text())
+        url = config["default"]
+        (root / "registrations.json").write_text(json.dumps({url + "|codex:fixture": {
+            "id": "agent-fixture", "session_key": "codex:fixture", "kind": "codex", "name": "fixture",
+            "binary": "/usr/bin/true", "thread": "00000000-0000-4000-8000-000000000000",
+            "buses": ["general"], "url": url}}))
+
+    def test_listing_agents_restarts_a_worker_found_dead(self):
+        self.register_fixture_agent()
+        first = self.start_worker()
+        self.kill_fixture_worker(first)
+        self.assertIs(self.status().get("worker_alive"), False)
+        listed = self.bus("agents", "--json")
+        json.loads(listed.stdout)  # the listing itself is unchanged and still the only thing on stdout
+        self.assertIn("worker was not running", listed.stderr)
+        status = self.status()
+        self.assertIs(status.get("worker_alive"), True)
+        self.assertEqual(status["worker"]["state"], "running")
+        self.assertNotEqual(status["worker"]["pid"], first)
+
+    def test_listing_agents_leaves_a_stopped_worker_stopped(self):
+        self.register_fixture_agent()
+        self.start_worker()
+        self.bus("stop")
+        self.wait_for(lambda: self.worker_file().get("state") == "stopped", "the worker publishes stopped")
+        listed = self.bus("agents", "--json")
+        self.assertNotIn("worker", listed.stderr)
+        status = self.status()
+        self.assertIs(status.get("worker_alive"), False)
+        self.assertEqual(status["worker"]["state"], "stopped")
+
+    def test_listing_agents_with_no_registration_starts_no_worker(self):
+        listed = self.bus("agents", "--json")
+        self.assertNotIn("worker", listed.stderr)
+        self.assertFalse((self.temp / "state/bus/worker.json").exists())
 
 
 class RegistrationStatusTests(unittest.TestCase):
