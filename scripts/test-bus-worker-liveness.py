@@ -260,6 +260,21 @@ class WorkerEndTests(WorkerFixture):
         self.assertRegex(lines[0], r"^%s worker \d+ registration agent-unreadable: status cannot be measured "
                                    r"\(TypeError: .*\); reported offline$" % STAMP)
 
+    def test_saved_registrations_that_cannot_be_read_do_not_end_the_worker(self):
+        self.write_registrations(
+            {"id": "agent-window", "session_key": "codex:window", "kind": "codex", "buses": [], "reply_until": None},
+            {"session_key": "codex:nameless", "kind": "codex", "buses": ["general"]},
+            {"id": "agent-good", "session_key": "codex:good", "kind": "codex", "binary": "/usr/bin/true",
+             "buses": ["general"]})
+        saved = json.loads((self.root / "registrations.json").read_text())
+        del saved["https://localhost:1|codex:nameless"]["url"]  # no id above, and now no hub either
+        (self.root / "registrations.json").write_text(json.dumps(saved))
+        self.assertEqual(self.launch_worker().returncode, 0)
+        time.sleep(5)  # more than two turns of the worker's two-second loop
+        status = self.status()
+        self.assertEqual(status["worker"]["state"], "running")
+        self.assertIs(status.get("worker_alive"), True)
+
     def test_a_worker_that_ends_on_an_error_leaves_a_dated_reason_in_its_log(self):
         self.root.mkdir(parents=True, exist_ok=True)
         (self.root / "receipts.sqlite").write_bytes(b"this is not a database\n" * 64)
@@ -336,6 +351,19 @@ class WorkerRevivalTests(WorkerFixture):
         self.assertIs(status.get("worker_alive"), False)
         self.assertEqual(status["worker"]["state"], "stopped")
 
+    def test_listing_restarts_the_worker_past_a_saved_registration_it_cannot_read(self):
+        self.register_fixture_agent()
+        saved = json.loads((self.root / "registrations.json").read_text())
+        url = next(iter(saved.values()))["url"]
+        # Read first: its reply window is not a number.
+        unreadable = {url + "|codex:unreadable": {"id": "agent-unreadable", "session_key": "codex:unreadable",
+                                                  "kind": "codex", "buses": [], "reply_until": None, "url": url}}
+        (self.root / "registrations.json").write_text(json.dumps({**unreadable, **saved}))
+        self.kill_fixture_worker(self.start_worker())
+        listed = self.bus("agents", "--json")
+        self.assertIn("worker was not running", listed.stderr)
+        self.assertIs(self.status().get("worker_alive"), True)
+
     def test_listing_with_no_registration_starts_no_worker(self):
         listed = self.bus("agents", "--json")
         self.assertNotIn("worker", listed.stderr)
@@ -360,6 +388,27 @@ class WorkerRevivalTests(WorkerFixture):
         self.assertIn("could not be started", listed.stderr)
 
 
+class ServedRegistrationTests(unittest.TestCase):
+    def test_a_registration_in_a_bus_or_inside_a_reply_window_is_served(self):
+        base = {"id": "agent", "url": "https://hub.example"}
+        self.assertIs(bus.active_adapter({**base, "buses": ["general"]}), True)
+        self.assertIs(bus.active_adapter({**base, "buses": [], "reply_until": time.time() + 60}), True)
+        self.assertIs(bus.active_adapter({**base, "buses": [], "reply_until": time.time() - 60}), False)
+        self.assertIs(bus.active_adapter({**base, "buses": ["general"], "retired": True}), False)
+
+    def test_a_saved_registration_that_cannot_be_read_is_not_served(self):
+        for record in ("not a record",
+                       None,
+                       {"buses": ["general"]},
+                       {"id": "agent", "buses": ["general"]},
+                       {"url": "https://hub.example", "buses": ["general"]},
+                       {"id": 7, "url": "https://hub.example", "buses": ["general"]},
+                       {"id": "agent", "url": "https://hub.example", "buses": [], "reply_until": None},
+                       {"id": "agent", "url": "https://hub.example", "buses": [], "reply_until": "soon"}):
+            with self.subTest(record=record):
+                self.assertIs(bus.active_adapter(record), False)
+
+
 class RegistrationStatusTests(unittest.TestCase):
     def test_a_registration_of_a_kind_this_client_does_not_know_is_offline(self):
         # It carries a socket that answers, so reading it as a Claude registration would call it live.
@@ -372,6 +421,29 @@ class RegistrationStatusTests(unittest.TestCase):
                 self.assertEqual(bus.current_status({"id": "agent-new", "kind": "a-later-kind", "socket": path}),
                                  "offline")
             note.assert_not_called()  # expected of a newer client's record; nothing to report
+
+    def test_two_threads_asking_at_once_say_it_once(self):
+        # The worker asks from its heartbeat thread and its delivery loop. This set holds
+        # each asker's answer to "said already?" until a second asker has its own, or a moment passes.
+        together = threading.Barrier(2)
+
+        class Meeting(set):
+            def __contains__(self, key):
+                said = set.__contains__(self, key)
+                try:
+                    together.wait(timeout=0.5)
+                except threading.BrokenBarrierError:
+                    pass
+                return said
+
+        record = {"id": "agent-twice", "kind": "claude", "socket": None}
+        with mock.patch.object(bus, "UNMEASURED", Meeting()), mock.patch.object(bus, "worker_note") as note:
+            askers = [threading.Thread(target=bus.current_status, args=(record,)) for _ in range(2)]
+            for asker in askers:
+                asker.start()
+            for asker in askers:
+                asker.join()
+        self.assertEqual(note.call_count, 1)
 
     def test_a_record_whose_status_cannot_be_measured_is_offline(self):
         for record in ({"kind": "claude", "socket": None},

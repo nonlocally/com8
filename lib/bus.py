@@ -42,6 +42,7 @@ TAILSCALE_STATUS_TIMEOUT = 1.5
 START_LOCK_WAIT = 0.2
 # Registrations whose status this process has already said it cannot measure.
 UNMEASURED = set()
+UNMEASURED_LOCK = threading.Lock()
 # Retirement records kept per hub. A broker retains at most this many of one
 # device's registrations (MAX_RETAINED_AGENTS), retired or not.
 MAX_RETIREMENTS = 1024
@@ -506,9 +507,17 @@ def local_agent(conn, target="self"):
 
 
 def active_adapter(record):
-    if record.get("retired"):
+    """Whether a saved registration is one the worker serves.
+
+    A record this client cannot read is not: the worker passes over it rather
+    than ending on it.
+    """
+    if not isinstance(record, dict) or record.get("retired"):
         return False
-    return bool(record.get("buses")) or record.get("reply_until", 0) > time.time()
+    if not isinstance(record.get("id"), str) or not isinstance(record.get("url"), str):
+        return False
+    until = record.get("reply_until", 0)
+    return bool(record.get("buses")) or (type(until) in (int, float) and until > time.time())
 
 
 def remember_adapter(conn, ident, result, description="", bus=None):
@@ -683,8 +692,11 @@ def current_status(record):
         return measured_status(record)
     except Exception as exc:
         key = str(record.get("id")) if isinstance(record, dict) else repr(record)[:80]
-        if key not in UNMEASURED:
+        # The worker asks from its heartbeat thread and from its delivery loop.
+        with UNMEASURED_LOCK:
+            said = key in UNMEASURED
             UNMEASURED.add(key)
+        if not said:
             worker_note("registration %s: status cannot be measured (%s: %s); reported offline"
                         % (key, type(exc).__name__, " ".join(str(exc).split())[:200]))
         return "offline"
@@ -797,7 +809,7 @@ def worker_is_alive(info):
 
 
 def observed_worker(info):
-    """The worker's own file, corrected by what the process table shows.
+    """The worker's own file, corrected by what the worker's lock shows.
 
     The worker is the only writer of worker.json, so one that is killed leaves
     a file that says running for ever.
@@ -824,8 +836,7 @@ def revive_worker():
     if worker_is_alive(info):
         return None
     connections = config()["connections"]
-    if not any(isinstance(record, dict) and active_adapter(record) and record.get("url") in connections
-               for record in registrations().values()):
+    if not any(active_adapter(record) and record["url"] in connections for record in registrations().values()):
         return None
     # Asked last: a stop made while the above was being read is still honoured.
     if (root / "worker.stop").exists():

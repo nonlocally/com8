@@ -668,7 +668,8 @@ has an active registration on a connected hub, and no `bus stop` was asked for;
 a line on stderr says so and gives the last heartbeat. A stop made in the same
 instant as such a listing can lose to it, as it can to a send. A saved
 registration of a kind this client does not know is reported offline. So is one
-whose status cannot be measured, which the log says once; neither stops the
+whose status cannot be measured, which the log says once. One with no id, no
+hub or an unreadable reply window is passed over. None of these stops the
 worker. `bus/worker.log` in the state directory has a dated line for each start
 of the worker and for each end, with the error if there was one.
 
