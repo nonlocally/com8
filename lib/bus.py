@@ -663,6 +663,15 @@ def register(args):
 
 
 def current_status(record):
+    """A registration's status now. A record this client cannot read is offline:
+    one bad record must not end the worker that serves every other agent."""
+    try:
+        return measured_status(record)
+    except (KeyError, TypeError, AttributeError):
+        return "offline"
+
+
+def measured_status(record):
     if record["kind"] == "service":
         from bus_service import configured
         return "queueable" if configured(record) else "offline"
