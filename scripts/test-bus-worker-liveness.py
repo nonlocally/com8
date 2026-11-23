@@ -186,6 +186,31 @@ class WorkerLivenessTests(WorkerFixture):
         self.assertIs(status.get("worker_alive"), True)
 
 
+    def test_a_worker_that_ends_on_an_error_leaves_a_dated_reason_in_its_log(self):
+        root = self.temp / "state/bus"
+        root.mkdir(parents=True, exist_ok=True)
+        (root / "receipts.sqlite").write_bytes(b"this is not a database\n" * 64)
+        code = "import sys; sys.path.insert(0, %r); import bus; bus.start_worker()" % str(ROOT / "lib")
+        # The start reports its own failure; what the worker left behind is the subject here.
+        subprocess.run([sys.executable, "-c", code], env=self.env, capture_output=True, timeout=30)
+        log = root / "worker.log"
+        text = self.wait_for(lambda: log.exists() and "DatabaseError" in log.read_text() and log.read_text(),
+                             "the worker's log names the error")
+        self.assertRegex(text, r"(?m)^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ worker \d+ stopped by DatabaseError: ")
+
+    def test_a_worker_stopped_on_request_leaves_dated_lines_in_its_log(self):
+        pid = self.start_worker()
+        stopped = subprocess.run([str(ROOT / "bin/communicate"), "bus", "stop"], env=self.env,
+                                 capture_output=True, text=True, timeout=30)
+        self.assertEqual(stopped.returncode, 0, stopped.stderr)
+        self.wait_for(lambda: self.worker_file().get("state") == "stopped", "the worker publishes stopped")
+        log = self.temp / "state/bus/worker.log"
+        stamp = r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ"
+        text = self.wait_for(lambda: "stopped" in log.read_text() and log.read_text(), "the worker's log says it stopped")
+        self.assertRegex(text, r"(?m)^%s worker %d starting$" % (stamp, pid))
+        self.assertRegex(text, r"(?m)^%s worker %d stopped on request$" % (stamp, pid))
+
+
 class WorkerRevivalTests(WorkerFixture):
     """A command that lists agents brings back a worker that is gone without having been asked to stop."""
 

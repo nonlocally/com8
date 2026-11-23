@@ -805,6 +805,26 @@ def revive_worker():
     return "the outbound worker was not running%s; started it" % seen
 
 
+def worker_main():
+    """Run the worker and leave dated lines saying when it started and why it ended.
+
+    Its log is the only record a worker that has ended leaves behind.
+    """
+    def note(text):
+        print("%s worker %d %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), os.getpid(), text),
+              file=sys.stderr, flush=True)
+
+    note("starting")
+    try:
+        worker()
+    except BaseException as exc:
+        note("stopped by %s: %s" % (type(exc).__name__, " ".join(str(exc).split())[:300]))
+        raise
+    # worker() also returns at once, having done nothing, when another worker holds the lock.
+    ran = read_json(state_dir() / "worker.json", {}).get("pid") == os.getpid()
+    note("stopped on request" if ran else "did not run: another worker holds the lock")
+
+
 def worker():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1266,7 +1286,7 @@ def run_command(args):
         if selected is not None and (not Path(selected).is_absolute() or str(Path(selected).resolve()) != selected
                                      or str(state_dir().resolve().parent) != selected):
             raise BusError("worker scope differs from its configured state")
-        return worker()
+        return worker_main()
     if cmd == "stop":
         return stop_services()
     if cmd == "register":
