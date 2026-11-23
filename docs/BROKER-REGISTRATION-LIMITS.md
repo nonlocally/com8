@@ -56,10 +56,11 @@ Raising these limits changes no database schema, credentials, ownership checks,
 service epochs, request deduplication, retirement or reactivation authorization.
 The existing durable service-fence count uses the retained limits as before;
 no fence or active-generation replay key is evicted to create room. Fences are
-never deleted: if the retained limits are lowered to the number of fences a
-principal or the hub already holds, or below it (removing a raised override does
-the same), every new fenced service retirement is refused until the limits are
-raised again. One
+never deleted. If `retained_per_principal` is lowered to the number of fences a
+principal already holds, or below it, that principal's new fenced service
+retirements are refused; if `retained_total` is lowered to the number the hub
+holds, or below it, every principal's are. Removing a raised override can do
+either. They stay refused until the limits are raised again. One
 heartbeat or device poll may name as many registrations as the per-principal
 active bound, and never fewer than 128, the number a client sends in one
 request. HTTP body, message, pending-work and service-request-history bounds
