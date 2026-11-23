@@ -55,6 +55,11 @@ Releasing and qualification:
 - [Seat provider qualification](SEAT-PROVIDER-QUALIFICATION.md) — seats driven
   by real clients.
 
+Directions (proposals, not shipped behavior):
+
+- [Transfer](directions/TRANSFER.md) — moving running agent sessions between
+  devices, and ranking the devices that could serve each one.
+
 Reference:
 
 - [Package README](../packages/communicate/README.md) — the installable unit and
