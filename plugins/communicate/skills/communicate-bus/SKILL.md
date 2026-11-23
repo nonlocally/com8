@@ -246,6 +246,21 @@ not extend the deadline. The device keeps unpublished reply adapters active
 through their outstanding conversation windows. Leaving the bus or losing its
 access closes affected conversations; rejoining does not revive them.
 
+## Prompt mentions
+
+A prompt can name registered sessions with `@com8::bus:session`. Plain `@name`
+belongs to the host. The opt-in filter reads the prompt on stdin and calls the
+existing `bus send` path once per distinct session. It does not type into a
+pane, does not install itself, and does not change the configured hub.
+
+```sh
+com8 mentions route --dry-run --json
+com8 mentions complete --text -- '@com8::photonics:'
+```
+
+Pass the prompt on stdin, not as an argument. Unknown and ambiguous names are
+reported and not guessed. See `docs/MENTIONS.md`.
+
 Keep dashboard URL fragments private: they contain browser credentials. Keep
 personal invitations, device credentials and authenticated URLs out of commits,
 public issues, screenshots and messages to other agents. Event codes may be

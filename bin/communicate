@@ -23,6 +23,8 @@
 #   communicate bus register [--bus NAME]         register THIS session (default: general)
 #   communicate bus list|agents|dashboard         explicit buses and registered agents
 #   communicate bus --help                        membership, invitations, HTTPS access
+#   communicate mentions route                    fan @com8::bus:session mentions; prompt on stdin
+#   communicate mentions complete <partial>       suggest buses, then live sessions
 #   communicate whereis <name>                   resolve a name -> type/device/socket
 #   communicate route   <name> <message>         route to any agent by name
 #   communicate wake    <name> [--every SEC] [--message MSG] [--times N]     timer trigger
@@ -178,6 +180,7 @@ main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     bus)     COMM_STATE="$COMM_STATE" python3 "$COMM_HOME/lib/bus.py" "$@";;
+    mentions) exec python3 -B "$COMM_HOME/lib/mentions.py" "$@";;
     link)    cmd_link "$@";;
     ls|list) cmd_ls "$@";;
     status)  cmd_status;;

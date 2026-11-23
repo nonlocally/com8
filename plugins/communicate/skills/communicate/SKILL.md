@@ -39,6 +39,10 @@ not account-management permission. For creating a hosted project, follow the
 account flow in `communicate-bus`; a local bus does not appear on the hosted site.
 
 Use `communicate bus send TARGET --bus BUS -- MESSAGE` for bus messages.
+`com8 mentions route` is an opt-in stdin filter for `@com8::bus:session` inside
+a prompt; it calls that same send path and leaves plain `@name` alone. See
+`docs/MENTIONS.md`.
+
 General allows an exact unpublished local sender on an enrolled device to
 initiate to a published recipient. Private buses require explicit membership.
 Reply using the received message's hub, exact recipient and reply ID; replies
