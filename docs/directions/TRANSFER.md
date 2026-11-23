@@ -126,6 +126,11 @@ its names and pane geometry travel with it.
 A session is identified by the exact session id the client itself recorded for
 that process, never by guessing the newest transcript in a directory.
 
+A selection can also name conversations that are not running, by id. There is
+no client to stop, so they skip the quiesce step and lose nothing volatile.
+Their seats come from a saved layout when there is one, and otherwise each
+gets a window of its own.
+
 ### The plan comes first, and is read-only
 
 `com8 transfer plan` writes a manifest and changes nothing. It contains:
@@ -416,6 +421,35 @@ asked for. None needs a server.
    "continue that one over there" is a transfer with no client to stop.
 5. **A world index**: which device holds which root, copied from where, and
    how fresh.
+
+### A store: a device that holds but does not run
+
+A device in the list can be marked as a store. It keeps copies of
+conversations and roots and never runs a session. An always-on machine with a
+large disk is the natural choice.
+
+- **Each device pushes its conversations to the store on a schedule.** A
+  transcript only grows, so a push sends what was appended since the last one.
+- **One live holder.** The session index records, for each conversation, the
+  one device that holds the live copy, and which stores hold a copy and how
+  fresh it is. Starting a conversation on another device is a transfer whose
+  sender is the store: pull, then resume. A store is never mounted as a shared
+  working directory, and two devices never write the same transcript.
+- **A conversation outlives its device.** A device that restarts takes its
+  running sessions with it. With a store, those conversations can be started
+  on another device without waiting for the first one to come back.
+- **What may go where.** Conversations and knowledge go only to stores their
+  owner controls, because a transcript can contain anything a tool ever
+  printed. Configuration is small and holds no conversation content, so it may
+  also be published to a hosted private repository, where it gains history and
+  can be reached from anywhere.
+- **Roots.** A repository's committed history is already held by its remote.
+  What a store adds is what the remote lacks: uncommitted and ignored files,
+  and directories that are not repositories. Archiving those on a schedule is
+  a choice made per root, since large trees are costly to keep copying.
+- **The same care as the snapshot archive.** The store's volume must be
+  mounted right now and be exactly a mount point, or nothing is written. A
+  store that is not encrypted is reported as such.
 
 ### Ready to start, not only ready to receive
 
