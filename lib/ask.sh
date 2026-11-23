@@ -92,9 +92,20 @@ ask_cmd() {
   local spid=""
   if [ "$grace" -gt 0 ]; then sleep "$timeout" </dev/null >/dev/null 2>&1 & spid=$!; fi
 
+  local marker=""
+  if [ -f "$COMM_HOME/lib/com8_reply.py" ]; then
+    local oid
+    oid="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')" || oid=""
+    if [ -n "$oid" ]; then
+      marker="$(python3 -B "$COMM_HOME/lib/com8_reply.py" marker \
+        --id "$oid" --transport native --expect reply \
+        --reply-to "$rsock" --reply-as turn-end --ttl "$timeout" 2>/dev/null || true)"
+    fi
+  fi
   local coached="$question
 
-$(comm_coach_text "$asker" "$rsock")"
+$(comm_coach_text "$asker" "$rsock")${marker:+
+$marker}"
 
   case "$lane" in
     claude)

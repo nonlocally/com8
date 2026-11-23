@@ -54,6 +54,7 @@ import zlib
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cc_peer  # deliver, _sidecar_obj, _read_line, _extract_text, _addr_from
+import com8_reply  # turn-end correlation trailers and completion alerts
 import com8_seat  # the seat plane (tmux driver); imported lazily-usable, no tmux at import
 import com8_workspace  # the workspace axis (git interrogation, worktrees)
 from com8_payload import KERNEL_FILES
@@ -796,8 +797,8 @@ class Com8:
                         % (asker, r.get("err"))}
         corr = uuid.uuid4().hex
         token = self._ask_token(asker, corr)
-        wrapped = ("%s\n\n[reply with: communicate com8 reply %s \"<answer>\" "
-                   "--from %s]" % (text, token, to.split("@", 1)[0]))
+        wrapped = com8_reply.ask_wrapping(
+            text, token, to.split("@", 1)[0], timeout)
         slot = self._register_ask(corr, asker, to.split("@", 1)[0])
         r = self._do_send(to, wrapped, asker)
         if not r.get("ok"):
@@ -812,14 +813,24 @@ class Com8:
         return {"ok": True, "reply": slot["reply"], "from": slot["from"],
                 "corr": corr, "latency": round(time.time() - t0, 2)}
 
-    def _do_reply(self, token, text, from_name):
+    def _note_reply(self, corr, text, from_name, msg_id):
+        try:
+            com8_reply.note_reply_landed(corr, text, from_name, msg_id)
+        except Exception:
+            self.log("reply notify failed")
+
+    def _do_reply(self, token, text, from_name, msg_id=None):
         # token: <asker>@<device>~<corr> (full) or a bare <corr> for a local ask.
+        # A caller-supplied msg_id makes a turn-end retry store the same line.
         asker = dev = corr = None
         if "~" in token:
             left, corr = token.rsplit("~", 1)
             asker, dev = left.split("@", 1) if "@" in left else (left, None)
         else:
             corr = token
+        if msg_id is not None and not com8_reply._MSG_ID.fullmatch(msg_id or ""):
+            return {"ok": False, "err": "invalid msg_id"}
+        mid = msg_id or uuid.uuid4().hex
         if dev and dev != self.device:
             with self.mu:
                 have_link = dev in self.links
@@ -827,14 +838,17 @@ class Com8:
                 return {"ok": False, "err": "reply device not linked: %s" % dev}
             self._queue_out(dev, {"v": 1, "kind": "r", "to": asker, "corr": corr,
                                   "from": from_name or "unknown", "text": text,
-                                  "msg_id": uuid.uuid4().hex, "ts": time.time()})
+                                  "msg_id": mid, "ts": time.time()})
+            self._note_reply(corr, text, from_name, mid)
             return {"ok": True, "routed": "link:%s" % dev}
         filled = self._fill_ask(corr, text, from_name or "unknown")
+        stored = True
         if asker:
-            self._store(asker, {"ts": time.time(), "msg_id": uuid.uuid4().hex,
-                                "from": "", "from_name": from_name, "text": text,
-                                "corr": corr})
-        return {"ok": True, "resolved": filled}
+            stored = self._store(asker, {"ts": time.time(), "msg_id": mid,
+                                         "from": "", "from_name": from_name,
+                                         "text": text, "corr": corr})
+        self._note_reply(corr, text, from_name, mid)
+        return {"ok": True, "resolved": filled, "dup": stored is False}
 
     def _do_group(self, names, text, from_name):
         results = {}
@@ -2584,9 +2598,7 @@ class Com8:
             # Boundary rewrite (the token is a return address): an ask token
             # embeds the asker's DEVICE name, which means nothing here — the
             # valid route back is the arrival link's fleet petname.
-            text = re.sub(
-                r"(reply\s+[a-z0-9][a-z0-9._-]*)@[a-z0-9._-]+~([0-9a-f]+)",
-                r"\1@%s~\2" % fleet, text)
+            text = com8_reply.rewrite_fleet_tokens(text, fleet)
         self._ensure_proxy(proxy_name, device)
         with self.mu:
             ent = self.identities.get(to)
@@ -3019,7 +3031,7 @@ class Com8:
                                 float(req.get("timeout") or 240))
         if op == "reply":
             return self._do_reply(req.get("token", ""), req.get("text", ""),
-                                  req.get("from") or "")
+                                  req.get("from") or "", msg_id=req.get("msg_id"))
         if op == "group":
             return self._do_group(req.get("names") or [], req.get("text", ""),
                                   req.get("from") or "cli")
@@ -5086,19 +5098,40 @@ def cli_call(argv):
             boundary = args.index("--")
             args, literal = args[:boundary], args[boundary + 1:]
         frm = ""
-        if "--from" in args:
-            i = args.index("--from")
-            try:
-                frm = args[i + 1]
-            except IndexError:
-                sys.stderr.write("--from needs a value\n"); return 1
-            args = args[:i] + args[i + 2:]
+        msg_id = None
+        use_stdin = False
+        while "--from" in args or "--msg-id" in args or "--stdin" in args:
+            if "--from" in args:
+                i = args.index("--from")
+                try:
+                    frm = args[i + 1]
+                except IndexError:
+                    sys.stderr.write("--from needs a value\n"); return 1
+                args = args[:i] + args[i + 2:]
+                continue
+            if "--msg-id" in args:
+                i = args.index("--msg-id")
+                try:
+                    msg_id = args[i + 1]
+                except IndexError:
+                    sys.stderr.write("--msg-id needs a value\n"); return 1
+                args = args[:i] + args[i + 2:]
+                continue
+            use_stdin = True
+            args = [a for a in args if a != "--stdin"]
         args = args + literal
-        if len(args) < 2:
-            sys.stderr.write("usage: communicate com8 reply <token> <answer...> [--from NAME]\n")
+        if use_stdin:
+            text = sys.stdin.read()
+        else:
+            text = " ".join(args[1:])
+        if not args or not str(text).strip():
+            sys.stderr.write("usage: communicate com8 reply <token> <answer...> "
+                             "[--from NAME] [--msg-id ID] [--stdin]\n")
             return 1
-        r = _call({"op": "reply", "token": args[0], "text": " ".join(args[1:]),
-                   "from": frm})
+        request = {"op": "reply", "token": args[0], "text": text, "from": frm}
+        if msg_id:
+            request["msg_id"] = msg_id
+        r = _call(request)
         if r.get("ok"):
             print("replied" + (" (resolved)" if r.get("resolved") else ""))
             return 0

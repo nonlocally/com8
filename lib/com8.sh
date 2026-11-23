@@ -28,12 +28,15 @@ com8_cmd() {
     start)     com8_start "$@";;
     __daemon)  exec python3 "$COM8_PY" daemon;;
     stop|status|agents|wait|claim|release|describe|send|ask|reply|group|notify|seat|spawn|restart|fan|consult|model|link|unlink|grant|ungrant|grants|card|user|init|pair|connect|board|federate|statepath|premove|depart|arrive|move) python3 "$COM8_PY" call "$sub" "$@";;
+    hook|obligation)
+      export COM8_BIN="${COM8_BIN:-$COMM_HOME/bin/com8}"
+      exec python3 -B "$COMM_HOME/lib/com8_reply.py" "$sub" "$@";;
     inbox)     com8_inbox "$@";;
     install)   com8_install "$@";;
     uninstall) com8_uninstall "$@";;
     adopt)     com8_adopt "$@";;
     retitle)   python3 "$COM8_PY" retitle "$@";;
-    *) die "usage: communicate com8 {start|stop|status|agents|init|user|claim [--boxed]|release|describe|send|ask|reply|wait|group|notify|inbox|seat|spawn|restart|fan|consult|move|link|unlink|grant|ungrant|grants|card|pair|connect|board|federate|install|uninstall|adopt|retitle} ...";;
+    *) die "usage: communicate com8 {start|stop|status|agents|init|user|claim [--boxed]|release|describe|send|ask|reply|wait|group|notify|inbox|hook|obligation|seat|spawn|restart|fan|consult|move|link|unlink|grant|ungrant|grants|card|pair|connect|board|federate|install|uninstall|adopt|retitle} ...";;
   esac
 }
 

@@ -10,6 +10,7 @@ for tool in python3 node npm tmux jq openssl; do
 done
 export PYTHONDONTWRITEBYTECODE=1
 python3 "$ROOT/scripts/test-com8-entrypoint.py"
+python3 -B "$ROOT/scripts/test-com8-reply.py"
 python3 -B "$ROOT/scripts/test-stat-portability.py"
 python3 "$ROOT/scripts/test-legacy-service-guard.py"
 python3 "$ROOT/scripts/test-com8-interface.py"

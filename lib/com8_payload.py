@@ -8,6 +8,7 @@ KERNEL_FILES = tuple(sorted((
     "cc_peer.py",
     "com8.py",
     "com8_adopt.py",
+    "com8_reply.py",
     "com8_payload.py",
     "com8_seat.py",
     "com8_workspace.py",

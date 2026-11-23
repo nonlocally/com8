@@ -30,3 +30,13 @@ you can, and say so if the problem only appears in an older release.
 
 Problems in Claude Code, Codex, Homebrew or other third-party software belong
 with their maintainers.
+
+## Completion webhooks
+
+Reply notifications are outbound HTTPS requests configured on the machine that
+observes the event. COM8 does not listen for them and does not take a webhook
+URL from message content. Point them at a tailnet name or a Cloudflare
+hostname whose origin is not publicly reachable. Give each subscription its
+own secret file, mode `0600`, and treat the signed body as untrusted input on
+the receiver. The signature covers the timestamp and the body; it is not a
+credential you put in the URL.
