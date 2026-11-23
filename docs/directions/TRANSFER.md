@@ -366,6 +366,67 @@ to what the selected sessions need. An unmet need in the chooser is a parity
 gap. A transfer plan lists the gaps and says which of them `parity apply` can
 close.
 
+## Where state lives
+
+Everything on a device that shapes an agent session is one of four kinds, and
+each kind has one rule. Transfer and parity between them cover all four.
+
+| Kind | Examples | Rule |
+| --- | --- | --- |
+| Belongs to one session | The transcript and its side directory, file checkpoints, the session's saved environment and tasks | Moves with the session, by transfer |
+| Shared by a person's sessions | User instructions, skills, plugins, MCP server definitions, hooks, settings; per-project memory; which directories were trusted | Converges through parity |
+| Belongs to the device | Provider sign-ins and credential stores, account pools, the device's identity on a bus, SSH keys, scheduled jobs | Never copied. Each device signs in for itself. Tracked only as present or absent |
+| Regenerated | Process records, sockets, caches, telemetry, shell snapshots, interface state | Never moved and not tracked |
+
+Three things follow.
+
+**One file can hold several kinds.** A client's global state file can hold the
+account's identity, a trust decision per directory, MCP server definitions and
+a great many caches, all in one JSON object. That is why parity works on the
+items inside a file and never copies the file.
+
+**The shared kind does not all flow one way.** Configuration flows from the
+reference device outward. Memory is written by sessions wherever they run, so
+it merges in both directions: files that exist on one side are added to the
+other, and a file that differs on the two sides is reported, not overwritten.
+A trust decision is carried only for a directory that a transfer brings, and
+only when the approved plan says so.
+
+**Clients differ.** One client keeps a conversation as a file and a directory
+beside it. Another also indexes its conversations in its own databases, and
+with several accounts keeps a home per account that share one conversation
+store. Moving a conversation of the second kind means moving whatever that
+client needs to find it again, which is why each client has its own adapter
+and its own step in the order of work.
+
+### What is tracked
+
+Five records, each kept on the device it describes and gathered over SSH when
+asked for. None needs a server.
+
+1. **Transfer manifests**, with their event logs: what moved, when, verified
+   how, and what was lost.
+2. **Bills of materials**: what each device has, layer by layer.
+3. **Reference snapshots**: the reference device's bill of materials and its
+   copyable content, published as a versioned artifact. Other devices converge
+   on a known version, the history of what the reference was is kept, and a
+   device can be brought up to date while the reference is offline.
+4. **A session index**: which device holds which conversation. Past
+   conversations stay where they are and move on demand; with the index,
+   "continue that one over there" is a transfer with no client to stop.
+5. **A world index**: which device holds which root, copied from where, and
+   how fresh.
+
+### Ready to start, not only ready to receive
+
+The same records answer a second question: where can a new session for this
+project start right now? A device is ready for a project when the client is
+signed in, its configuration is at parity, the project's root is present and
+fresh, the tools that project's sessions have used are installed, and the
+hosts they have used can be reached. That is placement at launch, and it
+needs nothing beyond the world index, parity and the needs already derived
+for transfer.
+
 ## Who decides
 
 For now a person runs every transfer. The chooser computes and shows; it does
