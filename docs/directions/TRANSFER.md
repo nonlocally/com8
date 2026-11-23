@@ -17,7 +17,7 @@ from scratch each time: which transcripts, which directories, which windows,
 which launch flags. What gets forgotten is lost without a word, and nothing
 records what was moved or how to bring it back.
 
-Two things are wanted:
+Three things are wanted:
 
 1. **Transfer.** Move a running agent session, or a whole tmux session of them,
    to another device and carry on there, with a written account of what moved,
@@ -26,9 +26,13 @@ Two things are wanted:
    mesh that could serve it, with reasons. The same idea as
    [model-switcher](https://github.com/aadarwal/model-switcher)'s account
    chooser, applied to devices instead of subscription accounts.
+3. **Parity.** A running account of what each device has (client versions,
+   agent configuration, knowledge, tools) compared with a reference device,
+   and a way to bring a device up to it. A device that has drifted is a worse
+   place to send a session, and nobody notices until a session arrives.
 
-**Who decides.** The ranking is computed automatically. A transfer happens only
-when a person runs it. That is a design rule for this direction, not a missing
+**Who decides.** The ranking and the comparison are computed automatically. A
+transfer or a change to a device happens only when a person runs it. That is a design rule for this direction, not a missing
 feature: see [Who decides](#who-decides).
 
 ## The principle
@@ -311,6 +315,57 @@ described next, not defended.
   pick and the reason beside every device it ruled out.
 - A pin: a session placed by hand stays where it was put.
 
+## Parity: keeping devices able to serve
+
+A device serves a session well only if it has what the session's own device
+had: the client at a compatible version, the same agent configuration, the
+same knowledge, the tools the session runs. Today that drifts unobserved. In
+the workspace examined, the two devices differed in client version, tmux
+version, installed plugins and where checkouts live.
+
+Parity is the chooser's idea pointed at the device instead of the session.
+
+**A bill of materials per device**, read automatically, in layers:
+
+| Layer | Examples | Compared by |
+| --- | --- | --- |
+| Clients | Claude Code and Codex: version, and how each was installed | Version |
+| Agent configuration | User instructions, skills, plugins and their marketplaces, MCP servers, hooks, permission settings | Item by item, by version or content |
+| Knowledge | Per-project memory directories | File by file |
+| Tools | tmux, Git, rsync, language runtimes, the commands sessions have actually run | Version |
+| Shell and Git | The workstation profile, Git identity and hooks, SSH host aliases | Item by item |
+| Credentials | Which sign-ins and keys exist | Presence only, never content |
+
+**A reference device.** One device is named the reference, usually the one
+where work happens first. Every other device is compared with it. Each item is
+the same, behind, ahead, missing, extra or different. A device that is ahead on
+an item is never downgraded.
+
+**A plan and an apply**, under the same rule as transfer. The comparison is
+computed automatically, and can run on a schedule. Applying it is run by a
+person. Each kind of item has one way of being applied:
+
+- **Copy**: files that are safe to place and easy to remove again. Skills,
+  memory files that are absent on the device, user instructions (with a backup
+  of what was there).
+- **Run the owner's installer**: a client update or a plugin install. Parity
+  runs the tool's own command and never copies its files.
+- **Report only**: anything system-wide on a machine other people use, and
+  anything that needs a credential.
+- **Never**: credentials themselves.
+
+Whatever parity applies is recorded in an ownership ledger with a backup of
+what it replaced, so it can be undone. This is the profile installer's rule.
+
+Configuration files are not copied whole. A settings file holds paths and
+hooks that are right on one device and wrong on another, so parity compares
+and applies the items inside it.
+
+**How it meets transfer.** The target preflight is a parity comparison scoped
+to what the selected sessions need. An unmet need in the chooser is a parity
+gap. A transfer plan lists the gaps and says which of them `parity apply` can
+close.
+
 ## Who decides
 
 For now a person runs every transfer. The chooser computes and shows; it does
@@ -319,6 +374,8 @@ not act.
 - `plan`, `status` and the ranking are read-only and open to agents.
 - `run` requires a person: a confirmation typed at a terminal, or a manifest
   approved by one. There is no agent-callable way to start a run.
+- Parity follows the same split: the comparison is open to agents, and
+  `parity apply` requires a person.
 - Every ranking shown and every transfer a person runs or declines is appended
   to an advice record. That record is how the rule earns trust. It shows
   whether the chooser's picks match what people chose, and whether transfers
@@ -340,6 +397,10 @@ com8 transfer run MANIFEST                 # a person runs this
 com8 transfer status MANIFEST              # phase by phase, what became of each session
 com8 transfer undo MANIFEST                # before cutover: resume at the origin
 com8 transfer back MANIFEST                # after cutover: the return trip
+
+com8 parity status [DEVICE]                # each device against the reference
+com8 parity plan DEVICE                    # what would change; changes nothing
+com8 parity apply PLAN                     # a person runs this
 ```
 
 `SELECTION` names a pane, a window, a tmux session, or several. Names are
@@ -355,6 +416,8 @@ before a transfer is trusted with one.
    target preflight, the contract. Useful on its own: it answers "what would it
    take to move this?"
 2. **Device facts, chooser, status and picker**, with the advice record.
+   **Parity** alongside it: the bill of materials, the comparison with the
+   reference device, and the copy kind of apply.
 3. **Transfer of one pane**: pre-copy, quiesce, final sync, resume, arrival,
    verify, tombstone, undo and the return trip. Claude Code first.
 4. **Sets**: windows and sessions with their geometry, and a session that
