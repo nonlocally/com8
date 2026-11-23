@@ -816,13 +816,14 @@ def worker_main():
 
     note("starting")
     try:
-        worker()
+        result = worker()
     except BaseException as exc:
         note("stopped by %s: %s" % (type(exc).__name__, " ".join(str(exc).split())[:300]))
         raise
     # worker() also returns at once, having done nothing, when another worker holds the lock.
     ran = read_json(state_dir() / "worker.json", {}).get("pid") == os.getpid()
     note("stopped on request" if ran else "did not run: another worker holds the lock")
+    return result
 
 
 def worker():
