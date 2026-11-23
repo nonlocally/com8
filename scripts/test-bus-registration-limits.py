@@ -6,6 +6,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -81,6 +82,15 @@ class RegistrationLimitTests(unittest.TestCase):
                 json.dumps(self.limits(retained_per_principal=9)),
                 json.dumps(self.limits(retained_per_principal=1)),
                 json.dumps(self.limits(retained_total=3)), " " * 2049]
+        # Rows that one rule alone refuses: a device's active bound above the hub's, the hub's
+        # active bound above what it retains, and a valid policy that is one byte too long.
+        padded = json.dumps(valid) + " " * (2049 - len(json.dumps(valid)))
+        bad += [json.dumps({"active_per_principal": 5, "active_total": 4,
+                            "retained_per_principal": 8, "retained_total": 8}),
+                json.dumps({"active_per_principal": 2, "active_total": 9,
+                            "retained_per_principal": 4, "retained_total": 8}),
+                padded]
+        self.assertEqual(module._registration_policy(padded[:-1]), valid)
         for index, raw in enumerate(bad):
             with self.subTest(index=index):
                 path = self.root / ("invalid-" + str(index))
@@ -162,6 +172,52 @@ class RegistrationLimitTests(unittest.TestCase):
         self.assertEqual(self.register(broker, "a-new", alice, ok=False)["code"], "limit")
         with broker._connect() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM agents").fetchone()[0], 4)
+
+    def test_agent_rows_obey_the_owner_retained_per_device_cap(self):
+        # Only this bound binds: both rows are retired, so the device has no active
+        # registration, and the hub's totals are far from full.
+        broker = self.broker(self.limits(active_per_principal=2, active_total=4,
+                                         retained_per_principal=2, retained_total=8))
+        alice = self.device(broker, "alice")
+        for i in range(2):
+            actor = self.register(broker, "a" + str(i), alice)["id"]
+            self.call(broker, "retire", token=alice, agent=actor)
+        self.assertEqual(self.register(broker, "a2", alice, ok=False)["code"], "limit")
+
+    def test_fences_obey_the_owner_retained_total_across_devices(self):
+        # Three devices with one fenced retirement each: no device nears its own bound of
+        # two, so the third is refused by the hub's total alone.
+        broker = self.broker(self.limits(active_per_principal=1, active_total=2,
+                                         retained_per_principal=2, retained_total=2))
+        for index, name in enumerate(("alice", "bob", "carol")):
+            token, service_id = self.device(broker, name), str(uuid.uuid4())
+            actor = self.call(broker, "register", token=token, session_key="service:" + service_id,
+                              name="service-" + name, kind="service", bus="general")["id"]
+            retired = self.call(broker, "service_fence_retire", token=token, agent=actor, service_id=service_id,
+                                expected_epoch=0, request_id="retire-" + name, ok=index < 2)
+            if index == 2:
+                self.assertEqual(retired["error"], "service fence limit reached")
+                break
+            # Model ordinary retained-agent removal; the durable fence remains.
+            with broker._connect() as db:
+                db.execute("DELETE FROM agents WHERE id=?", (actor,))
+        with broker._connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM service_fences").fetchone()[0], 2)
+
+    def test_a_raised_bound_takes_as_many_service_epoch_selectors(self):
+        broker = self.broker(self.limits(active_per_principal=130, active_total=140,
+                                         retained_per_principal=140, retained_total=160))
+        actors = [self.register(broker, "actor-" + str(i))["id"] for i in range(130)]
+        self.assertEqual(self.call(broker, "poll_device", agents=actors,
+                                   service_epochs={actor: 0 for actor in actors})["messages"], [])
+
+    def test_the_documented_table_states_the_defaults_and_the_ceilings(self):
+        page = (ROOT / "docs/BROKER-REGISTRATION-LIMITS.md").read_text(encoding="utf-8")
+        rows = re.findall(r"^\| `(\w+)` \| (\d+) \| (\d+) \|$", page, re.M)
+        self.assertEqual({name: int(ceiling) for name, _, ceiling in rows}, module.REGISTRATION_LIMIT_CEILINGS)
+        broker = self.broker()
+        self.assertEqual({name: int(default) for name, default, _ in rows},
+                         {name: broker._registration_limit(name) for name in module.REGISTRATION_LIMIT_CEILINGS})
 
     def test_configured_retained_fence_bound_does_not_evict_or_bypass_epoch_auth(self):
         broker = self.broker(self.limits(retained_per_principal=2))

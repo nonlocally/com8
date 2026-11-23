@@ -55,13 +55,24 @@ names, so that the setting reaches the broker.
 Raising these limits changes no database schema, credentials, ownership checks,
 service epochs, request deduplication, retirement or reactivation authorization.
 The existing durable service-fence count uses the retained limits as before;
-no fence or active-generation replay key is evicted to create room. One
+no fence or active-generation replay key is evicted to create room. Fences are
+never deleted: if the retained limits are lowered to the number of fences a
+principal or the hub already holds, or below it (removing a raised override does
+the same), every new fenced service retirement is refused until the limits are
+raised again. One
 heartbeat or device poll may name as many registrations as the per-principal
 active bound, and never fewer than 128, the number a client sends in one
 request. HTTP body, message, pending-work and service-request-history bounds
 remain unchanged. Lowering a quota does not delete or retire registrations;
 existing exact active IDs may still refresh, heartbeat and receive, while new or
 reactivated allocations can be refused.
+
+The client keeps a record of its 1024 most recent retirements for each hub
+(`MAX_RETIREMENTS` in `lib/bus.py`), which is the default
+`retained_per_principal`. Under a higher setting a principal can hold more
+retired registrations on the hub than its client keeps records of. The oldest
+records are dropped first, and a dropped record matters only if the client's own
+row for that registration is gone as well.
 
 The setting has no effect beyond the bounds described here. A hub that does not
 set it behaves as before.
