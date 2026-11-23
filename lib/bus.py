@@ -38,6 +38,10 @@ LIB = Path(__file__).resolve().parent
 # Captured once: a running worker must not mistake changed source for code it loaded.
 WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_service.py").read_bytes()).hexdigest()
 TAILSCALE_STATUS_TIMEOUT = 1.5
+# How long an inspection of the worker waits for the start lock while another holds it.
+START_LOCK_WAIT = 0.2
+# Registrations whose status this process has already said it cannot measure.
+UNMEASURED = set()
 # Retirement records kept per hub. A broker retains at most this many of one
 # device's registrations (MAX_RETAINED_AGENTS), retired or not.
 MAX_RETIREMENTS = 1024
@@ -662,12 +666,27 @@ def register(args):
             if ident["kind"] == "codex" else "Registered existing session; socket connection verified."}
 
 
+def worker_note(text):
+    """A dated line on stderr, which for a detached worker is its log."""
+    print("%s worker %d %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), os.getpid(), text),
+          file=sys.stderr, flush=True)
+
+
 def current_status(record):
-    """A registration's status now. A record this client cannot read is offline:
-    one bad record must not end the worker that serves every other agent."""
+    """A registration's status now.
+
+    One saved record must not end the worker that serves every other agent. A
+    record whose status cannot be measured is offline, and the log says so once
+    for that record rather than on every turn of the worker.
+    """
     try:
         return measured_status(record)
-    except (KeyError, TypeError, AttributeError):
+    except Exception as exc:
+        key = str(record.get("id")) if isinstance(record, dict) else repr(record)[:80]
+        if key not in UNMEASURED:
+            UNMEASURED.add(key)
+            worker_note("registration %s: status cannot be measured (%s: %s); reported offline"
+                        % (key, type(exc).__name__, " ".join(str(exc).split())[:200]))
         return "offline"
 
 
@@ -677,6 +696,9 @@ def measured_status(record):
         return "queueable" if configured(record) else "offline"
     if record["kind"] == "codex":
         return "queueable" if os.access(record["binary"], os.X_OK) else "offline"
+    if record["kind"] != "claude":
+        # Saved by a client that knows a kind this one does not.
+        return "offline"
     # Follow the SAME Claude session across socket changes, never a name collision.
     if record.get("session_id"):
         matches = [r for r in sidecars(record.get("claude_config_dir")) if r.get("sessionId") == record["session_id"]]
@@ -741,29 +763,37 @@ def worker_process_metadata(root):
 
 
 def worker_is_alive(info):
-    """Whether the worker a status file describes is a process now.
+    """Whether the worker a status file describes is running now.
 
-    The kernel start token the worker published is compared with the process
-    holding that pid, so a recycled pid is not mistaken for the worker. Without a
-    usable token the answer is the lock every worker holds for its whole life.
+    A worker holds the worker lock for its whole life, and the kernel releases
+    that lock however the process ends. So the lock answers even when the
+    recorded pid has gone to another process, or the ended worker is still in
+    the process table.
     """
     if not info:
         return False
-    pid, published = info.get("pid"), info.get("process_identity")
-    if type(pid) is int and isinstance(published, dict):
-        try:
-            from bus_service import consumer_process_identity
-            return consumer_process_identity(pid) == published
-        except Exception:
-            # Gone, or unreadable here: the lock still answers.
-            pass
-    with locked("worker-start", blocking=False) as idle:
-        if not idle:
-            # A start is in progress. Taking the worker's lock now, even for an
-            # instant, could make the new worker give up.
-            return True
-        with locked("worker", blocking=False) as free:
-            return not free
+    deadline = time.monotonic() + START_LOCK_WAIT
+    while True:
+        # Holding the start lock keeps a start from running while the worker's
+        # lock is tried: a new worker that found its lock taken, even for an
+        # instant, would give up.
+        with locked("worker-start", blocking=False) as idle:
+            if idle:
+                with locked("worker", blocking=False) as free:
+                    return not free
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
+    # A start, or a move to another hub, has held the start lock all this time.
+    # The worker's lock cannot be tried safely, so the recorded process answers.
+    pid = info.get("pid")
+    if type(pid) is not int or pid <= 1:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def observed_worker(info):
@@ -782,47 +812,44 @@ def observed_worker(info):
 
 
 def revive_worker():
-    """Start the worker again when it is gone without having been asked to stop.
+    """Start the worker again when it is gone without `bus stop` having been asked.
 
     Nothing supervises the worker: one that is killed, or lost when the machine
     restarts, stays gone until a command starts it. Returns a sentence for
     whoever ran the command, or None when there was nothing to do.
     """
     root = state_dir()
-    if (root / "worker.stop").exists():
-        return None
     info = read_json(root / "worker.json", {})
-    if worker_is_alive(info if isinstance(info, dict) else {}):
+    info = info if isinstance(info, dict) else {}
+    if worker_is_alive(info):
         return None
     connections = config()["connections"]
     if not any(isinstance(record, dict) and active_adapter(record) and record.get("url") in connections
                for record in registrations().values()):
         return None
+    # Asked last: a stop made while the above was being read is still honoured.
+    if (root / "worker.stop").exists():
+        return None
     start_worker()
-    last = info.get("heartbeat_at") if isinstance(info, dict) else None
+    last = info.get("heartbeat_at")
     seen = (" (last heartbeat %s)" % time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last))
             if type(last) in (int, float) and last > 0 else "")
-    return "the outbound worker was not running%s; started it" % seen
+    return "the outbound worker was not running%s; it has been started" % seen
 
 
 def worker_main():
-    """Run the worker and leave dated lines saying when it started and why it ended.
+    """Run the worker and leave dated lines saying when it started and how it ended.
 
     Its log is the only record a worker that has ended leaves behind.
     """
-    def note(text):
-        print("%s worker %d %s" % (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), os.getpid(), text),
-              file=sys.stderr, flush=True)
-
-    note("starting")
+    worker_note("starting")
     try:
         result = worker()
     except BaseException as exc:
-        note("stopped by %s: %s" % (type(exc).__name__, " ".join(str(exc).split())[:300]))
+        worker_note("stopped by %s: %s" % (type(exc).__name__, " ".join(str(exc).split())[:300]))
         raise
-    # worker() also returns at once, having done nothing, when another worker holds the lock.
-    ran = read_json(state_dir() / "worker.json", {}).get("pid") == os.getpid()
-    note("stopped on request" if ran else "did not run: another worker holds the lock")
+    # Asked to stop, or it gave way at once to a worker that already held the lock.
+    worker_note("stopped without an error")
     return result
 
 
@@ -1271,7 +1298,7 @@ def run(args):
         # The listing is the result; what happened to the worker goes to stderr.
         try:
             note = revive_worker()
-        except (BusError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        except Exception as exc:
             note = "the outbound worker is not running and could not be started: %s" % " ".join(str(exc).split())[:200]
         if note:
             print("communicate bus: " + note, file=sys.stderr)
