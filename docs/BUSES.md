@@ -656,6 +656,23 @@ to stop and replaced cooperatively. The broker and native local routes remain
 running. If the old worker cannot release its lock within 30 seconds, the
 command reports the failure instead of killing a PID or starting a competitor.
 
+Nothing supervises the worker: it is not restarted when it is killed or when
+the machine restarts. `bus status` therefore reports what the worker's lock
+shows rather than the worker's own file. `worker_alive` says whether a worker
+is running now. A worker that is gone while its file says `starting` or
+`running` is reported with `worker.state` `dead` and the file's word in
+`worker.recorded_state`, and `worker_recent` is false for it. Neither form of
+status starts the worker, and `bus status --no-start` starts nothing at all.
+`bus list` and `bus agents` start the worker again when it is gone, this device
+has an active registration on a connected hub, and no `bus stop` was asked for;
+a line on stderr says so and gives the last heartbeat. A stop made in the same
+instant as such a listing can lose to it, as it can to a send. A saved
+registration of a kind this client does not know is reported offline. So is one
+whose status cannot be measured, which the log says once. One with no id, no
+hub or an unreadable reply window is passed over. None of these stops the
+worker. `bus/worker.log` in the state directory has a dated line for each start
+of the worker and for each end, with the error if there was one.
+
 The deterministic checks are:
 
 ```sh
