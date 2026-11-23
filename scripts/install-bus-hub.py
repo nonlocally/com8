@@ -44,7 +44,7 @@ config = json.loads(Path(%r).read_text())
 for name in ('BUS_GATEWAY_SHARED_SECRET', 'BUS_ADMIN_READERS', 'BUS_OPENWEBUI_READERS'):
     if name in config:
         os.environ[name] = config[name]
-for name in ('BUS_READER_USERS', 'BUS_ACCOUNT_LABELS', 'BUS_CHAT_READERS', 'BUS_CHAT_OPENWEBUI_TARGETS'):
+for name in ('BUS_READER_USERS', 'BUS_ACCOUNT_LABELS', 'BUS_CHAT_READERS', 'BUS_CHAT_OPENWEBUI_TARGETS', 'BUS_REGISTRATION_LIMITS'):
     if name in config:
         value = config[name]
         os.environ[name] = json.dumps(value) if isinstance(value, (dict, list)) else value
