@@ -20,6 +20,11 @@ ok()  { pass=$((pass+1)); printf 'ok   %s\n' "$*"; }
 bad() { fail=$((fail+1)); printf 'FAIL %s\n' "$*"; }
 cleanup() { "$COMM" com8 stop >/dev/null 2>&1 || true; rm -rf "$T"; }
 trap cleanup EXIT
+# `com8 stop` acknowledges the request before the daemon exits. Before a section starts its own daemon, wait for the
+# last one to exit and release its state; otherwise the start finds it still there and starts nothing.
+stop_and_wait() {
+  python3 "$HERE/scripts/com8_fixture_lifecycle.py" stop "$COMM" "$COM8S" || bad "the daemon did not stop ($1)"
+}
 
 jget() { python3 -c '
 import json,sys
@@ -53,8 +58,9 @@ if [ "$(printf '%s' "$st" | jget self device)" = "testhost" ]; then ok "self.dev
 if [ "$(printf '%s' "$st" | jget self socks com8.sock state)" = "live" ]; then ok "com8.sock self-probe live"; else bad "com8.sock self-probe live"; fi
 if [ "$(printf '%s' "$st" | jget self socks com8.sock provenance)" = "probed" ]; then ok "provenance probed"; else bad "provenance probed"; fi
 
-if "$COMM" com8 stop >/dev/null 2>&1; then ok "pm stop"; else bad "pm stop"; fi
-sleep 0.7
+# The helper runs `com8 stop`, which replies before the daemon exits, and waits up to ten seconds for the daemon to exit
+# and release its pid file, lock and socket; the two checks below then hold however busy the machine is.
+if python3 "$HERE/scripts/com8_fixture_lifecycle.py" stop "$COMM" "$COM8S"; then ok "pm stop"; else bad "pm stop"; fi
 if [ ! -S "$COM8S/com8.sock" ]; then ok "control socket unlinked"; else bad "control socket unlinked"; fi
 pid_gone=1
 if [ -f "$COM8S/daemon.pid" ] && kill -0 "$(cat "$COM8S/daemon.pid" 2>/dev/null)" 2>/dev/null; then pid_gone=0; fi
@@ -87,10 +93,10 @@ if "$COMM" com8 release alice >/dev/null 2>&1; then ok "release alice"; else bad
 sleep 0.3
 if [ ! -S "$ASOCK" ] && [ -z "$(com8_sidecar alice)" ]; then ok "release unbinds + unplants"; else bad "release unbinds + unplants"; fi
 "$COMM" com8 claim alice >/dev/null 2>&1
-"$COMM" com8 stop >/dev/null 2>&1; sleep 0.5
+stop_and_wait "restart"
 "$COMM" com8 start >/dev/null 2>&1; sleep 1.5
 if [ -S "$ASOCK" ] && [ -n "$(com8_sidecar alice)" ]; then ok "claim survives restart"; else bad "claim survives restart"; fi
-"$COMM" com8 stop >/dev/null 2>&1
+stop_and_wait "section 3"
 
 echo "== section 4: inbox store + dedup"
 "$COMM" com8 start >/dev/null 2>&1
@@ -189,7 +195,7 @@ sleep 0.5
 if [ "$(cat "$BCUR" 2>/dev/null)" = "2" ] && grep -q "M3 after death" "$BINBOX"; then
   ok "M3 held durably"
 else bad "M3 held durably"; fi
-"$COMM" com8 stop >/dev/null 2>&1
+stop_and_wait "section 5"
 
 echo "== section 6: routes/provenance + socket self-heal"
 export COM8_PROBE=2
@@ -234,7 +240,7 @@ if [ "$healed" = "1" ]; then ok "lost socket re-bound (self-heal)"; else bad "lo
 if [ -f "$COM8S/routes.json" ] && python3 -c "import json;json.load(open('$COM8S/routes.json'))" 2>/dev/null; then
   ok "routes.json materialized + parses"
 else bad "routes.json materialized"; fi
-"$COMM" com8 stop >/dev/null 2>&1
+stop_and_wait "section 6"
 
 echo "== section 7: retitle (dormant rename-sync)"
 FT="$T/fake-transcript.jsonl"
