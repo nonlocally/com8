@@ -28,6 +28,23 @@ for k in sys.argv[1:]:
     d=d[k]
 print(d)' "$@" 2>/dev/null; }
 
+# Wait until a field of `com8 status --json` reads a value: status_reads <value> <key>...
+# One status call probes every claimed socket in turn and waits a third of a second on each live one, so by
+# this point of the file it takes two to three seconds on any machine. A bound in seconds alone is then a
+# bound of two or three looks. This one is six looks, and no new look after 45 seconds; a look that the
+# daemon does not answer ends by the command's own limit of a minute.
+status_reads() {
+  local want="$1" stop=$((SECONDS + 45)) st; shift
+  looks=0
+  while [ "$looks" -lt 6 ] && [ "$SECONDS" -lt "$stop" ]; do
+    looks=$((looks + 1))
+    st="$("$COMM" com8 status --json 2>/dev/null)"
+    [ "$(printf '%s' "$st" | jget "$@")" = "$want" ] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
 # Locate the com8's planted sidecar for a name (filenames are numeric).
 com8_sidecar() {
   local f
@@ -209,20 +226,10 @@ CSTAND="$T/carol-standin.jsonl"
 python3 "$HERE/lib/cc_peer.py" mailbox --socket "$COM8_SOCK_DIR/real-carol.sock" --name carol \
   --sessions-dir "$COM8_SESSIONS_DIR" --mailbox "$CSTAND" >/dev/null 2>&1 &
 CPID=$!
-deadline=$((SECONDS + 8)); livec=0
-while [ $SECONDS -lt $deadline ]; do
-  st="$("$COMM" com8 status --json 2>/dev/null)"
-  [ "$(printf '%s' "$st" | jget identities carol route state)" = "live" ] && { livec=1; break; }
-  sleep 0.5
-done
-if [ "$livec" = "1" ]; then ok "route flips to live"; else bad "route flips to live"; fi
-deadline=$((SECONDS + 6)); drained=0
-while [ $SECONDS -lt $deadline ]; do
-  st="$("$COMM" com8 status --json 2>/dev/null)"
-  [ "$(printf '%s' "$st" | jget identities carol inbox undelivered)" = "0" ] && { drained=1; break; }
-  sleep 0.5
-done
-if [ "$drained" = "1" ]; then ok "undelivered drained to 0"; else bad "undelivered drained to 0"; fi
+if status_reads live identities carol route state; then ok "route flips to live"
+else bad "route flips to live (not live in $looks looks)"; fi
+if status_reads 0 identities carol inbox undelivered; then ok "undelivered drained to 0"
+else bad "undelivered drained to 0 (not in $looks looks)"; fi
 kill "$CPID" 2>/dev/null; sleep 1
 rm -f "$COM8_SOCK_DIR/com8-carol.sock"
 deadline=$((SECONDS + 6)); healed=0

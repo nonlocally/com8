@@ -20,6 +20,8 @@ Wire facts (reverse-engineered + verified live):
   * `from` is "uds:" + an absolute .sock path; a reply/receipt is delivered by
     connecting to that path and writing another user message.
   * Liveness discovery merely connects to the socket; accepting is enough.
+    COM8's own probe (com8.probe) also waits a moment and needs the line to
+    stay open, so every listener here keeps an idle line for IDLE_LINE_S.
 """
 import argparse, json, os, re, signal, socket, subprocess, sys, threading, time, uuid
 
@@ -87,7 +89,15 @@ def deliver(to_sock, text, from_sock, from_name=None, orig_msg_id=None):
         s.close()
 
 
-def _read_line(conn, timeout=0.4):
+# How long a listener keeps a connection on which no whole line has arrived. A prober calls a session live when
+# the line is still open after a fraction of a second (com8.probe) and dead when it was closed before that, so
+# this is several times that wait: a prober that is held up for a moment between its connect and its read must
+# not find a live listener's line closed. The durable daemon's own listeners keep an idle line as long. A message
+# ends in a newline and is read as soon as it has arrived; a prober that hangs up ends the read at once.
+IDLE_LINE_S = 2.0
+
+
+def _read_line(conn, timeout=IDLE_LINE_S):
     conn.settimeout(timeout)
     buf = b""
     try:
@@ -276,7 +286,7 @@ def recv(opts):
             except socket.timeout:
                 sys.stderr.write("recv: timed out\n")
                 return 2
-            raw = _read_line(conn, timeout=1.0)
+            raw = _read_line(conn)
             try:
                 conn.close()
             except OSError:
@@ -421,7 +431,7 @@ def respond(opts):
             except socket.timeout:
                 sys.stderr.write("respond: timed out\n")
                 return 2
-            raw = _read_line(conn, timeout=1.0)
+            raw = _read_line(conn)
             try:
                 conn.close()
             except OSError:
