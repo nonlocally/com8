@@ -40,7 +40,7 @@ jobs:
     runs-on:
       group: nonlocally-public-disposable
       labels: [self-hosted, "${{ matrix.platform }}", ARM64, isolated, disposable]
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Admit a fresh isolated guest before checking out job code
         uses: nonlocally/com8/.github/actions/disposable-admission@72d4cb098fe2835bb7c468cc0d44a872498248b8
