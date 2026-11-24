@@ -1,0 +1,186 @@
+[
+  {
+    "name": "bus-post",
+    "seed": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "kid": "gw-If4x36FUomFia_hU",
+    "jti_hex": "000102030405060708090a0b0c0d0e0f",
+    "now": 1800000000,
+    "subject": {
+      "sub": "55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groupsAt": 1799999970
+    },
+    "options": {
+      "audience": "bus",
+      "request": {
+        "method": "post",
+        "target": "/v1?x=1",
+        "body_utf8": "{\"op\":\"snapshot\"}"
+      }
+    },
+    "header": {
+      "alg": "EdDSA",
+      "typ": "nl-viewer+jwt",
+      "kid": "gw-If4x36FUomFia_hU"
+    },
+    "claims": {
+      "iss": "https://bus.nonlocally.org/_gateway",
+      "aud": "bus",
+      "sub": "owui:55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groups_at": 1799999970,
+      "htm": "POST",
+      "htu": "/v1?x=1",
+      "bdy": "skId096DzEoYr1banaHdwo5VrZ9qwpOU6uBVPh9tW-w",
+      "iat": 1800000000,
+      "exp": 1800000060,
+      "jti": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6Im5sLXZpZXdlcitqd3QiLCJraWQiOiJndy1JZjR4MzZGVW9tRmlhX2hVIn0.eyJpc3MiOiJodHRwczovL2J1cy5ub25sb2NhbGx5Lm9yZy9fZ2F0ZXdheSIsImF1ZCI6ImJ1cyIsInN1YiI6Im93dWk6NTU1NTU1NTUtNTU1NS00NTU1LTg1NTUtNTU1NTU1NTU1NTU1IiwibmFtZSI6IkZpeHR1cmUgVmlld2VyIiwiZ3JvdXBzIjpbIjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsIjIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiJdLCJncm91cHNfYXQiOjE3OTk5OTk5NzAsImh0bSI6IlBPU1QiLCJodHUiOiIvdjE_eD0xIiwiYmR5Ijoic2tJZDA5NkR6RW9ZcjFiYW5hSGR3bzVWclo5cXdwT1U2dUJWUGg5dFctdyIsImlhdCI6MTgwMDAwMDAwMCwiZXhwIjoxODAwMDAwMDYwLCJqdGkiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R3In0.ZxI1tXnruNtxe3XapjxErATnkq54chpUy5cSdvlmR3zVJVLA85eWJOrQMoP9OdqL-Y-vIW4x2_0voLMARZe9Bw"
+  },
+  {
+    "name": "bus-get-session",
+    "seed": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "kid": "gw-If4x36FUomFia_hU",
+    "jti_hex": "000102030405060708090a0b0c0d0e0f",
+    "now": 1800000000,
+    "subject": {
+      "sub": "55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groupsAt": 1799999970
+    },
+    "options": {
+      "audience": "bus",
+      "request": {
+        "method": "GET",
+        "target": "/_bus/session",
+        "body_utf8": ""
+      }
+    },
+    "header": {
+      "alg": "EdDSA",
+      "typ": "nl-viewer+jwt",
+      "kid": "gw-If4x36FUomFia_hU"
+    },
+    "claims": {
+      "iss": "https://bus.nonlocally.org/_gateway",
+      "aud": "bus",
+      "sub": "owui:55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groups_at": 1799999970,
+      "htm": "GET",
+      "htu": "/_bus/session",
+      "bdy": "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
+      "iat": 1800000000,
+      "exp": 1800000060,
+      "jti": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6Im5sLXZpZXdlcitqd3QiLCJraWQiOiJndy1JZjR4MzZGVW9tRmlhX2hVIn0.eyJpc3MiOiJodHRwczovL2J1cy5ub25sb2NhbGx5Lm9yZy9fZ2F0ZXdheSIsImF1ZCI6ImJ1cyIsInN1YiI6Im93dWk6NTU1NTU1NTUtNTU1NS00NTU1LTg1NTUtNTU1NTU1NTU1NTU1IiwibmFtZSI6IkZpeHR1cmUgVmlld2VyIiwiZ3JvdXBzIjpbIjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMSIsIjIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMiJdLCJncm91cHNfYXQiOjE3OTk5OTk5NzAsImh0bSI6IkdFVCIsImh0dSI6Ii9fYnVzL3Nlc3Npb24iLCJiZHkiOiI0N0RFUXBqOEhCU2EtX1RJbVctNUpDZXVRZVJrbTVOTXBKV1pHM2hTdUZVIiwiaWF0IjoxODAwMDAwMDAwLCJleHAiOjE4MDAwMDAwNjAsImp0aSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.QjBEgBwFG5YrhkciqE4HJ4U1UknmbXRORSCPIe5ssawRIseosJDhrUWs_ND3TjNSAIHQciWr531sxjWW2lCkDQ"
+  },
+  {
+    "name": "other-plain",
+    "seed": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "kid": "gw-If4x36FUomFia_hU",
+    "jti_hex": "000102030405060708090a0b0c0d0e0f",
+    "now": 1800000000,
+    "subject": {
+      "sub": "55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groupsAt": 1799999970
+    },
+    "options": {
+      "audience": "other-service"
+    },
+    "header": {
+      "alg": "EdDSA",
+      "typ": "nl-viewer+jwt",
+      "kid": "gw-If4x36FUomFia_hU"
+    },
+    "claims": {
+      "iss": "https://bus.nonlocally.org/_gateway",
+      "aud": "other-service",
+      "sub": "owui:55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groups_at": 1799999970,
+      "iat": 1800000000,
+      "exp": 1800000120,
+      "jti": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6Im5sLXZpZXdlcitqd3QiLCJraWQiOiJndy1JZjR4MzZGVW9tRmlhX2hVIn0.eyJpc3MiOiJodHRwczovL2J1cy5ub25sb2NhbGx5Lm9yZy9fZ2F0ZXdheSIsImF1ZCI6Im90aGVyLXNlcnZpY2UiLCJzdWIiOiJvd3VpOjU1NTU1NTU1LTU1NTUtNDU1NS04NTU1LTU1NTU1NTU1NTU1NSIsIm5hbWUiOiJGaXh0dXJlIFZpZXdlciIsImdyb3VwcyI6WyIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiXSwiZ3JvdXBzX2F0IjoxNzk5OTk5OTcwLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDEyMCwianRpIjoiQUFFQ0F3UUZCZ2NJQ1FvTERBME9EdyJ9.Is2t_xZPBPGRGhO2nCO4BbN8Fz6b46YwYIHjoSQ3NXiPiEJzMo8yaBfQH_EAOLIPZHEraiZvTA0ZFx-A4hsUBA"
+  },
+  {
+    "name": "other-post",
+    "seed": "nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A",
+    "public_key": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+    "kid": "gw-If4x36FUomFia_hU",
+    "jti_hex": "000102030405060708090a0b0c0d0e0f",
+    "now": 1800000000,
+    "subject": {
+      "sub": "55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groupsAt": 1799999970
+    },
+    "options": {
+      "audience": "other-service",
+      "request": {
+        "method": "POST",
+        "target": "/v1/example",
+        "body_utf8": "{\"kind\":\"example\"}"
+      }
+    },
+    "header": {
+      "alg": "EdDSA",
+      "typ": "nl-viewer+jwt",
+      "kid": "gw-If4x36FUomFia_hU"
+    },
+    "claims": {
+      "iss": "https://bus.nonlocally.org/_gateway",
+      "aud": "other-service",
+      "sub": "owui:55555555-5555-4555-8555-555555555555",
+      "name": "Fixture Viewer",
+      "groups": [
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222"
+      ],
+      "groups_at": 1799999970,
+      "htm": "POST",
+      "htu": "/v1/example",
+      "bdy": "EiWCOjfcOj9hJoxeuInHwPvdTIEYcXldUaRr3v7nM3I",
+      "iat": 1800000000,
+      "exp": 1800000060,
+      "jti": "AAECAwQFBgcICQoLDA0ODw"
+    },
+    "token": "eyJhbGciOiJFZERTQSIsInR5cCI6Im5sLXZpZXdlcitqd3QiLCJraWQiOiJndy1JZjR4MzZGVW9tRmlhX2hVIn0.eyJpc3MiOiJodHRwczovL2J1cy5ub25sb2NhbGx5Lm9yZy9fZ2F0ZXdheSIsImF1ZCI6Im90aGVyLXNlcnZpY2UiLCJzdWIiOiJvd3VpOjU1NTU1NTU1LTU1NTUtNDU1NS04NTU1LTU1NTU1NTU1NTU1NSIsIm5hbWUiOiJGaXh0dXJlIFZpZXdlciIsImdyb3VwcyI6WyIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEiLCIyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIiXSwiZ3JvdXBzX2F0IjoxNzk5OTk5OTcwLCJodG0iOiJQT1NUIiwiaHR1IjoiL3YxL2V4YW1wbGUiLCJiZHkiOiJFaVdDT2pmY09qOWhKb3hldUluSHdQdmRUSUVZY1hsZFVhUnIzdjduTTNJIiwiaWF0IjoxODAwMDAwMDAwLCJleHAiOjE4MDAwMDAwNjAsImp0aSI6IkFBRUNBd1FGQmdjSUNRb0xEQTBPRHcifQ.EgCzniyY5DJnYJ3yLrRup-AF4AgPTNehHCPKqC7iClZQsXXrOgac2AL_ImmlzT6vsglxKWSEBr0VmfaR3j5iBQ"
+  }
+]
