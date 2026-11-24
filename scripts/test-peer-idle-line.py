@@ -133,6 +133,36 @@ class IdleLineTest(unittest.TestCase):
                 time.sleep(0.02)
         self.assertIn("hello carol", json.loads(box.read_text().splitlines()[0])["text"])
 
+    def test_a_prober_that_hangs_up_frees_a_listener_that_takes_one_connection_at_a_time(self):
+        # While the responder waits for a line on one connection it answers nothing else. A prober that hangs up
+        # must end that wait at once: a message sent right after a probe is answered well inside the idle time.
+        path = self.responder()
+        answers_path = str(self.temp / "answers.sock")
+        answers = socket.socket(socket.AF_UNIX)
+        self.addCleanup(answers.close)
+        answers.bind(answers_path)
+        answers.listen(4)
+        answers.settimeout(10)
+        self.assertEqual(com8.probe(path), "live")
+        message = {"type": "user", "message": {"role": "user", "content": "hello responder"},
+                   "from": "uds:" + answers_path}
+        began = time.monotonic()
+        with socket.socket(socket.AF_UNIX) as sender:
+            sender.connect(path)
+            sender.sendall((json.dumps(message) + "\n").encode())
+        conn, _ = answers.accept()
+        waited = time.monotonic() - began
+        with conn:
+            conn.settimeout(10)
+            reply = b""
+            while b"\n" not in reply:
+                chunk = conn.recv(65536)
+                if not chunk:
+                    break
+                reply += chunk
+        self.assertIn("noted (you said: hello responder)", json.loads(reply)["message"]["content"])
+        self.assertLess(waited, 1.0, "the prober's hang-up held the responder")
+
     def test_no_listener_and_a_closed_line_are_dead(self):
         self.assertEqual(com8.probe(str(self.temp / "nothing.sock")), "dead")
         # A listener that closes at once, as a process on its way out does.
