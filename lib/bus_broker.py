@@ -35,6 +35,12 @@ MAX_TOTAL_AGENTS = 4096
 # history until it expires; these separately bound the rows retained meanwhile.
 MAX_RETAINED_AGENTS = 1024
 MAX_TOTAL_RETAINED_AGENTS = 32768
+# Optional hub-owner policy. These ceilings remain finite even when the owner
+# raises the defaults; request bodies cannot set or change this configuration.
+REGISTRATION_LIMIT_CEILINGS = {
+    "active_per_principal": 8192, "active_total": 65536,
+    "retained_per_principal": 32768, "retained_total": 262144,
+}
 SERVICE_FENCE_PROTOCOL = "service-fence/epoch-v1"
 MAX_SERVICE_REQUESTS = 20000
 MAX_SERVICE_REQUESTS_PER_GENERATION = 1024
@@ -128,10 +134,32 @@ def _canonical_uuid(value, version=None):
         return False
 
 
+def _registration_policy(raw):
+    """Validate the optional owner-only JSON policy before opening any state."""
+    if raw is None:
+        return {}
+    try:
+        if not isinstance(raw, str) or not 1 <= len(raw.encode("utf-8")) <= 2048:
+            raise ValueError()
+        policy = json.loads(raw, object_pairs_hook=_unique_object)
+        if (not isinstance(policy, dict) or set(policy) != set(REGISTRATION_LIMIT_CEILINGS)
+                or any(type(value) is not int or not 1 <= value <= REGISTRATION_LIMIT_CEILINGS[key]
+                       for key, value in policy.items())
+                or policy["active_per_principal"] > policy["active_total"]
+                or policy["retained_per_principal"] > policy["retained_total"]
+                or policy["active_per_principal"] > policy["retained_per_principal"]
+                or policy["active_total"] > policy["retained_total"]):
+            raise ValueError()
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise ValueError("BUS_REGISTRATION_LIMITS must be a complete bounded integer registration policy") from None
+    return policy
+
+
 class Broker:
     """One durable broker; SQLite transactions serialize enrollment and leases."""
 
     def __init__(self, state_dir, clock=None):
+        self.registration_limits = _registration_policy(os.environ.get("BUS_REGISTRATION_LIMITS"))
         self.gateway_shared_secret = os.environ.get("BUS_GATEWAY_SHARED_SECRET")
         if self.gateway_shared_secret is not None and len(self.gateway_shared_secret) < 32:
             raise ValueError("BUS_GATEWAY_SHARED_SECRET must contain at least 32 characters")
@@ -984,6 +1012,17 @@ class Broker:
                        (json.dumps(_device_metadata(r["device_metadata"])), p["id"]))
         return {"principal": p["id"], **self._device_info(db.execute("SELECT * FROM principals WHERE id=?", (p["id"],)).fetchone())}
 
+    def _registration_limit(self, name):
+        defaults = {"active_per_principal": MAX_AGENTS, "active_total": MAX_TOTAL_AGENTS,
+                    "retained_per_principal": MAX_RETAINED_AGENTS, "retained_total": MAX_TOTAL_RETAINED_AGENTS}
+        return self.registration_limits.get(name, defaults[name])
+
+    def _request_list_limit(self):
+        # Registrations named in one heartbeat or device poll. A client sends up to
+        # MAX_AGENTS in a request whatever the hub's policy is, so a bound set below
+        # that must not refuse a device that still holds more.
+        return max(MAX_AGENTS, self._registration_limit("active_per_principal"))
+
     @staticmethod
     def _epoch(value):
         if type(value) is not int or not 0 <= value < 2**63 - 1:
@@ -1084,8 +1123,8 @@ class Broker:
         if fence is not None:
             self._expect_service_epoch(db, agent, expected)
         if fence is None:
-            if (db.execute("SELECT COUNT(*) FROM service_fences WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
-                    or db.execute("SELECT COUNT(*) FROM service_fences").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
+            if (db.execute("SELECT COUNT(*) FROM service_fences WHERE principal=?", (p["id"],)).fetchone()[0] >= self._registration_limit("retained_per_principal")
+                    or db.execute("SELECT COUNT(*) FROM service_fences").fetchone()[0] >= self._registration_limit("retained_total")):
                 raise BusError("service fence limit reached", "limit")
             db.execute("INSERT INTO service_fences VALUES(?,?,?,?,?,'retired',NULL)",
                        (p["id"], agent["session_key"], agent["id"], service_id, expected + 1))
@@ -1158,8 +1197,8 @@ class Broker:
         if existing is None or existing["retired_at"] is not None:
             # A new or reactivated registration re-enters the active quota.
             active = "SELECT COUNT(*) FROM agents WHERE retired_at IS NULL"
-            if (db.execute(active + " AND principal=?", (p["id"],)).fetchone()[0] >= MAX_AGENTS
-                    or db.execute(active).fetchone()[0] >= MAX_TOTAL_AGENTS):
+            if (db.execute(active + " AND principal=?", (p["id"],)).fetchone()[0] >= self._registration_limit("active_per_principal")
+                    or db.execute(active).fetchone()[0] >= self._registration_limit("active_total")):
                 raise BusError("agent registration limit reached", "limit")
         if existing:
             # The same exact session keeps its agent ID, including after retirement.
@@ -1169,8 +1208,8 @@ class Broker:
             db.execute("""UPDATE agents SET name=?,kind=?,description=?,status=?,last_seen=?,retired_at=NULL,epoch=?
                           WHERE id=?""", (name, kind, description, status, now, epoch, agent))
         else:
-            if (db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0] >= MAX_RETAINED_AGENTS
-                    or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= MAX_TOTAL_RETAINED_AGENTS):
+            if (db.execute("SELECT COUNT(*) FROM agents WHERE principal=?", (p["id"],)).fetchone()[0] >= self._registration_limit("retained_per_principal")
+                    or db.execute("SELECT COUNT(*) FROM agents").fetchone()[0] >= self._registration_limit("retained_total")):
                 raise BusError("agent registration limit reached", "limit")
             agent, epoch = "a_" + uuid.uuid4().hex, 0
             db.execute("""INSERT INTO agents(id,principal,session_key,name,kind,description,status,last_seen)
@@ -1190,7 +1229,7 @@ class Broker:
 
     def _op_heartbeat(self, db, p, r, now):
         rows = r.get("agents")
-        if not isinstance(rows, list) or len(rows) > MAX_AGENTS:
+        if not isinstance(rows, list) or len(rows) > self._request_list_limit():
             raise BusError("agents must be a bounded list")
         validated = []
         for entry in rows:
@@ -1705,7 +1744,7 @@ class Broker:
 
     def _op_poll_device(self, db, p, r, now):
         agents = r.get("agents")
-        if not isinstance(agents, list) or not 1 <= len(agents) <= MAX_AGENTS:
+        if not isinstance(agents, list) or not 1 <= len(agents) <= self._request_list_limit():
             raise BusError("agents must be a nonempty bounded list of agent ids")
         if any(not isinstance(agent, str) for agent in agents) or len(set(agents)) != len(agents):
             raise BusError("poll agents must be unique exact registration ids")
@@ -1713,7 +1752,7 @@ class Broker:
         owned = list(dict.fromkeys(self._owned(db, p, agent)["id"] for agent in agents))
         epochs = r.get("service_epochs", {})
         if (not isinstance(epochs, dict) or set(epochs) - set(owned)
-                or len(epochs) > MAX_AGENTS):
+                or len(epochs) > self._request_list_limit()):
             raise BusError("invalid service epoch selectors")
         for value in epochs.values():
             self._epoch(value)
