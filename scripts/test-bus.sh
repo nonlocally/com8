@@ -11,6 +11,8 @@ for tool in python3 node openssl; do
   }
 done
 export PYTHONDONTWRITEBYTECODE=1
+python3 "$ROOT/scripts/test-ed25519-verify.py"
+python3 "$ROOT/scripts/test-bus-statement.py"
 python3 "$ROOT/scripts/test-bus-broker.py"
 python3 "$ROOT/scripts/test-bus-retire.py"
 python3 "$ROOT/scripts/test-bus-registration-limits.py"
@@ -31,6 +33,7 @@ python3 "$ROOT/scripts/test-bus-client.py"
 python3 "$ROOT/scripts/test-bus-chat-client.py"
 python3 "$ROOT/scripts/test-bus-rehome.py"
 python3 "$ROOT/scripts/test-bus-lifecycle.py"
+python3 "$ROOT/scripts/test-bus-worker-liveness.py"
 python3 "$ROOT/scripts/test-bus-delivery.py"
 python3 "$ROOT/scripts/test-bus-remote-fixture.py"
 node "$ROOT/scripts/test-bus-ui.js"
