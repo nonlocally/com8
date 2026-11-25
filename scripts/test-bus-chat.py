@@ -119,6 +119,26 @@ class ChatTests(unittest.TestCase):
             self.assertEqual(before, {table: db.execute("SELECT COUNT(*) FROM " + table).fetchone()[0] for table in before})
         self.assertEqual(self.poll(), [])
 
+    def test_export_includes_the_agents_human_chat_receipts(self):
+        chat = self.open()
+        message = self.send(chat, message="Fixture secret question")
+        received = self.poll()[0]
+        self.now += 1
+        self.ack(received)
+        self.now += 1
+        answer = self.reply(received, "Fixture secret answer")
+        export = self.admin("export", agent=self.agent)
+        rows = {row["id"]: row for row in export["receipts"]}
+        self.assertEqual(list(rows), [message["id"], answer["id"]])
+        asked, answered = rows[message["id"]], rows[answer["id"]]
+        self.assertEqual((asked["sender"], asked["target"], asked["bus"], asked["status"], asked["kind"], asked["conversation_id"]),
+                         ("human.aadarwal", self.agent, "qit-wilde", "queued", "human", chat))
+        self.assertEqual((answered["sender"], answered["target"], answered["status"], answered["in_reply_to"], answered["kind"]),
+                         (self.agent, "human.aadarwal", "replied", message["id"], "human"))
+        self.assertEqual(asked["updated_at"], self.now - 1)
+        self.assertNotIn("secret", json.dumps(export))
+        self.assertEqual(self.admin("export", agent=self.second)["receipts"], [])
+
     def test_human_attribution_exact_reply_and_inbox_not_directory(self):
         chat = self.open()
         message = self.send(chat, message="Literal $(no-shell)\n<script>fixture</script>")
