@@ -407,7 +407,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(worker_errors, [])
 
     def test_a_hub_hears_unchanged_statuses_once_per_interval_and_any_change_at_once(self):
-        interval = 1.5
+        interval = 2.0
         clocks, real_due = [], bus.heartbeat_due
 
         def due(accepted, now_monotonic, now_wall):
@@ -419,7 +419,7 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3), "the first heartbeat never came")
             self.assertTrue(fixture["until"](lambda info: info.get("heartbeat_success_at"), 2))
             first = fixture["worker"]()
-            time.sleep(0.4)
+            time.sleep(0.8)
             self.assertEqual(len(fixture["beats"]), 1, "unchanged statuses were sent again inside the interval")
             quiet = fixture["worker"]()
             # Worker liveness (worker_recent) reads heartbeat_at, so every tick records it.
@@ -516,8 +516,19 @@ class LifecycleTests(unittest.TestCase):
             failing = fixture["worker"]()
             self.assertEqual(failing["adapters"], 0)
             self.assertEqual(failing["heartbeat_success_at"], 0)
+            self.assertEqual(failing["heartbeat_errors"][0]["hub"], "https://beat.invalid")
             self.assertIn("simulated hub outage", failing["heartbeat_errors"][0]["error"])
-            self.assertTrue(fixture["until"](lambda info: len(fixture["refusals"]) >= 3, 3), "a failing hub was not asked again")
+            # It is asked again at each tick: about one refusal for each tick that worker.json shows.
+            ticks, before = set(), len(fixture["refusals"])
+            deadline = time.monotonic() + 1.2
+            while time.monotonic() < deadline:
+                try:
+                    ticks.add(fixture["worker"]()["heartbeat_at"])
+                except (OSError, ValueError):
+                    pass
+                time.sleep(0.005)
+            asked = len(fixture["refusals"]) - before
+            self.assertGreaterEqual(asked, (len(ticks) - 2) * 0.6, "asked %d times in %d ticks" % (asked, len(ticks)))
 
             refusing.clear()
             cleared = time.monotonic()
@@ -538,16 +549,52 @@ class LifecycleTests(unittest.TestCase):
             self.assertTrue(fixture["until"](lambda info: info.get("heartbeat_errors") == [] and info.get("adapters") == 0, 3),
                             "a hub with no adapters kept its error")
 
-    def test_an_unexpected_error_from_one_hub_is_that_hubs_failure_and_the_ticker_goes_on(self):
-        def truncate_once(fixture, url, agents):
-            if not fixture["refusals"]:
-                raise http.client.IncompleteRead(b"")
+    def test_anything_a_hubs_call_raises_is_that_hubs_failure_and_the_ticker_goes_on(self):
+        class Abandoned(BaseException):
+            pass
 
-        with self.beating_worker("beat-unexpected", tick=0.05, interval=30, hook=truncate_once) as fixture:
-            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3),
-                            "an error outside the expected kinds stopped the heartbeats")
-            ticked = fixture["worker"]()["heartbeat_at"]
-            self.assertTrue(fixture["until"](lambda info: info["heartbeat_at"] > ticked, 2), "the ticker stopped")
+        raising = {"error": None}
+
+        def raise_while_set(fixture, url, agents):
+            if raising["error"] is not None:
+                raise raising["error"]
+
+        with self.beating_worker("beat-unexpected", tick=0.05, interval=30, hook=raise_while_set) as fixture:
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3))
+            # An http.client error, outside the kinds the loop names, on a changed status.
+            raising["error"] = http.client.IncompleteRead(b"")
+            fixture["status"]["agent-a"] = "live"
+            self.assertTrue(fixture["until"](lambda info: "IncompleteRead" in json.dumps(info.get("heartbeat_errors")), 3),
+                            "an http.client error was not reported as that hub's failure")
+            self.assertEqual(fixture["worker"]()["adapters"], 0)
+            # The statuses go back to the last accepted ones; the hub must still hear them again.
+            fixture["status"]["agent-a"] = "queueable"
+            raising["error"] = None
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 2, 2),
+                            "after an http.client error the hub was not told again")
+            self.assertEqual(fixture["beats"][1][2], [("agent-a", "queueable", None)])
+            # Even an exception that is not an Exception ends only that call.
+            raising["error"] = Abandoned()
+            fixture["status"]["agent-a"] = "live"
+            time.sleep(0.3)
+            raising["error"] = None
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 3, 2), "a BaseException from a call ended the ticker")
+            self.assertEqual(fixture["beats"][2][2], [("agent-a", "live", None)])
+
+    def test_a_heartbeat_call_that_cannot_start_is_that_hubs_failure(self):
+        real_thread, refused = threading.Thread, []
+
+        class FlakyThread(real_thread):
+            def start(self):
+                if self.name == "bus-heartbeat-call" and not refused:
+                    refused.append(time.monotonic())
+                    raise RuntimeError("can't start new thread")
+                return super().start()
+
+        with mock.patch.object(bus.threading, "Thread", FlakyThread), \
+                self.beating_worker("beat-nothread", tick=0.05, interval=30) as fixture:
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3), "a call that could not start ended the ticker")
+            self.assertEqual(len(refused), 1)
 
     def test_a_failed_heartbeat_is_sent_again_even_when_the_statuses_went_back(self):
         # The hub may have applied the refused request (its answer was lost), so
@@ -602,16 +649,18 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual([len(beat[2]) for beat in fixture["beats"]], [128])
 
     def test_hubs_that_do_not_answer_hold_up_neither_the_ticker_nor_another_hub(self):
-        # Nine, more than any fixed pool of eight threads could carry.
-        slow = ["https://slow-%d.invalid" % index for index in range(9)]
+        # Twenty, more than a pool of eight or ten threads could carry.
+        slow = ["https://slow-%d.invalid" % index for index in range(20)]
         quick = "https://quick.invalid"
         records = {url: {"id": "agent-" + url[len("https://"):-len(".invalid")], "kind": "codex",
                          "binary": sys.executable, "url": url, "buses": ["general"]} for url in slow + [quick]}
-        release = threading.Event()
+        release, entered = threading.Event(), []
 
         def stall_the_slow_hubs(fixture, url, agents):
-            if url != quick and not release.wait(6):
-                raise bus.BusError("simulated stalled hub")
+            if url != quick:
+                entered.append(url)
+                if not release.wait(6):
+                    raise bus.BusError("simulated stalled hub")
 
         quick_times = lambda beats: [beat[0] for beat in beats if beat[1] == quick]
         with self.beating_worker("beat-stall", tick=0.02, interval=0.3, records=records, urls=tuple(slow) + (quick,),
@@ -621,9 +670,31 @@ class LifecycleTests(unittest.TestCase):
                                 "hubs that do not answer held up another hub's heartbeats")
                 times = quick_times(fixture["beats"])
                 self.assertLess(max(later - earlier for earlier, later in zip(times, times[1:])), 1)
-                ticked = fixture["worker"]()["heartbeat_at"]
-                self.assertTrue(fixture["until"](lambda info: info["heartbeat_at"] > ticked, 2),
-                                "hubs that do not answer held up the ticker")
+                # Each stalled hub keeps its one call however many ticks pass, and
+                # shows as an error once that call has gone unanswered for an interval.
+                self.assertTrue(fixture["until"](lambda info: len(info.get("heartbeat_errors", [])) == 20, 3),
+                                "hubs whose calls went unanswered were not reported")
+                info = fixture["worker"]()
+                self.assertTrue(all(error["error"].startswith("no answer for ") for error in info["heartbeat_errors"]))
+                self.assertEqual(sorted(error["hub"] for error in info["heartbeat_errors"]), sorted(slow))
+                self.assertEqual(info["adapters"], 1)
+                self.assertEqual(sorted(entered), sorted(slow))
+            finally:
+                release.set()
+
+    def test_the_worker_stops_without_waiting_for_a_heartbeat_call_that_has_not_answered(self):
+        release, entered = threading.Event(), threading.Event()
+
+        def stall(fixture, url, agents):
+            entered.set()
+            release.wait(6)
+
+        with self.beating_worker("beat-stopping", tick=0.05, interval=30, hook=stall) as fixture:
+            try:
+                self.assertTrue(entered.wait(3), "no heartbeat call began")
+                (fixture["state"] / "worker.stop").touch()
+                self.assertTrue(fixture["until"](lambda info: info.get("state") == "stopped", 1.5),
+                                "the worker waited for a heartbeat call that had not answered")
             finally:
                 release.set()
 

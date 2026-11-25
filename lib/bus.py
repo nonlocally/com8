@@ -42,9 +42,8 @@ TAILSCALE_STATUS_TIMEOUT = 1.5
 START_LOCK_WAIT = 0.2
 # The worker measures its agents' statuses every HEARTBEAT_TICK seconds. A hub
 # hears a heartbeat when one of them changed, and otherwise at the last tick
-# before HEARTBEAT_INTERVAL seconds pass since it accepted the last one, so its
-# heartbeats are at most that far apart. The broker's LIVE_TTL of 45 seconds
-# covers three intervals.
+# before HEARTBEAT_INTERVAL seconds pass since it accepted the last one, about
+# every 14 seconds. The broker's LIVE_TTL of 45 seconds covers three intervals.
 HEARTBEAT_TICK = 2
 HEARTBEAT_INTERVAL = 15
 # Registrations whose status this process has already said it cannot measure.
@@ -719,7 +718,7 @@ def current_status(record):
         return measured_status(record)
     except Exception as exc:
         key = str(record.get("id")) if isinstance(record, dict) else repr(record)[:80]
-        # The worker asks from its heartbeat thread and from its delivery loop.
+        # The worker asks from its heartbeat calls, a thread each, and from its delivery loop.
         with UNMEASURED_LOCK:
             said = key in UNMEASURED
             UNMEASURED.add(key)
@@ -962,30 +961,35 @@ def worker():
         def heartbeat_loop():
             # A delivery may wait on an agent for twenty seconds, and a hub may
             # take longer than one request's timeout to answer. So liveness has
-            # its own ticker, and each hub its own call: a hub that does not
-            # answer holds up neither the ticker nor any other hub, and the
-            # worker stops without waiting for it. Each tick records
-            # heartbeat_at and starts a call for every hub that has none in
-            # flight. A hub whose call failed, or began before the
+            # its own ticker, and each hub its own heartbeat call: a hub that
+            # does not answer holds up neither the ticker nor any other hub's
+            # heartbeats, and the worker stops without waiting for its call.
+            # Each tick records heartbeat_at and starts a call for every hub
+            # that has none in flight; a call left unanswered for an interval
+            # is reported. A hub whose call failed, or began before the
             # registrations file last changed, is sent its statuses at its next
             # call even if they look unchanged: it may hold what a partial
             # heartbeat or another command told it.
             calls, accepted, errors = {}, {}, {}
             stamp, success_at = registrations_stamp(), None
+
+            def failed(url, exc):
+                accepted.pop(url, None)
+                text = str(exc) or type(exc).__name__
+                errors[url] = {"hub": url, "error": " ".join(text.split())[:200]}
+
             while not stopping():
                 try:
-                    for url, (call, began) in list(calls.items()):
+                    for url, (call, began, _) in list(calls.items()):
                         if not call.done():
                             continue
                         del calls[url]
                         try:
                             sent = call.result()
-                        except Exception as exc:
+                        except BaseException as exc:
                             # Whatever one hub's call raised is that hub's
                             # failure; the ticker goes on.
-                            accepted.pop(url, None)
-                            text = str(exc) or type(exc).__name__
-                            errors[url] = {"hub": url, "error": " ".join(text.split())[:200]}
+                            failed(url, exc)
                             continue
                         errors.pop(url, None)
                         if sent is not None:
@@ -1006,12 +1010,22 @@ def worker():
                     for url in (set(accepted) | set(errors)) - set(groups):
                         accepted.pop(url, None)
                         errors.pop(url, None)
+                    now = time.monotonic()
                     for url, rows in groups.items():
                         if url not in calls:
-                            calls[url] = (start_call(cfg["connections"][url], rows, accepted.get(url)), stamp)
+                            try:
+                                calls[url] = (start_call(cfg["connections"][url], rows, accepted.get(url)), stamp, now)
+                            except Exception as exc:
+                                # A call that cannot start, as at a thread limit, is that hub's failure too.
+                                failed(url, exc)
+                    unanswered = {url: {"hub": url, "error": "no answer for %d s" % (now - started)}
+                                  for url, (call, _, started) in calls.items()
+                                  if url in groups and not call.done()
+                                  and now - started >= max(HEARTBEAT_INTERVAL, HEARTBEAT_TICK)}
+                    shown = {**errors, **unanswered}
                     updates = {"state": "running", "heartbeat_at": time.time(),
-                               "adapters": sum(len(rows) for url, rows in groups.items() if url not in errors),
-                               "heartbeat_errors": list(errors.values())}
+                               "adapters": sum(len(rows) for url, rows in groups.items() if url not in shown),
+                               "heartbeat_errors": list(shown.values())}
                     if success_at is not None:
                         updates["heartbeat_success_at"] = success_at
                     publish(**updates)
