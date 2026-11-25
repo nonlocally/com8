@@ -321,35 +321,44 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(json.loads((state / "worker.json").read_text())["state"], "stopped")
 
     @contextlib.contextmanager
-    def beating_worker(self, name, tick, interval, refuse_first=False):
-        """Run the worker against one fake hub, recording each heartbeat it hears."""
+    def beating_worker(self, name, tick, interval, records=None, urls=("https://beat.invalid",), hook=None):
+        """Run the worker against fake hubs, recording each heartbeat request a hub accepts.
+
+        hook(fixture, url, agents) runs inside every heartbeat request before it
+        is recorded; it may block, or raise BusError to refuse the request.
+        """
         state = self.root / name
         state.mkdir()
-        url = "https://beat.invalid"
-        fixture = {"state": state, "status": "queueable", "beats": [], "refusals": [],
-                   "records": {"a": {"id": "agent-a", "kind": "codex", "binary": sys.executable,
-                                     "url": url, "buses": ["general"]}}}
-        cfg = {"connections": {url: {"url": url}}}
+        if records is None:
+            records = {"a": {"id": "agent-a", "kind": "codex", "binary": sys.executable,
+                             "url": urls[0], "buses": ["general"]}}
+        fixture = {"state": state, "status": {}, "beats": [], "refusals": [], "records": records}
+        cfg = {"connections": {url: {"url": url} for url in urls}}
         heard = threading.Condition()
         worker_errors = []
 
         def fake_request(connection, operation, **payload):
             if operation == "heartbeat":
+                agents = [(entry["id"], entry["status"], entry.get("epoch")) for entry in payload["agents"]]
+                try:
+                    if hook is not None:
+                        hook(fixture, connection["url"], agents)
+                except bus.BusError:
+                    with heard:
+                        fixture["refusals"].append((time.monotonic(), connection["url"], agents))
+                        heard.notify_all()
+                    raise
                 with heard:
-                    if refuse_first and not fixture["refusals"]:
-                        fixture["refusals"].append(time.monotonic())
-                        raise bus.BusError("simulated hub outage")
-                    fixture["beats"].append((time.monotonic(), sorted(
-                        (entry["id"], entry["status"]) for entry in payload["agents"])))
+                    fixture["beats"].append((time.monotonic(), connection["url"], agents))
                     heard.notify_all()
                 return {"ok": True}
             if operation == "poll_device":
                 return {"messages": []}
             raise AssertionError(operation)
 
-        def wait_for(count, timeout):
+        def wait_for(predicate, timeout):
             with heard:
-                return heard.wait_for(lambda: len(fixture["beats"]) >= count, timeout)
+                return heard.wait_for(lambda: predicate(fixture["beats"]), timeout)
 
         def run_worker():
             try:
@@ -358,10 +367,12 @@ class LifecycleTests(unittest.TestCase):
                 worker_errors.append(exc)
 
         fixture["wait_for"] = wait_for
+        fixture["worker"] = lambda: json.loads((state / "worker.json").read_text())
         with mock.patch.object(bus, "state_dir", return_value=state), \
                 mock.patch.object(bus, "config", return_value=cfg), \
                 mock.patch.object(bus, "registrations", side_effect=lambda: dict(fixture["records"])), \
-                mock.patch.object(bus, "current_status", side_effect=lambda record: fixture["status"]), \
+                mock.patch.object(bus, "current_status",
+                                  side_effect=lambda record: fixture["status"].get(record["id"], "queueable")), \
                 mock.patch.object(bus, "request", side_effect=fake_request), \
                 mock.patch.object(bus, "HEARTBEAT_TICK", tick), \
                 mock.patch.object(bus, "HEARTBEAT_INTERVAL", interval), \
@@ -372,53 +383,189 @@ class LifecycleTests(unittest.TestCase):
                 yield fixture
             finally:
                 (state / "worker.stop").touch()
-                worker.join(6)
+                worker.join(8)
             self.assertFalse(worker.is_alive())
             self.assertEqual(worker_errors, [])
 
     def test_a_hub_hears_unchanged_statuses_once_per_interval_and_any_change_at_once(self):
         interval = 1.5
         with self.beating_worker("beat-cadence", tick=0.02, interval=interval) as fixture:
-            worker_file = fixture["state"] / "worker.json"
-            self.assertTrue(fixture["wait_for"](1, 3), "the first heartbeat never came")
-            # Read heartbeat_at only once the worker has recorded that first heartbeat.
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3), "the first heartbeat never came")
+            # Read worker.json only once the worker has recorded that first heartbeat.
             deadline = time.monotonic() + 2
-            while (not json.loads(worker_file.read_text()).get("heartbeat_success_at")
-                   and time.monotonic() < deadline):
+            while not fixture["worker"]().get("heartbeat_success_at") and time.monotonic() < deadline:
                 time.sleep(0.01)
-            ticked = json.loads(worker_file.read_text())["heartbeat_at"]
+            first = fixture["worker"]()
             time.sleep(0.4)
             self.assertEqual(len(fixture["beats"]), 1, "unchanged statuses were sent again inside the interval")
+            quiet = fixture["worker"]()
             # Worker liveness (worker_recent) reads heartbeat_at, so every tick records it.
-            self.assertGreater(json.loads(worker_file.read_text())["heartbeat_at"], ticked)
+            self.assertGreater(quiet["heartbeat_at"], first["heartbeat_at"])
+            self.assertEqual(quiet["heartbeat_success_at"], first["heartbeat_success_at"])
+            self.assertEqual(quiet["adapters"], 1)
 
-            fixture["status"] = "live"
-            self.assertTrue(fixture["wait_for"](2, 1), "a status change waited for the interval")
-            first, second = fixture["beats"][:2]
-            self.assertLess(second[0] - first[0], interval)
-            self.assertEqual(second[1], [("agent-a", "live")])
+            fixture["status"]["agent-a"] = "live"
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 2, 1), "a status change waited for the interval")
+            one, two = fixture["beats"][:2]
+            self.assertLess(two[0] - one[0], interval)
+            self.assertEqual(two[2], [("agent-a", "live", None)])
 
-            self.assertTrue(fixture["wait_for"](3, interval + 2), "unchanged statuses were never sent again")
-            third = fixture["beats"][2]
-            self.assertGreaterEqual(third[0] - second[0], interval - 0.1)
-            self.assertEqual(third[1], [("agent-a", "live")])
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 3, interval + 2),
+                            "unchanged statuses were never sent again")
+            three = fixture["beats"][2]
+            self.assertGreaterEqual(three[0] - two[0], interval - 0.1)
+            self.assertEqual(three[2], [("agent-a", "live", None)])
 
             fixture["records"] = dict(fixture["records"], b=dict(fixture["records"]["a"], id="agent-b"))
-            self.assertTrue(fixture["wait_for"](4, 1), "a new registration waited for the interval")
-            fourth = fixture["beats"][3]
-            self.assertLess(fourth[0] - third[0], interval)
-            self.assertEqual(fourth[1], [("agent-a", "live"), ("agent-b", "live")])
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 4, 1), "a new registration waited for the interval")
+            four = fixture["beats"][3]
+            self.assertLess(four[0] - three[0], interval)
+            self.assertEqual(four[2], [("agent-a", "live", None), ("agent-b", "queueable", None)])
+
+    def test_an_epoch_a_removed_registration_or_a_rewritten_registrations_file_goes_at_once(self):
+        url = "https://beat.invalid"
+        records = {"a": {"id": "agent-a", "kind": "codex", "binary": sys.executable, "url": url, "buses": ["general"]},
+                   "s": {"id": "service-s", "kind": "service", "url": url, "buses": ["general"],
+                         "fence_protocol": bus.SERVICE_FENCE_PROTOCOL, "epoch": 1}}
+        with self.beating_worker("beat-changes", tick=0.05, interval=30, records=records) as fixture:
+            count = lambda n: (lambda beats: len(beats) >= n)
+            self.assertTrue(fixture["wait_for"](count(1), 3))
+            self.assertEqual(fixture["beats"][0][2], [("agent-a", "queueable", None), ("service-s", "queueable", 1)])
+
+            fixture["records"] = dict(records, s=dict(records["s"], epoch=2))
+            self.assertTrue(fixture["wait_for"](count(2), 1), "a new service epoch waited for the interval")
+            self.assertEqual(fixture["beats"][1][2], [("agent-a", "queueable", None), ("service-s", "queueable", 2)])
+
+            fixture["records"] = {"s": dict(records["s"], epoch=2)}
+            self.assertTrue(fixture["wait_for"](count(3), 1), "a removed registration waited for the interval")
+            self.assertEqual(fixture["beats"][2][2], [("service-s", "queueable", 2)])
+
+            # Another command rewrote the registrations file, and may have told the hub a status.
+            (fixture["state"] / "registrations.json").write_text("{}")
+            self.assertTrue(fixture["wait_for"](count(4), 1), "a rewritten registrations file waited for the interval")
+            self.assertEqual(fixture["beats"][3][2], [("service-s", "queueable", 2)])
+
+            # A hub that has no adapters for a while is told everything again when one returns.
+            kept = fixture["records"]
+            fixture["records"] = {}
+            time.sleep(0.3)
+            fixture["records"] = kept
+            self.assertTrue(fixture["wait_for"](count(5), 1), "a returning hub waited for the interval")
+            time.sleep(0.3)
+            self.assertEqual(len(fixture["beats"]), 5)
+
+    def test_a_heartbeat_in_flight_when_the_registrations_file_changes_is_followed_by_another(self):
+        release, entered = threading.Event(), threading.Event()
+
+        def hold_the_second(fixture, url, agents):
+            if len(fixture["beats"]) == 1 and not release.is_set():
+                entered.set()
+                release.wait(3)
+
+        with self.beating_worker("beat-inflight", tick=0.05, interval=30, hook=hold_the_second) as fixture:
+            try:
+                self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3))
+                fixture["status"]["agent-a"] = "live"
+                self.assertTrue(entered.wait(2), "the status change started no heartbeat")
+                (fixture["state"] / "registrations.json").write_text("{}")
+                time.sleep(0.2)
+            finally:
+                release.set()
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 3, 1),
+                            "a heartbeat that began before the registrations file changed was taken as current")
+            self.assertEqual(fixture["beats"][2][2], [("agent-a", "live", None)])
 
     def test_a_hub_that_refuses_a_heartbeat_is_asked_again_at_the_next_tick(self):
-        with self.beating_worker("beat-retry", tick=0.02, interval=30, refuse_first=True) as fixture:
-            self.assertTrue(fixture["wait_for"](1, 3), "a refused heartbeat waited for the interval")
+        def refuse_once(fixture, url, agents):
+            if not fixture["refusals"]:
+                raise bus.BusError("simulated hub outage")
+
+        with self.beating_worker("beat-retry", tick=0.1, interval=30, hook=refuse_once) as fixture:
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3), "a refused heartbeat waited for the interval")
             self.assertEqual(len(fixture["refusals"]), 1)
-            self.assertLess(fixture["beats"][0][0] - fixture["refusals"][0], 1)
-            time.sleep(0.3)
+            self.assertLess(fixture["beats"][0][0] - fixture["refusals"][0][0], 0.6)
+            time.sleep(0.5)
             self.assertEqual(len(fixture["beats"]), 1, "an accepted heartbeat was sent again inside the interval")
-            info = json.loads((fixture["state"] / "worker.json").read_text())
+            info = fixture["worker"]()
             self.assertEqual(info["heartbeat_errors"], [])
             self.assertGreater(info["heartbeat_success_at"], 0)
+
+    def test_a_failed_heartbeat_is_sent_again_even_when_the_statuses_went_back(self):
+        # The hub may have applied the refused request (its answer was lost), so
+        # it must hear the statuses again although they equal the last accepted.
+        def lose_the_answer_once(fixture, url, agents):
+            if agents == [("agent-a", "live", None)] and not fixture["refusals"]:
+                fixture["status"]["agent-a"] = "queueable"
+                raise bus.BusError("simulated lost answer")
+
+        with self.beating_worker("beat-revert", tick=0.1, interval=30, hook=lose_the_answer_once) as fixture:
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3))
+            fixture["status"]["agent-a"] = "live"
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 2, 2),
+                            "the hub was not told again after a failed heartbeat")
+            self.assertEqual(len(fixture["refusals"]), 1)
+            self.assertEqual(fixture["beats"][1][2], [("agent-a", "queueable", None)])
+
+    def test_more_than_128_agents_go_in_parts_and_a_failed_part_sends_them_all_again(self):
+        url = "https://beat.invalid"
+        records = {str(i): {"id": "agent-%03d" % i, "kind": "codex", "binary": sys.executable, "url": url,
+                            "buses": ["general"]} for i in range(130)}
+
+        def refuse_the_changed_part_once(fixture, url, agents):
+            if len(agents) == 2 and agents[-1][1] == "live" and not fixture["refusals"]:
+                raise bus.BusError("simulated failure of the second request")
+
+        with self.beating_worker("beat-parts", tick=0.05, interval=30, records=records,
+                                 hook=refuse_the_changed_part_once) as fixture:
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 2, 3))
+            self.assertEqual([len(beat[2]) for beat in fixture["beats"]], [128, 2])
+            fixture["status"]["agent-129"] = "live"
+            # The first part of the change is applied, the second refused; the
+            # next call sends both parts again.
+            self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 5, 2),
+                            "a change past the first 128 agents, or its refused part, waited for the interval")
+            self.assertEqual([len(beat[2]) for beat in fixture["beats"][2:]], [128, 128, 2])
+            self.assertEqual(fixture["beats"][4][2][-1], ("agent-129", "live", None))
+            time.sleep(0.3)
+            self.assertEqual(len(fixture["beats"]), 5)
+
+    def test_a_hub_that_does_not_answer_holds_up_neither_the_ticker_nor_another_hub(self):
+        slow, quick = "https://slow.invalid", "https://quick.invalid"
+        records = {"s": {"id": "agent-s", "kind": "codex", "binary": sys.executable, "url": slow, "buses": ["general"]},
+                   "q": {"id": "agent-q", "kind": "codex", "binary": sys.executable, "url": quick, "buses": ["general"]}}
+        release = threading.Event()
+
+        def stall_the_slow_hub(fixture, url, agents):
+            if url == slow and not release.wait(6):
+                raise bus.BusError("simulated stalled hub")
+
+        quick_times = lambda beats: [beat[0] for beat in beats if beat[1] == quick]
+        with self.beating_worker("beat-stall", tick=0.02, interval=0.3, records=records, urls=(slow, quick),
+                                 hook=stall_the_slow_hub) as fixture:
+            try:
+                self.assertTrue(fixture["wait_for"](lambda beats: len(quick_times(beats)) >= 4, 3),
+                                "a stalled hub held up another hub's heartbeats")
+                times = quick_times(fixture["beats"])
+                self.assertLess(max(later - earlier for earlier, later in zip(times, times[1:])), 1)
+                ticked = fixture["worker"]()["heartbeat_at"]
+                time.sleep(0.2)
+                self.assertGreater(fixture["worker"]()["heartbeat_at"], ticked, "a stalled hub held up the ticker")
+                self.assertFalse(release.is_set())
+                self.assertEqual([beat for beat in fixture["beats"] if beat[1] == slow], [])
+            finally:
+                release.set()
+
+    def test_a_heartbeat_is_due_at_the_last_tick_before_the_interval_after_sleep_or_a_clock_set_back(self):
+        with mock.patch.object(bus, "HEARTBEAT_TICK", 2), mock.patch.object(bus, "HEARTBEAT_INTERVAL", 15):
+            accepted = (1000.0, 5000.0, [])
+            self.assertFalse(bus.heartbeat_due(accepted, 1012.9, 5012.9))
+            # The last tick before 15 seconds, so heartbeats are at most 15 seconds apart.
+            self.assertTrue(bus.heartbeat_due(accepted, 1013.0, 5013.0))
+            # Asleep: the monotonic clock stood still while the wall clock ran on.
+            self.assertTrue(bus.heartbeat_due(accepted, 1001.0, 5600.0))
+            # The wall clock was set back an hour; the monotonic clock still counts.
+            self.assertTrue(bus.heartbeat_due(accepted, 1014.0, 1400.0))
+            self.assertFalse(bus.heartbeat_due(accepted, 1001.0, 1400.0))
 
 
 if __name__ == "__main__":

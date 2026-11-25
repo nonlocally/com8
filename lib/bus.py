@@ -41,9 +41,10 @@ TAILSCALE_STATUS_TIMEOUT = 1.5
 # How long an inspection of the worker waits for the start lock while another holds it.
 START_LOCK_WAIT = 0.2
 # The worker measures its agents' statuses every HEARTBEAT_TICK seconds. A hub
-# hears a heartbeat when one of them changed, and otherwise once
-# HEARTBEAT_INTERVAL seconds have passed since it accepted the last one. The
-# broker's LIVE_TTL of 45 seconds covers three intervals.
+# hears a heartbeat when one of them changed, and otherwise at the last tick
+# before HEARTBEAT_INTERVAL seconds pass since it accepted the last one, so its
+# heartbeats are at most that far apart. The broker's LIVE_TTL of 45 seconds
+# covers three intervals.
 HEARTBEAT_TICK = 2
 HEARTBEAT_INTERVAL = 15
 # Registrations whose status this process has already said it cannot measure.
@@ -494,6 +495,26 @@ def retirements():
     return read_json(state_dir() / "retirements.json", {})
 
 
+def registrations_stamp():
+    """What identifies the registrations file as written: any rewrite changes it."""
+    try:
+        stat_result = (state_dir() / "registrations.json").stat()
+    except OSError:
+        return None
+    return stat_result.st_ino, stat_result.st_size, stat_result.st_mtime_ns
+
+
+def heartbeat_due(accepted, now_monotonic, now_wall):
+    """Whether a hub's last accepted heartbeat, sent at (monotonic, wall, ...), is due again.
+
+    It is due at the last tick before HEARTBEAT_INTERVAL passes. The wall clock
+    also counts time asleep, which the monotonic clock may not; the monotonic
+    clock still counts when the wall clock is set back.
+    """
+    elapsed = max(now_monotonic - accepted[0], now_wall - accepted[1])
+    return elapsed >= HEARTBEAT_INTERVAL - HEARTBEAT_TICK
+
+
 def local_agent(conn, target="self"):
     records = [r for r in registrations().values() if r["url"] == conn["url"]]
     if target == "self":
@@ -903,62 +924,81 @@ def worker():
             return stop.is_set()
 
         def heartbeat_hub(conn, records, accepted):
-            # Returns (time sent, entries) when this hub was sent a heartbeat,
-            # None when it was not due, and the number of its adapters.
+            # Measures this hub's statuses and sends them when they changed or
+            # its last accepted heartbeat is due. Returns what was sent, as
+            # (monotonic time, wall time, entries), or None when nothing was.
             entries = []
             for record in records:
                 if stopping():
-                    return None, 0
+                    return None
                 entry = {"id": record["id"], "status": current_status(record)}
                 if service_epoch(record) is not None:
                     entry["epoch"] = service_epoch(record)
                 entries.append(entry)
-            if (accepted is not None and accepted[1] == entries
-                    and time.monotonic() - accepted[0] < HEARTBEAT_INTERVAL):
-                return None, len(entries)
-            sent_at = time.monotonic()
+            if (accepted is not None and accepted[2] == entries
+                    and not heartbeat_due(accepted, time.monotonic(), time.time())):
+                return None
+            sent = (time.monotonic(), time.time(), entries)
             for offset in range(0, len(entries), 128):
                 if stopping():
-                    return None, 0
+                    return None
                 request(conn, "heartbeat", agents=entries[offset:offset + 128])
-            return (sent_at, entries), len(entries)
+            return sent
 
         def heartbeat_loop():
-            # A delivery may wait on an agent for twenty seconds. Liveness has
-            # its own ticker, and unrelated hubs have independent HTTP calls.
-            # Every tick measures each status and records heartbeat_at; a hub
-            # hears from the worker only when a status changed or its last
-            # accepted heartbeat is HEARTBEAT_INTERVAL old. A hub that fails is
-            # asked again at the next tick.
-            accepted = {}
+            # A delivery may wait on an agent for twenty seconds, and a hub may
+            # take longer than one request's timeout to answer. So liveness has
+            # its own ticker, and each hub its own call: a hub that does not
+            # answer holds up neither the ticker nor any other hub. Each tick
+            # records heartbeat_at and starts a call for every hub that has
+            # none in flight. A hub whose call failed, or began before the
+            # registrations file last changed, is sent its statuses at its next
+            # call even if they look unchanged: it may hold what a partial
+            # heartbeat or another command told it.
+            calls, accepted, errors = {}, {}, {}
+            stamp, success_at = registrations_stamp(), None
             with ThreadPoolExecutor(max_workers=8, thread_name_prefix="bus-heartbeat") as pool:
                 while not stopping():
                     try:
+                        for url, (call, began) in list(calls.items()):
+                            if not call.done():
+                                continue
+                            del calls[url]
+                            try:
+                                sent = call.result()
+                            except (BusError, OSError, ValueError, KeyError) as exc:
+                                accepted.pop(url, None)
+                                errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
+                                continue
+                            errors.pop(url, None)
+                            if sent is not None:
+                                success_at = time.time()
+                                if began == stamp:
+                                    accepted[url] = sent
+                                else:
+                                    accepted.pop(url, None)
+                        current = registrations_stamp()
+                        if current != stamp:
+                            stamp = current
+                            accepted.clear()
                         cfg = config()
                         groups = {}
                         for record in registrations().values():
                             if active_adapter(record) and record["url"] in cfg["connections"]:
                                 groups.setdefault(record["url"], []).append(record)
-                        for url in set(accepted) - set(groups):
-                            del accepted[url]
-                        futures = {pool.submit(heartbeat_hub, cfg["connections"][url], rows, accepted.get(url)): url
-                                   for url, rows in groups.items()}
-                        counts, errors = {}, {}
-                        if not futures:
-                            publish(state="running", heartbeat_at=time.time(), adapters=0, heartbeat_errors=[])
-                        for future in as_completed(futures):
-                            url = futures[future]
-                            updates = {"state": "running", "heartbeat_at": time.time()}
-                            try:
-                                sent, counts[url] = future.result()
-                                if sent is not None:
-                                    accepted[url] = sent
-                                    updates["heartbeat_success_at"] = time.time()
-                            except (BusError, OSError, ValueError, KeyError) as exc:
-                                counts[url] = 0
-                                errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
-                            updates.update(adapters=sum(counts.values()), heartbeat_errors=list(errors.values()))
-                            publish(**updates)
+                        for url in (set(accepted) | set(errors)) - set(groups):
+                            accepted.pop(url, None)
+                            errors.pop(url, None)
+                        for url, rows in groups.items():
+                            if url not in calls:
+                                calls[url] = (pool.submit(heartbeat_hub, cfg["connections"][url], rows,
+                                                          accepted.get(url)), stamp)
+                        updates = {"state": "running", "heartbeat_at": time.time(),
+                                   "adapters": sum(len(rows) for url, rows in groups.items() if url not in errors),
+                                   "heartbeat_errors": list(errors.values())}
+                        if success_at is not None:
+                            updates["heartbeat_success_at"] = success_at
+                        publish(**updates)
                     except (BusError, OSError, ValueError, KeyError) as exc:
                         publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
                     stop.wait(HEARTBEAT_TICK)
