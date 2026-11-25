@@ -173,6 +173,69 @@ class BrokerTests(unittest.TestCase):
         self.assertEqual(self.call("poll", token=b["token"], agent=b["agent"])["messages"], [])
         self.assertEqual(self.call("receipt", token=a["token"], id=m["id"])["status"], "expired")
 
+    def service_pair(self):
+        """A sending device and a worker device owning a native agent and a service."""
+        a = self.join(device="alice")
+        a["agent"] = self.register(token=a["token"], name="alice")
+        w = self.join(device="worker")
+        w["codex"] = self.register(token=w["token"], name="native", kind="codex", status="queueable")
+        w["service"] = self.register(token=w["token"], name="service:" + "1" * 32, kind="service", status="queueable")
+        return a, w
+
+    def test_batch_leases_for_services_keep_order_and_lease_each_message_at_most_once(self):
+        a, w = self.service_pair()
+        native = [self.call("send", token=a["token"], sender=a["agent"], target=w["codex"], bus="general",
+                            message="n%d" % i)["id"] for i in range(3)]
+        queued = [self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general",
+                            message="s%d" % i)["id"] for i in range(40)]
+        # Without a batch every target, the service included, is leased one message at a time.
+        plain = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]])["messages"]
+        self.assertEqual([m["id"] for m in plain], [native[0], queued[0]])
+        self.call("ack", token=w["token"], agent=w["service"], id=queued[0], lease=plain[1]["lease"], status="queued")
+        first = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 32})
+        self.assertEqual(first["lease_seconds"], LEASE_TTL)
+        # The native target still holds its lease; the service gets its next 32 in queue order, each with its own lease.
+        self.assertEqual([m["id"] for m in first["messages"]], queued[1:33])
+        self.assertEqual(len({m["lease"] for m in first["messages"]}), 32)
+        self.assertTrue(all(m["target"] == w["service"] for m in first["messages"]))
+        # A message is leased once per lease: nothing is handed out again while 32 leases are held.
+        self.assertEqual(self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]],
+                                   batch={w["service"]: 32})["messages"], [])
+        for m in first["messages"][:8]:
+            self.call("ack", token=w["token"], agent=w["service"], id=m["id"], lease=m["lease"], status="queued")
+        rest = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        self.assertEqual([m["id"] for m in rest], queued[33:40])
+        self.assertEqual(self.call("receipt", token=a["token"], id=queued[9])["status"], "leased")
+        # Expired leases are re-leased with new tokens; the old token can no longer acknowledge.
+        self.now[0] += LEASE_TTL + 1
+        renewed = self.call("poll_device", token=w["token"], agents=[w["service"]], batch={w["service"]: 32})["messages"]
+        self.assertEqual([m["id"] for m in renewed], queued[9:40])
+        stale = first["messages"][8]
+        self.assertEqual(stale["id"], queued[9])
+        self.refused("ack", token=w["token"], agent=w["service"], id=stale["id"], lease=stale["lease"], status="queued", code="not_found")
+        self.call("ack", token=w["token"], agent=w["service"], id=renewed[0]["id"], lease=renewed[0]["lease"], status="queued")
+        self.assertEqual(self.call("receipt", token=a["token"], id=queued[9])["status"], "queued")
+        # A smaller batch and the per-poll limit both bound a poll; the native target never exceeds one.
+        native_again = self.call("poll_device", token=w["token"], agents=[w["codex"]], batch={w["service"]: 4} if False else {})["messages"]
+        self.assertEqual([m["id"] for m in native_again], [native[0]])
+        self.call("ack", token=w["token"], agent=w["codex"], id=native[0], lease=native_again[0]["lease"], status="queued")
+        self.now[0] += LEASE_TTL + 1
+        small = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 4})["messages"]
+        self.assertEqual([m["id"] for m in small], [native[1]] + queued[10:14])
+
+    def test_batch_lease_selectors_validate_before_any_lease(self):
+        a, w = self.service_pair()
+        self.call("send", token=a["token"], sender=a["agent"], target=w["service"], bus="general", message="s")
+        self.call("send", token=a["token"], sender=a["agent"], target=w["codex"], bus="general", message="n")
+        for batch in ({w["codex"]: 2}, {w["service"]: 0}, {w["service"]: 33}, {w["service"]: "8"},
+                      {w["service"]: True}, {a["agent"]: 4}, [w["service"]], {w["service"]: 2, w["codex"]: 1}):
+            self.refused("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch=batch)
+        self.refused("poll_device", token=w["token"], agents=[w["codex"]], batch={w["service"]: 4})
+        with self.b._connect() as db:
+            self.assertEqual({row["status"] for row in db.execute("SELECT status FROM messages")}, {"accepted"})
+        leased = self.call("poll_device", token=w["token"], agents=[w["codex"], w["service"]], batch={w["service"]: 1})["messages"]
+        self.assertEqual(len(leased), 2)
+
     def test_atomic_invitation_and_registration_concurrency(self):
         invitation = self.call("invite")["invite"]
         with ThreadPoolExecutor(max_workers=8) as pool:
