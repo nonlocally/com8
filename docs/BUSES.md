@@ -634,6 +634,12 @@ when the adapter reports failure.
 
 Liveness is reported by the authenticated worker: Claude sockets are probed,
 Codex adapters report queueability, and heartbeats expire after 45 seconds.
+Every 2 seconds the worker measures the statuses for each hub it is not still
+waiting on. It sends a hub a heartbeat at once when a status, a service epoch or
+a registration changes, and otherwise about every 14 seconds (at the last tick
+before 15 seconds pass). Each hub has its own heartbeat call, so a hub that does
+not answer holds up no other hub's heartbeats, and a heartbeat call still
+running after an interval shows as an error.
 It is an observation from the participating installation, not remote attestation.
 
 ## Recovery and verification
