@@ -610,6 +610,18 @@ class HostedAccountTests(Base):
         self.assertEqual(self.receipt(bob["token"], held["id"])["status"], "cancelled")
         self.assertNotIn("worker", [row["name"] for row in self.call("mailbox_ls", bob["token"], bus="shared")["mailboxes"]])
 
+    def test_removing_an_event_guest_cancels_mail_held_for_it(self):
+        event = self.call("event_create", "alice-reader", bus="team")
+        guest = self.call("redeem", "", invite=event["invite"], device="guest")
+        self.absent_box(guest["token"], "helper", bus="team")
+        alice = self.device("team", "alice", "alice-reader", "alice")
+        coord = self.register(alice["token"], "coord", bus="team")["id"]
+        key = "principal:" + guest["principal"]
+        held = self.hold(alice["token"], coord, "helper", bus="team", hold_for=key)
+        self.call("event_remove", "alice-reader", event=event["event"]["id"], principal=guest["principal"])
+        self.assertEqual(self.receipt(alice["token"], held["id"])["status"], "cancelled")
+        self.assertEqual(self.rows("SELECT * FROM mailboxes WHERE owner=?", key), [])
+
     def test_browser_sessions_cannot_use_mailbox_operations(self):
         for reader in ("alice-reader", "ops-reader"):
             for op, fields in (("mailbox_ls", {}), ("mailbox_reserve", {"name": "x"}),
