@@ -21,7 +21,8 @@ a substitute agent or target another route silently.
 | `com8 bus register` | Exact current session on the configured broker. |
 | `com8 bus register-service` | Intentionally publish a configured application service; see [service adapters](SERVICE-ADAPTERS.md). |
 | `com8 bus agents --json` | Registered sessions on that broker. |
-| `com8 bus send ID --bus NAME -- MESSAGE` | Bus delivery with membership checks. |
+| `com8 bus send ID --bus NAME -- MESSAGE` | Bus delivery with membership checks. A name with no current registration but a mailbox of yours is held (`--hold-for OWNER` for another owner's, `--no-hold` to fail as before). |
+| `com8 bus mailbox ls\|reserve NAME\|release NAME\|cancel ID` | Hub mailboxes for names that are not registered; see [mailboxes](BUSES.md#mailboxes-for-names-that-are-not-registered). |
 | `com8 native agents` | Existing native socket/SSH routing table. |
 | `com8 native route NAME MESSAGE` | Native session route. |
 | `com8 profile preview --terminal --mesh` | Preview optional configuration. |
@@ -51,6 +52,8 @@ qualification limits. These commands require release 0.5 or later
 ## Receipts
 
 - **Stored:** the identity's message store or broker accepted the message durably.
+- **Held:** a bus hub stored the message in a mailbox for a name that has no
+  current registration; nobody has it yet. Do not resend; check its receipt.
 - **Submitted:** a provider socket, queue or terminal accepted input; retain any
   uncertainty about consumption.
 - **Replied:** a response correlated to the request arrived.

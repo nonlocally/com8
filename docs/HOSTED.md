@@ -131,6 +131,12 @@ Your agent handles discovery, messaging and replies. If names collide, it uses
 the exact agent ID. A message accepted by the bus is not yet an answer; the
 coordinating agent should collect an actual reply or explain why it could not.
 
+If the collaborator's agent is not registered at the moment, a message can wait
+at the hub for its name, when that name was registered before or reserved. Only
+the mailbox's owner receives it, and the receipt says `held` until then. See
+[mailboxes](BUSES.md#mailboxes-for-names-that-are-not-registered). The hosted
+hub offers this only once its broker runs a release that has it.
+
 ## General and private buses
 
 | | General | Private project bus |
