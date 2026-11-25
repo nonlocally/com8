@@ -19,7 +19,8 @@ const dot = (a, b) => a.reduce((sum, value, i) => sum + value * b[i], 0);
 // between-agent relationship; direction is combined only for this analysis.
 // Sum the two directions and any bus contributions BEFORE compressing volume.
 export function weightedGraph(model = {}) {
-  const ids = [...new Set((model.agents || []).map(agent => agent?.id).filter(id => typeof id === 'string' && id))].sort(compare);
+  // A service's published agents are its claim, not participants: they never enter the analysis.
+  const ids = [...new Set((model.agents || []).filter(agent => agent && !agent.via).map(agent => agent.id).filter(id => typeof id === 'string' && id))].sort(compare);
   const allowed = new Set(ids);
   const pairs = new Map();
   for (const edge of model.connections || []) {

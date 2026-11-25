@@ -297,6 +297,134 @@ class Services(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "queue is full"):
                 service.enqueue(self.root, self.record, dict(self.envelope, id="m_other", reply_to="m_other"))
 
+    def states(self):
+        db = service.journal(self.root)
+        try:
+            return [row["state"] for row in db.execute("SELECT state FROM jobs ORDER BY id")]
+        finally:
+            db.close()
+
+    def test_full_transport_queue_is_busy_not_failed_and_capacity_counts_pending_jobs(self):
+        self.assertEqual(service.capacity(self.root), service.MAX_PENDING)
+        with mock.patch.object(service, "MAX_PENDING", 2):
+            self.assertEqual(service.capacity(self.root), 2)
+            service.enqueue(self.root, self.record, self.envelope)
+            self.assertEqual(service.capacity(self.root), 1)
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_second", reply_to="m_second"))
+            self.assertEqual(service.capacity(self.root), 0)
+            third = dict(self.envelope, id="m_third", reply_to="m_third")
+            with self.assertRaisesRegex(service.ServiceBusy, "queue is full"):
+                service.enqueue(self.root, self.record, third)
+            self.assertTrue(issubclass(service.ServiceBusy, service.ServiceError))
+            # The worker keeps the hub's lease for a message a full journal cannot take, instead of failing it.
+            with mock.patch.object(bus, "state_dir", return_value=self.root):
+                self.assertIsNone(bus.deliver(self.record, third))
+            # An already journaled message is not new work and needs no capacity.
+            self.assertEqual(service.enqueue(self.root, self.record, self.envelope)[0], "queued")
+        self.assertEqual(self.states(), ["pending", "pending"])
+        service.advance(self.root, self.registrations, self.connections, self.request, now=time.time(),
+                        call_bridge=lambda record, job: {"pending": False, "reply": "done"}, limit=8)
+        self.assertNotIn("pending", self.states())
+        self.assertEqual(service.capacity(self.root), service.MAX_PENDING)
+
+    def test_advance_drains_up_to_the_limit_eight_at_a_time(self):
+        self.record["contract_version"] = 2
+        for index in range(20):
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_%02d" % index, reply_to="m_%02d" % index))
+        running, peak, lock = [0], [0], threading.Lock()
+        def bridge(record, job):
+            with lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(.1)
+            with lock:
+                running[0] -= 1
+            return {"pending": False, "disposition": "acknowledge"}
+        now = time.time()
+        # The default is one round of eight, as before.
+        self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
+                                         call_bridge=bridge, now=now), [])
+        self.assertEqual(self.states().count("acknowledged"), 8)
+        self.assertEqual(service.advance(self.root, self.registrations, self.connections, self.request,
+                                         call_bridge=bridge, now=now, limit=64), [])
+        self.assertEqual(self.states().count("acknowledged"), 20)
+        # One service's jobs are called concurrently: the actor lock covers journal transitions, not the endpoint call.
+        self.assertLessEqual(peak[0], 8)
+        self.assertGreater(peak[0], 1)
+
+    def test_advance_budget_stops_after_a_whole_round(self):
+        self.record["contract_version"] = 2
+        for index in range(24):
+            service.enqueue(self.root, self.record, dict(self.envelope, id="m_%02d" % index, reply_to="m_%02d" % index))
+        def slow(record, job):
+            time.sleep(.1)
+            return {"pending": False, "disposition": "acknowledge"}
+        service.advance(self.root, self.registrations, self.connections, self.request, call_bridge=slow,
+                        limit=64, budget_s=.05)
+        self.assertEqual(self.states().count("acknowledged"), 8)
+        # Without a fixed clock each job records its own time, so retries are scheduled from when they ran.
+        service.advance(self.root, self.registrations, self.connections, self.request, limit=64,
+                        call_bridge=lambda record, job: {"pending": True})
+        db = service.journal(self.root)
+        try:
+            next_at = [row["next_at"] for row in db.execute("SELECT next_at FROM jobs WHERE state='pending'")]
+        finally:
+            db.close()
+        self.assertEqual(len(next_at), 16)
+        self.assertTrue(all(value > time.time() + 4 for value in next_at))
+
+    def test_publish_status_fetches_a_bounded_agent_list_through_the_bridge(self):
+        self.record["publish_agents"] = True
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.status = 200
+        response.read.return_value = json.dumps({"agents": [{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
+                                                            {"id": "w1", "parent": "p1"}]}).encode()
+        opener = mock.Mock()
+        opener.open.return_value = response
+        with mock.patch.object(service.urllib.request, "build_opener", return_value=opener):
+            agents, dropped = service.publish_status(self.record)
+            req = opener.open.call_args.args[0]
+            payload = json.loads(req.data)
+        self.assertEqual((payload["op"], payload["version"], payload["service_id"], payload["recipient_id"], payload["hub"]),
+                         ("status", 1, self.sid, self.target, self.record["url"]))
+        self.assertNotIn("envelope", payload)
+        self.assertTrue(req.headers["Authorization"].startswith("Bearer "))
+        self.assertEqual((agents, dropped), ([{"id": "p1", "name": "Prover", "status": "live", "role": "prover"},
+                                             {"id": "w1", "name": "w1", "status": "queueable", "parent": "p1"}], []))
+        # A malformed response is refused whole; a bad entry is dropped with its reason and the rest is kept.
+        for bad in ({"agents": "p1"}, {"agents": [], "extra": 1}, {}):
+            with self.assertRaises(service.ServiceError):
+                service.validate_status(bad)
+        self.assertEqual(service.validate_status({"agents": []}), ([], []))
+        import bus_published
+        self.assertIs(service.validate_published_agents, bus_published.validate_published_agents)
+        kept, dropped = service.validate_status({"agents": [
+            {"id": "p1", "message": "text"}, {"id": "p1"}, {"id": "p1"}, {"id": "w1", "parent": "absent"}, {"id": " "},
+            {"id": "p2", "status": "busy"}, {"id": "p3", "name": "a\nb"}, {"id": "p4", "name": "a\x7fb"}, {"id": "\u00e9" * 65},
+            {"id": "\u00e9" * 64}, 7, {"id": "p5", "role": "r" * 65}]})
+        self.assertEqual(kept, [{"id": "p1", "name": "p1", "status": "queueable"}, {"id": "w1", "name": "w1", "status": "queueable"},
+                                {"id": "\u00e9" * 64, "name": "\u00e9" * 64, "status": "queueable"}])
+        self.assertEqual(len(dropped), 9)
+        self.assertTrue(all(isinstance(reason, str) and reason for _, reason in dropped), dropped)
+        many = [{"id": "p%d" % i} for i in range(service.MAX_PUBLISHED_AGENTS + 3)]
+        kept, dropped = service.validate_published_agents(many)
+        self.assertEqual((len(kept), len(dropped)), (service.MAX_PUBLISHED_AGENTS, 3))
+        wide = [{"id": "p%03d" % i, "name": "n" * 128, "role": "r" * 64} for i in range(256)]
+        kept, dropped = service.validate_published_agents(wide)
+        self.assertLessEqual(len(json.dumps(kept, separators=(",", ":")).encode()), service.MAX_PUBLISHED_AGENTS_BYTES)
+        self.assertEqual(len(kept) + len(dropped), 256)
+        # The byte cut runs last: an entry whose parent was cut from the tail no longer names it.
+        kept, dropped = service.validate_published_agents([{"id": "head", "parent": "tail"}] + wide[:250] + [{"id": "tail"}])
+        self.assertEqual(kept[0], {"id": "head", "name": "head", "status": "queueable"})
+        self.assertNotIn("tail", [row["id"] for row in kept])
+        self.assertTrue(all(row.get("parent", row["id"]) in {row["id"] for row in kept} for row in kept))
+        record = service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service", publish_agents=True,
+            endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))
+        self.assertTrue(record["publish_agents"])
+        self.assertFalse(service.registration(argparse.Namespace(service_id=self.sid, name="fixture-service",
+            endpoint="https://platform.invalid/private/bridge", token_file=str(self.token_file)))["publish_agents"])
+
     def test_real_bridge_payload_auth_and_no_redirect_or_unbounded_response(self):
         service.enqueue(self.root, self.record, self.envelope)
         response = mock.MagicMock()

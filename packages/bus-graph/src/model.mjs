@@ -10,6 +10,9 @@ export const deviceName = agent => text(agent.device, text(agent.device_metadata
 export const deviceKey = agent => JSON.stringify([owner(agent), text(agent.device_id, text(agent.principal, deviceName(agent)))]);
 export const agentNodeId = id => `agent:${id}`;
 
+export const MAX_PUBLISHED_AGENTS = 256;
+const PUBLISHED_STATUSES = ['live', 'queueable', 'offline'];
+
 function cleanAgent(input) {
   const metadata = {};
   for (const key of ['hostname', 'platform', 'tailscale_hostname', 'tailscale_name', 'tailscale_dns_name']) {
@@ -24,10 +27,50 @@ function cleanAgent(input) {
   };
 }
 
+// A service may publish the agents it runs. They are its claim, shown under it
+// in its own identity space (`service id/agent id`), never message traffic:
+// only id, name, status, role and parent are read, the rest is dropped.
+function publishedAgents(service, input) {
+  const children = [];
+  if (service.kind !== 'service' || !Array.isArray(input)) return children;
+  const ids = new Set();
+  const parents = new Map();
+  for (const entry of input) {
+    if (!entry || typeof entry !== 'object' || typeof entry.id !== 'string' || !entry.id || ids.has(entry.id)) continue;
+    ids.add(entry.id);
+    if (typeof entry.parent === 'string' && entry.parent) parents.set(entry.id, entry.parent);
+    children.push({
+      id: `${service.id}/${entry.id}`, name: text(entry.name, entry.id), kind: text(entry.role, 'agent'),
+      user: service.user, device: service.device, device_id: service.device_id, device_metadata: service.device_metadata,
+      // A silent service takes its agents with it: their state is at most the service's.
+      status: service.status === 'offline' ? 'offline' : PUBLISHED_STATUSES.includes(entry.status) ? entry.status : 'queueable',
+      last_seen: service.last_seen, description: '', buses: [...service.buses], via: service.id, viaName: service.name, parent: null,
+    });
+    if (children.length >= MAX_PUBLISHED_AGENTS) break;
+  }
+  // Parents resolve once every id is known, so order in the list does not matter;
+  // a parent outside the list, or the entry itself, means the entry hangs from the service.
+  for (const child of children) {
+    const own = child.id.slice(service.id.length + 1), parent = parents.get(own);
+    if (parent && parent !== own && ids.has(parent)) child.parent = `${service.id}/${parent}`;
+  }
+  return children;
+}
+
 export function snapshotModel(snapshot = {}) {
   const agents = new Map();
+  const containment = [];
   for (const input of Array.isArray(snapshot.agents) ? snapshot.agents : []) {
     if (input && typeof input.id === 'string' && input.id && !agents.has(input.id)) agents.set(input.id, cleanAgent(input));
+  }
+  for (const input of Array.isArray(snapshot.agents) ? snapshot.agents : []) {
+    const service = input && typeof input.id === 'string' ? agents.get(input.id) : null;
+    if (!service || service.id !== input.id) continue;
+    for (const child of publishedAgents(service, input.agents)) {
+      if (agents.has(child.id)) continue;
+      agents.set(child.id, child);
+      containment.push({source: child.parent || service.id, target: child.id});
+    }
   }
   const connections = new Map();
   let observed = false;
@@ -62,8 +105,26 @@ export function snapshotModel(snapshot = {}) {
     groups.get(key).agents.push(agent);
   }
   const sortedGroups = [...groups.values()].sort((a, b) => a.owner.localeCompare(b.owner) || a.name.localeCompare(b.name) || a.key.localeCompare(b.key));
-  for (const group of sortedGroups) group.agents.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
-  return {agents: [...agents.values()], groups: sortedGroups, connections: [...connections.values()], observed, retention_seconds: Math.min(...retention, 604800)};
+  // A service's published agents follow it, in the order the service listed them.
+  const anchor = agent => agents.get(agent.via) || agent;
+  for (const group of sortedGroups) group.agents.sort((a, b) => {
+    const [first, second] = [anchor(a), anchor(b)];
+    return first.name.localeCompare(second.name) || first.id.localeCompare(second.id) || Number(Boolean(a.via)) - Number(Boolean(b.via)) || (a.via ? 0 : a.id.localeCompare(b.id));
+  });
+  return {agents: [...agents.values()], groups: sortedGroups, connections: [...connections.values()], containment, observed, retention_seconds: Math.min(...retention, 604800)};
+}
+
+// Dashed, unlabelled, arrowless: a service's claim about its agents, never traffic.
+function containmentEdges(model, destination, visible, active = new Set()) {
+  return (model.containment || []).filter(edge => visible.has(edge.source) && visible.has(edge.target)).map(edge => {
+    const source = destination(edge.source), target = destination(edge.target);
+    if (source === target) return null;
+    const connected = active.has(source) || active.has(target);
+    return {id: `contains:${JSON.stringify([edge.source, edge.target])}`, source, target, type: 'bezier', sourceHandle: 'out-bottom', targetHandle: 'in-top',
+      animated: false, selectable: false, focusable: false, deletable: false, reconnectable: false,
+      style: `stroke:${connected ? '#aaa89a' : '#55554d'};stroke-width:1;stroke-dasharray:4 4;opacity:${active.size && !connected ? .08 : .7}`,
+      data: {containment: true}, ariaLabel: `${edge.target} is run by ${edge.source}`};
+  }).filter(Boolean);
 }
 
 export function layoutNodes(model, previous = []) {
@@ -115,10 +176,12 @@ export function canDeferRefresh(current, next) {
 export function decorate(model, nodes, selectedId) {
   const selected = model.agents.some(agent => agentNodeId(agent.id) === selectedId) ? selectedId : null;
   const neighbors = new Set();
-  for (const edge of model.connections) {
+  for (const edge of [...model.connections, ...(model.containment || [])]) {
     if (agentNodeId(edge.source) === selected) neighbors.add(agentNodeId(edge.target));
     if (agentNodeId(edge.target) === selected) neighbors.add(agentNodeId(edge.source));
   }
+  const visible = new Set(model.agents.map(agent => agent.id));
+  const active = new Set(selected ? [selected] : []);
   return {
     selectedId: selected,
     nodes: nodes.map(node => node.type === 'agent' ? {...node, selected: node.id === selected, data: {...node.data, dimmed: Boolean(selected && node.id !== selected && !neighbors.has(node.id)), neighbor: neighbors.has(node.id)}} : node),
@@ -134,7 +197,7 @@ export function decorate(model, nodes, selectedId) {
         style: `stroke:${color};stroke-width:${connected ? 2 : 1};opacity:${selected && !connected ? .08 : connected ? .95 : .35}`,
         ariaLabel: `${edge.message_count} retained messages from ${edge.source} to ${edge.target}`,
       };
-    }),
+    }).concat(containmentEdges(model, agentNodeId, visible, active)),
   };
 }
 
@@ -156,10 +219,21 @@ export const communityColor = index => COMMUNITY_COLORS[(Number.isInteger(index)
 // deletes its members' visual positions or changes the underlying message graph.
 export function spectralNodes(model, analysis, previous = []) {
   const old = new Map(previous.filter(node => node.type === 'agent').map(node => [node.id, node]));
-  return layoutNodes(model).filter(node => node.type === 'agent').map(node => {
+  const placed = layoutNodes(model).filter(node => node.type === 'agent').map(node => {
     const prior = old.get(node.id);
     const position = prior?.data?.group === node.data.group ? prior.position : analysis.positions.get(node.data.agent.id) || node.position;
     return {...node, position: {...position}};
+  });
+  // Published agents take no part in the analysis; a child without a kept
+  // position stacks under its service wherever the analysis put the service.
+  const byId = new Map(placed.map(node => [node.data.agent.id, node]));
+  const stacked = new Map();
+  return placed.map(node => {
+    const agent = node.data.agent, anchor = agent.via ? byId.get(agent.via) : null;
+    if (!anchor || old.get(node.id)?.data?.group === node.data.group) return node;
+    const index = stacked.get(agent.via) || 0;
+    stacked.set(agent.via, index + 1);
+    return {...node, position: {x: anchor.position.x + 30, y: anchor.position.y + (anchor.height || 120) + 24 + index * 140}};
   });
 }
 
@@ -248,8 +322,9 @@ export function graphPresentation(model, baseNodes, analysis, options = {}) {
   }
   const validSelected = rendered.some(node => node.id === selectedId && node.type !== 'device') ? selectedId : null;
   const active = new Set(focusedCommunity ? rendered.filter(node => node.type === 'community' ? node.data.community.id === focusedCommunity : node.type === 'agent' && byAgent.get(node.data.agent.id)?.id === focusedCommunity).map(node => node.id) : validSelected ? [validSelected] : []);
+  const contained = containmentEdges(model, destination, visible, active);
   const neighbors = new Set();
-  for (const edge of links.values()) {
+  for (const edge of [...links.values(), ...contained]) {
     if (active.has(edge.source)) neighbors.add(edge.target);
     if (active.has(edge.target)) neighbors.add(edge.source);
   }
@@ -269,6 +344,6 @@ export function graphPresentation(model, baseNodes, analysis, options = {}) {
         markerEnd: {type: 'arrowclosed', color, width: 14, height: 14}, label: active.size && !connected ? undefined : String(edge.message_count), labelStyle: `color:${connected ? '#edede7' : '#a1a199'};font-size:10px;font-family:inherit${labelOffset}`, labelBgStyle: 'fill:#121211;fill-opacity:0.95', labelBgPadding: [6, 3], labelBgBorderRadius: 3,
         style: `stroke:${color};stroke-width:${connected ? 2 : 1};opacity:${active.size && !connected ? .08 : connected ? .95 : .35}`,
         data: {messageCount: edge.message_count}, ariaLabel: `${edge.message_count} retained messages from ${edge.source} to ${edge.target}`};
-    }),
+    }).concat(contained),
   };
 }

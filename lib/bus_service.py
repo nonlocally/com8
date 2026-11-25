@@ -26,6 +26,8 @@ import urllib.parse
 import urllib.request
 from uuid import UUID
 
+from bus_published import MAX_PUBLISHED_AGENTS, MAX_PUBLISHED_AGENTS_BYTES, PUBLISHED_AGENT_FIELDS, validate_published_agents
+
 MAX_BODY = 65536
 MAX_REPLY = 32768
 MAX_PENDING = 128
@@ -60,6 +62,11 @@ class ServiceError(ValueError):
     pass
 
 
+class ServiceBusy(ServiceError):
+    """The transport journal is full; the hub keeps the message until its lease expires."""
+
+
+
 def endpoint(value):
     parsed = urllib.parse.urlsplit(value)
     if (parsed.scheme != "https" or not parsed.hostname or parsed.username is not None
@@ -92,7 +99,8 @@ def registration(args):
     credential(token_file)
     return {"kind": "service", "session_key": "service:" + service_id, "name": args.name,
             "service_id": service_id, "endpoint": args.endpoint, "token_file": token_file,
-            "contract_version": contract_version(getattr(args, "contract_version", 1)), "status": "queueable"}
+            "contract_version": contract_version(getattr(args, "contract_version", 1)), "status": "queueable",
+            "publish_agents": bool(getattr(args, "publish_agents", False))}
 
 
 def configured(record):
@@ -104,6 +112,16 @@ def configured(record):
         return True
     except (OSError, ValueError, KeyError, UnicodeError):
         return False
+
+
+def capacity(root):
+    """Pending jobs the journal can still take, across every service it serves."""
+    db = journal(root)
+    try:
+        pending = db.execute("SELECT COUNT(*) FROM jobs WHERE state='pending'").fetchone()[0]
+        return max(0, MAX_PENDING - pending)
+    finally:
+        db.close()
 
 
 def journal(root):
@@ -640,7 +658,7 @@ def _enqueue_locked(root, record, envelope):
             else:
                 count = db.execute("SELECT COUNT(*) FROM jobs WHERE state='pending'").fetchone()[0]
                 if count >= MAX_PENDING:
-                    raise ServiceError("service transport queue is full")
+                    raise ServiceBusy("service transport queue is full")
                 db.execute("""INSERT INTO jobs(hub,id,recipient,service_id,envelope,request_hash,expires,updated,contract_version,protocol,sender_epoch,recipient_epoch)
                               VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", (record["url"], item["id"], record["id"],
                               record["service_id"], body, digest, expiry, time.time(), version,item.get("protocol"),item["sender"].get("epoch"),item.get("recipient_epoch")))
@@ -655,10 +673,31 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def validate_status(result):
+    """The endpoint's status answer: exactly {"agents": [...]}; returns (kept, dropped) from the shared validator."""
+    if not isinstance(result, dict) or set(result) != {"agents"}:
+        raise ServiceError("invalid service status response")
+    try:
+        return validate_published_agents(result["agents"])
+    except ValueError as exc:
+        raise ServiceError(str(exc)) from None
+
+
+def publish_status(record):
+    """Ask the endpoint which agents it runs; returns (kept, dropped): the service's claim, bounded."""
+    return validate_status(_post(record, {"version": contract_version(record.get("contract_version", 1)), "op": "status",
+                                          "hub": record["url"], "recipient_id": record["id"],
+                                          "service_id": record["service_id"]}))
+
+
 def bridge(record, job):
-    payload = {"version": contract_version(job["contract_version"]), "op": job["operation"], "hub": job["hub"],
-               "recipient_id": job["recipient"], "service_id": job["service_id"],
-               "envelope": json.loads(job["envelope"])}
+    return validate_response(_post(record, {"version": contract_version(job["contract_version"]), "op": job["operation"],
+                                            "hub": job["hub"], "recipient_id": job["recipient"],
+                                            "service_id": job["service_id"], "envelope": json.loads(job["envelope"])}),
+                             job["contract_version"])
+
+
+def _post(record, payload):
     body = json.dumps(payload).encode()
     if len(body) > MAX_BODY:
         raise ServiceError("service request exceeds limit")
@@ -680,7 +719,7 @@ def bridge(record, job):
         raw = response.read(MAX_BODY + 1)
     if len(raw) > MAX_BODY:
         raise ServiceError("service response exceeds limit")
-    return validate_response(json.loads(raw), job["contract_version"])
+    return json.loads(raw)
 
 
 def validate_response(result, version):
@@ -700,83 +739,103 @@ def validate_response(result, version):
 
 
 def _advance_job(root,record,selected,connection,broker_request,call_bridge,now):
+    """One job's next step. The actor lock covers every journal transition and the
+    check before a remote effect; the endpoint call and the broker reply run outside
+    it, so one service's jobs are called eight at a time and a retirement barrier can
+    complete while a call is in flight, whose late result then becomes an observation."""
     errors=[]
-    with lifecycle_lock(root,*_actor(record)):
-        db=journal(root)
+    if now is None: now=time.time()
+    actor=_actor(record)
+    # CAS always binds both nullable generation fields and pending state.
+    where="hub=? AND id=? AND state='pending' AND recipient_epoch IS ? AND protocol IS ?"
+    def locked_journal(action):
+        with lifecycle_lock(root,*actor):
+            db=journal(root)
+            try: return action(db)
+            finally: db.close()
+    def load(db):
+        row=db.execute("SELECT * FROM jobs WHERE hub=? AND id=? AND state='pending'",(selected['hub'],selected['id'])).fetchone()
+        return dict(row) if row is not None and _allowed(db,record,row) else None
+    def update(job,sql,values):
+        def transition(db):
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                if not _allowed(db,record,job): return False
+                return db.execute("UPDATE jobs SET "+sql+" WHERE "+where,(*values,job['hub'],job['id'],job['recipient_epoch'],job['protocol'])).rowcount==1
+        return locked_journal(transition)
+    def observation(job,kind,result):
+        def record_late(db):
+            with db:
+                db.execute("INSERT INTO service_job_observations(hub,job_id,recipient,service_id,recipient_epoch,kind,result,updated) VALUES(?,?,?,?,?,?,?,?)",
+                    (job['hub'],job['id'],job['recipient'],job['service_id'],job['recipient_epoch'],kind,_canonical(result),now))
+        locked_journal(record_late)
+    job=locked_journal(load)
+    if job is None: return errors
+    if job['reply'] is None:
         try:
-            row=db.execute("SELECT * FROM jobs WHERE hub=? AND id=? AND state='pending'",(selected['hub'],selected['id'])).fetchone()
-            if row is None or not _allowed(db,record,row): return errors
-            job=dict(row)
-            # CAS always binds both nullable generation fields and pending state.
-            where="hub=? AND id=? AND state='pending' AND recipient_epoch IS ? AND protocol IS ?"
-            identity=(job['hub'],job['id'],job['recipient_epoch'],job['protocol'])
-            def update(sql,values):
-                with db:
-                    db.execute('BEGIN IMMEDIATE')
-                    if not _allowed(db,record,job): return False
-                    return db.execute("UPDATE jobs SET "+sql+" WHERE "+where,(*values,*identity)).rowcount==1
-            def observation(kind,result):
-                with db:
-                    db.execute("INSERT INTO service_job_observations(hub,job_id,recipient,service_id,recipient_epoch,kind,result,updated) VALUES(?,?,?,?,?,?,?,?)",
-                        (job['hub'],job['id'],job['recipient'],job['service_id'],job['recipient_epoch'],kind,_canonical(result),now))
-            if job['reply'] is None:
-                try:
-                    result=validate_response(call_bridge(record,job),job['contract_version'])
-                    acknowledged=result.get('disposition')=='acknowledge'
-                    reply=result.get('reply')
-                except Exception:
-                    update('next_at=?,updated=?',(now+5,now))
-                    return [{"agent":job['recipient'],"error":"service endpoint unavailable; retry scheduled"}]
-                if acknowledged:
-                    if not update("state='acknowledged',updated=?",(now,)): observation("callback_after_quiesce",result)
-                    return errors
-                if not update("operation='poll',reply=?,next_at=?,updated=?",(reply,now+5,now)):
-                    observation("callback_after_quiesce",result)
-                    return errors
-                job['reply']=reply
-            if job['reply'] is not None:
-                # Quiesce can be published while a callback holds the actor lock.
-                # Recheck immediately before beginning another remote effect.
-                if not _allowed(db,record,job): return errors
-                try:
-                    args={"sender":job['recipient'],"id":json.loads(job['envelope'])['reply_to'],
-                          "message":job['reply'],"request_id":"service:"+hashlib.sha256((job['hub']+'|'+job['id']).encode()).hexdigest()}
-                    if job['recipient_epoch'] is not None: args['expected_sender_epoch']=job['recipient_epoch']
-                    receipt=broker_request(connection,'reply',**args)
-                    if not update("state='sent',receipt=?,updated=?",(_canonical(receipt),now)):
-                        observation("broker_reply_after_quiesce",receipt)
-                except Exception as exc:
-                    state='expired' if getattr(exc,'code',None) in {'not_found','forbidden','unauthorized'} else 'pending'
-                    update('state=?,next_at=?,updated=?',(state,now+5,now))
-                    errors.append({"agent":job['recipient'],"error":"service reply unavailable; "+state})
+            result=validate_response(call_bridge(record,job),job['contract_version'])
+            acknowledged=result.get('disposition')=='acknowledge'
+            reply=result.get('reply')
+        except Exception:
+            update(job,'next_at=?,updated=?',(now+5,now))
+            return [{"agent":job['recipient'],"error":"service endpoint unavailable; retry scheduled"}]
+        if acknowledged:
+            if not update(job,"state='acknowledged',updated=?",(now,)): observation(job,"callback_after_quiesce",result)
             return errors
-        finally: db.close()
+        if not update(job,"operation='poll',reply=?,next_at=?,updated=?",(reply,now+5,now)):
+            observation(job,"callback_after_quiesce",result)
+            return errors
+        job['reply']=reply
+    if job['reply'] is not None:
+        # Quiesce can be published at any time. Recheck under the lock immediately
+        # before beginning another remote effect.
+        if locked_journal(load) is None: return errors
+        try:
+            args={"sender":job['recipient'],"id":json.loads(job['envelope'])['reply_to'],
+                  "message":job['reply'],"request_id":"service:"+hashlib.sha256((job['hub']+'|'+job['id']).encode()).hexdigest()}
+            if job['recipient_epoch'] is not None: args['expected_sender_epoch']=job['recipient_epoch']
+            receipt=broker_request(connection,'reply',**args)
+            if not update(job,"state='sent',receipt=?,updated=?",(_canonical(receipt),now)):
+                observation(job,"broker_reply_after_quiesce",receipt)
+        except Exception as exc:
+            state='expired' if getattr(exc,'code',None) in {'not_found','forbidden','unauthorized'} else 'pending'
+            update(job,'state=?,next_at=?,updated=?',(state,now+5,now))
+            errors.append({"agent":job['recipient'],"error":"service reply unavailable; "+state})
+    return errors
 
 
-def advance(root, registrations, connections, broker_request, *, call_bridge=bridge, now=None):
-    """Bounded drain; actor lock spans callbacks/replies, never a SQLite transaction."""
-    now=time.time() if now is None else now
+def advance(root, registrations, connections, broker_request, *, call_bridge=bridge, now=None, limit=8, budget_s=None):
+    """Bounded drain of up to `limit` ready jobs, eight at a time, starting no round after `budget_s`.
+
+    The actor lock spans callbacks/replies, never a SQLite transaction. Without a
+    fixed `now` each job is timed when it runs, so its retry is scheduled from then.
+    """
+    started=time.monotonic()
+    selected_at=time.time() if now is None else now
     db=journal(root)
     try:
         with db:
-            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='pending' AND expires<=?",(now,now))
+            db.execute("UPDATE jobs SET state='expired',updated=? WHERE state='pending' AND expires<=?",(selected_at,selected_at))
             # Retirement evidence is append-only, including the preserved job row.
-            db.execute("DELETE FROM jobs WHERE state NOT IN ('pending','abandoned_retired') AND retirement_barrier IS NULL AND updated<?",(now-172800,))
+            db.execute("DELETE FROM jobs WHERE state NOT IN ('pending','abandoned_retired') AND retirement_barrier IS NULL AND updated<?",(selected_at-172800,))
         records={(r['url'],r['id']):r for r in registrations.values() if r.get('kind')=='service'}
-        jobs=db.execute("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY next_at,updated LIMIT 128",(now,)).fetchall()
+        jobs=db.execute("SELECT * FROM jobs WHERE state='pending' AND next_at<=? ORDER BY next_at,updated LIMIT ?",
+                        (selected_at,max(limit,128))).fetchall()
         available=[]
         for job in jobs:
             record=records.get((job['hub'],job['recipient']))
             if (record and record['service_id']==job['service_id'] and job['hub'] in connections
-                    and (record.get('buses') or record.get('reply_until',0)>now) and _allowed(db,record,job)):
+                    and (record.get('buses') or record.get('reply_until',0)>selected_at) and _allowed(db,record,job)):
                 available.append((dict(job),dict(record)))
-        available=available[:8]
+        available=available[:limit]
     finally: db.close()
     errors=[]
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures=[pool.submit(_advance_job,root,record,job,connections[job['hub']],broker_request,call_bridge,now)
-                 for job,record in available]
-        for future in concurrent.futures.as_completed(futures):
-            try: errors.extend(future.result())
-            except Exception: errors.append({"error":"service lifecycle unavailable; retained for retry"})
+        for offset in range(0,len(available),8):
+            if offset and budget_s is not None and time.monotonic()-started>=budget_s: break
+            futures=[pool.submit(_advance_job,root,record,job,connections[job['hub']],broker_request,call_bridge,now)
+                     for job,record in available[offset:offset+8]]
+            for future in concurrent.futures.as_completed(futures):
+                try: errors.extend(future.result())
+                except Exception: errors.append({"error":"service lifecycle unavailable; retained for retry"})
     return errors
