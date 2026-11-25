@@ -133,6 +133,19 @@ else bad "restart seat handover ($r2old -> $r2new)"; fi
 # cannot be made to fail a new-window on demand (it silently falls back to a
 # default cwd when the recorded one is gone).
 
+echo "== restart reaps a kept dead pane (its program exited; remain-on-exit held it)"
+"$COMM" com8 spawn dd1 -- sleep 0.3 >/dev/null 2>&1
+ddold="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["dd1"]["seat"])' "$ID")"
+sleep 1.5
+if [ "$("$COMM" com8 seat state "$ddold" 2>/dev/null)" = "dead" ] && pane_alive "$ddold"; then
+  ok "the exited program's pane is kept as a dead seat ($ddold)"
+else bad "kept dead pane before restart ($ddold)"; fi
+"$COMM" com8 restart dd1 >/dev/null 2>&1
+ddnew="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["dd1"]["seat"])' "$ID")"
+if [ -n "$ddnew" ] && [ "$ddnew" != "$ddold" ] && ! pane_alive "$ddold" && pane_alive "$ddnew"; then
+  ok "restart reaped the dead pane and bound a new seat ($ddold -> $ddnew)"
+else bad "restart reaping ($ddold -> $ddnew; old alive: $(pane_alive "$ddold" && echo yes || echo no))"; fi
+
 echo "== a successful restart refreshes spawned_at"
 "$COMM" com8 spawn r1 -- bash --norc --noprofile >/dev/null 2>&1
 t0="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["r1"]["supervision"]["spawned_at"])' "$ID")"
