@@ -892,7 +892,7 @@ def worker_main():
 
 
 def worker():
-    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 
     root = state_dir()
     with locked("worker", blocking=False) as acquired:
@@ -945,63 +945,79 @@ def worker():
                 request(conn, "heartbeat", agents=entries[offset:offset + 128])
             return sent
 
+        def start_call(conn, records, accepted):
+            # Each call has a thread of its own, so no number of hubs that do
+            # not answer can hold up another hub. A hub has at most one call.
+            call = Future()
+
+            def run():
+                try:
+                    call.set_result(heartbeat_hub(conn, records, accepted))
+                except BaseException as exc:
+                    call.set_exception(exc)
+
+            threading.Thread(target=run, name="bus-heartbeat-call", daemon=True).start()
+            return call
+
         def heartbeat_loop():
             # A delivery may wait on an agent for twenty seconds, and a hub may
             # take longer than one request's timeout to answer. So liveness has
             # its own ticker, and each hub its own call: a hub that does not
-            # answer holds up neither the ticker nor any other hub. Each tick
-            # records heartbeat_at and starts a call for every hub that has
-            # none in flight. A hub whose call failed, or began before the
+            # answer holds up neither the ticker nor any other hub, and the
+            # worker stops without waiting for it. Each tick records
+            # heartbeat_at and starts a call for every hub that has none in
+            # flight. A hub whose call failed, or began before the
             # registrations file last changed, is sent its statuses at its next
             # call even if they look unchanged: it may hold what a partial
             # heartbeat or another command told it.
             calls, accepted, errors = {}, {}, {}
             stamp, success_at = registrations_stamp(), None
-            with ThreadPoolExecutor(max_workers=8, thread_name_prefix="bus-heartbeat") as pool:
-                while not stopping():
-                    try:
-                        for url, (call, began) in list(calls.items()):
-                            if not call.done():
-                                continue
-                            del calls[url]
-                            try:
-                                sent = call.result()
-                            except (BusError, OSError, ValueError, KeyError) as exc:
-                                accepted.pop(url, None)
-                                errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
-                                continue
-                            errors.pop(url, None)
-                            if sent is not None:
-                                success_at = time.time()
-                                if began == stamp:
-                                    accepted[url] = sent
-                                else:
-                                    accepted.pop(url, None)
-                        current = registrations_stamp()
-                        if current != stamp:
-                            stamp = current
-                            accepted.clear()
-                        cfg = config()
-                        groups = {}
-                        for record in registrations().values():
-                            if active_adapter(record) and record["url"] in cfg["connections"]:
-                                groups.setdefault(record["url"], []).append(record)
-                        for url in (set(accepted) | set(errors)) - set(groups):
+            while not stopping():
+                try:
+                    for url, (call, began) in list(calls.items()):
+                        if not call.done():
+                            continue
+                        del calls[url]
+                        try:
+                            sent = call.result()
+                        except Exception as exc:
+                            # Whatever one hub's call raised is that hub's
+                            # failure; the ticker goes on.
                             accepted.pop(url, None)
-                            errors.pop(url, None)
-                        for url, rows in groups.items():
-                            if url not in calls:
-                                calls[url] = (pool.submit(heartbeat_hub, cfg["connections"][url], rows,
-                                                          accepted.get(url)), stamp)
-                        updates = {"state": "running", "heartbeat_at": time.time(),
-                                   "adapters": sum(len(rows) for url, rows in groups.items() if url not in errors),
-                                   "heartbeat_errors": list(errors.values())}
-                        if success_at is not None:
-                            updates["heartbeat_success_at"] = success_at
-                        publish(**updates)
-                    except (BusError, OSError, ValueError, KeyError) as exc:
-                        publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
-                    stop.wait(HEARTBEAT_TICK)
+                            text = str(exc) or type(exc).__name__
+                            errors[url] = {"hub": url, "error": " ".join(text.split())[:200]}
+                            continue
+                        errors.pop(url, None)
+                        if sent is not None:
+                            success_at = time.time()
+                            if began == stamp:
+                                accepted[url] = sent
+                            else:
+                                accepted.pop(url, None)
+                    current = registrations_stamp()
+                    if current != stamp:
+                        stamp = current
+                        accepted.clear()
+                    cfg = config()
+                    groups = {}
+                    for record in registrations().values():
+                        if active_adapter(record) and record["url"] in cfg["connections"]:
+                            groups.setdefault(record["url"], []).append(record)
+                    for url in (set(accepted) | set(errors)) - set(groups):
+                        accepted.pop(url, None)
+                        errors.pop(url, None)
+                    for url, rows in groups.items():
+                        if url not in calls:
+                            calls[url] = (start_call(cfg["connections"][url], rows, accepted.get(url)), stamp)
+                    updates = {"state": "running", "heartbeat_at": time.time(),
+                               "adapters": sum(len(rows) for url, rows in groups.items() if url not in errors),
+                               "heartbeat_errors": list(errors.values())}
+                    if success_at is not None:
+                        updates["heartbeat_success_at"] = success_at
+                    publish(**updates)
+                except (BusError, OSError, ValueError, KeyError) as exc:
+                    publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
+                stop.wait(HEARTBEAT_TICK)
 
         # Startup readiness means the process owns its lock and initialized its
         # storage, not that every remote hub finished its first network request.
