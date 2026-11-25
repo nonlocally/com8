@@ -87,14 +87,17 @@ class Retirement(unittest.TestCase):
         with self.assertRaises(service.ServiceError):service.retirement_evidence(self.root,self.record,evidence['barrier_id'])
 
     def test_callback_race_blocks_reply_and_records_late_observation(self):
+        # The endpoint call runs outside the actor lock, so a barrier can complete while it is in flight;
+        # the late answer is then an observation, never a reply or a resurrected job.
         service.enqueue(self.root,self.record,self.message());entered=threading.Event();release=threading.Event();completed=threading.Event();posts=[]
         def callback(*a):entered.set();self.assertTrue(release.wait(3));return {'pending':False,'reply':'late actual answer'}
         work=threading.Thread(target=lambda:service.advance(self.root,{'r':self.record},{self.record['url']:{}},lambda *a,**k:posts.append(k),call_bridge=callback));work.start()
         self.assertTrue(entered.wait(3));service.quiesce(self.root,self.record,expected_epoch=0,request_id='retire-1')
         result=[]
         def retiring():result.append(service.complete_retirement(self.root,self.record,self.receipt(),expected_epoch=0,request_id='retire-1'));completed.set()
-        retire=threading.Thread(target=retiring);retire.start();self.assertFalse(completed.wait(.05))
-        release.set();work.join(3);retire.join(3);self.assertTrue(completed.is_set());self.assertEqual(posts,[])
+        retire=threading.Thread(target=retiring);retire.start();self.assertTrue(completed.wait(3))
+        self.assertEqual(self.row()['state'],'abandoned_retired')
+        release.set();work.join(3);retire.join(3);self.assertEqual(posts,[])
         self.assertEqual(self.row()['state'],'abandoned_retired');self.assertIsNone(self.row()['reply'])
         db=service.journal(self.root)
         try:self.assertEqual(db.execute('SELECT kind FROM service_job_observations').fetchone()[0],'callback_after_quiesce')
