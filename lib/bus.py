@@ -965,7 +965,7 @@ def worker():
             # does not answer holds up neither the ticker nor any other hub's
             # heartbeats, and the worker stops without waiting for its call.
             # Each tick records heartbeat_at and starts a call for every hub
-            # that has none in flight; a call left unanswered for an interval
+            # that has none in flight; a call still running after an interval
             # is reported. A hub whose call failed, or began before the
             # registrations file last changed, is sent its statuses at its next
             # call even if they look unchanged: it may hold what a partial
@@ -1018,7 +1018,7 @@ def worker():
                             except Exception as exc:
                                 # A call that cannot start, as at a thread limit, is that hub's failure too.
                                 failed(url, exc)
-                    unanswered = {url: {"hub": url, "error": "no answer for %d s" % (now - started)}
+                    unanswered = {url: {"hub": url, "error": "heartbeat call running for %d s" % (now - started)}
                                   for url, (call, _, started) in calls.items()
                                   if url in groups and not call.done()
                                   and now - started >= max(HEARTBEAT_INTERVAL, HEARTBEAT_TICK)}

@@ -10,6 +10,7 @@ from pathlib import Path
 import socket
 import sys
 import sqlite3
+import subprocess
 import tempfile
 import threading
 import time
@@ -94,6 +95,37 @@ class EnrollmentInputTests(unittest.TestCase):
             with self.assertRaisesRegex(bus.BusError, "only.*local"):
                 bus.run(bus.parser().parse_args(["use", "https://not-enrolled.example", "--no-start"]))
         config.assert_not_called()
+
+
+# The worker as its own process, with one hub whose heartbeat never answers.
+# argv: the lib folder, the state folder, and a file to create once the call has begun.
+STALLED_WORKER = """
+import sys, time
+from pathlib import Path
+from unittest import mock
+sys.path.insert(0, sys.argv[1])
+import bus
+state, entered = Path(sys.argv[2]), Path(sys.argv[3])
+url = "https://stall.invalid"
+record = {"id": "agent-a", "kind": "codex", "binary": sys.executable, "url": url, "buses": ["general"]}
+
+def request(connection, operation, **payload):
+    if operation == "heartbeat":
+        entered.touch()
+        time.sleep(120)
+        return {"ok": True}
+    if operation == "poll_device":
+        return {"messages": []}
+    raise AssertionError(operation)
+
+with mock.patch.object(bus, "state_dir", return_value=state), \\
+        mock.patch.object(bus, "config", return_value={"connections": {url: {"url": url}}}), \\
+        mock.patch.object(bus, "registrations", return_value={"a": record}), \\
+        mock.patch.object(bus, "current_status", return_value="queueable"), \\
+        mock.patch.object(bus, "request", side_effect=request), \\
+        mock.patch.object(bus, "HEARTBEAT_TICK", 0.05):
+    bus.worker()
+"""
 
 
 class LifecycleTests(unittest.TestCase):
@@ -582,19 +614,53 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(fixture["beats"][2][2], [("agent-a", "live", None)])
 
     def test_a_heartbeat_call_that_cannot_start_is_that_hubs_failure(self):
-        real_thread, refused = threading.Thread, []
+        real_thread, refusing, refused = threading.Thread, threading.Event(), []
+        refusing.set()
 
         class FlakyThread(real_thread):
             def start(self):
-                if self.name == "bus-heartbeat-call" and not refused:
+                if self.name == "bus-heartbeat-call" and refusing.is_set():
                     refused.append(time.monotonic())
                     raise RuntimeError("can't start new thread")
                 return super().start()
 
         with mock.patch.object(bus.threading, "Thread", FlakyThread), \
                 self.beating_worker("beat-nothread", tick=0.05, interval=30) as fixture:
+            self.assertTrue(fixture["until"](lambda info: "can't start new thread" in json.dumps(info.get("heartbeat_errors")), 3),
+                            "a call that could not start was not reported as that hub's failure")
+            failing = fixture["worker"]()
+            self.assertEqual(failing["heartbeat_errors"][0]["hub"], "https://beat.invalid")
+            self.assertEqual(failing["adapters"], 0)
+            refusing.clear()
             self.assertTrue(fixture["wait_for"](lambda beats: len(beats) >= 1, 3), "a call that could not start ended the ticker")
-            self.assertEqual(len(refused), 1)
+            self.assertTrue(refused)
+
+    def test_a_heartbeat_call_is_reported_only_once_it_has_run_for_an_interval(self):
+        release, entered = threading.Event(), []
+
+        def stall(fixture, url, agents):
+            entered.append(time.monotonic())
+            release.wait(6)
+
+        with self.beating_worker("beat-threshold", tick=0.02, interval=1.0, hook=stall) as fixture:
+            try:
+                self.assertTrue(fixture["until"](lambda info: entered and info.get("adapters") == 1, 3), "no heartbeat call began")
+                # Younger than an interval: not reported, and its hub still counted.
+                while time.monotonic() < entered[0] + 0.6:
+                    info = fixture["worker"]()
+                    self.assertEqual(info["heartbeat_errors"], [], "a call was reported before it had run for an interval")
+                    self.assertEqual(info["adapters"], 1)
+                    time.sleep(0.02)
+                # Past the interval: reported under its hub's name, and its hub no longer counted.
+                self.assertTrue(fixture["until"](lambda info: info.get("heartbeat_errors"), 2),
+                                "a call still running past the interval was not reported")
+                info = fixture["worker"]()
+                self.assertEqual(info["heartbeat_errors"][0]["hub"], "https://beat.invalid")
+                self.assertTrue(info["heartbeat_errors"][0]["error"].startswith("heartbeat call running for "))
+                self.assertEqual(info["adapters"], 0)
+                self.assertGreaterEqual(time.monotonic() - entered[0], 0.95)
+            finally:
+                release.set()
 
     def test_a_failed_heartbeat_is_sent_again_even_when_the_statuses_went_back(self):
         # The hub may have applied the refused request (its answer was lost), so
@@ -675,7 +741,7 @@ class LifecycleTests(unittest.TestCase):
                 self.assertTrue(fixture["until"](lambda info: len(info.get("heartbeat_errors", [])) == 20, 3),
                                 "hubs whose calls went unanswered were not reported")
                 info = fixture["worker"]()
-                self.assertTrue(all(error["error"].startswith("no answer for ") for error in info["heartbeat_errors"]))
+                self.assertTrue(all(error["error"].startswith("heartbeat call running for ") for error in info["heartbeat_errors"]))
                 self.assertEqual(sorted(error["hub"] for error in info["heartbeat_errors"]), sorted(slow))
                 self.assertEqual(info["adapters"], 1)
                 self.assertEqual(sorted(entered), sorted(slow))
@@ -697,6 +763,33 @@ class LifecycleTests(unittest.TestCase):
                                 "the worker waited for a heartbeat call that had not answered")
             finally:
                 release.set()
+
+    def test_a_worker_process_exits_after_a_stop_without_waiting_for_a_stalled_heartbeat(self):
+        # Only a process of its own shows whether a call thread that has not
+        # answered keeps the interpreter from exiting.
+        state, entered = self.root / "beat-process", self.root / "beat-process-entered"
+        state.mkdir()
+        lib = str(Path(__file__).resolve().parents[1] / "lib")
+        child = subprocess.Popen([sys.executable, "-I", "-B", "-c", STALLED_WORKER, lib, str(state), str(entered)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 15
+            while not entered.exists() and child.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertTrue(entered.exists(), "the worker process began no heartbeat call")
+            (state / "worker.stop").touch()
+            # A stalled request ends within its 12-second timeout, so a stop may
+            # take that and a margin; this call would take two minutes.
+            try:
+                child.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                self.fail("the worker process was still running 15 s after the stop")
+            self.assertEqual(child.returncode, 0, child.stderr.read())
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+            child.stderr.close()
 
     def test_a_heartbeat_is_due_at_the_last_tick_before_the_interval_after_sleep_or_a_clock_set_back(self):
         with mock.patch.object(bus, "HEARTBEAT_TICK", 2), mock.patch.object(bus, "HEARTBEAT_INTERVAL", 15):
