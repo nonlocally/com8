@@ -908,17 +908,25 @@ class Broker:
         return moved, cancelled
 
     def _mailbox_drain_agents(self, db, agents, now):
-        """Drain held mail for the current names of these exact registrations and their owners."""
+        """Drain held mail for the current names of these exact registrations and their owners.
+
+        Returns how many of their held messages did not fit and are still held.
+        """
         if not agents or not db.execute("SELECT 1 FROM held_messages WHERE status='held' LIMIT 1").fetchone():
-            return
+            return 0
         rows = db.execute("""SELECT DISTINCT h.bus,h.name,h.owner,a.id AS agent FROM agents a
                              JOIN memberships m ON m.agent=a.id
                              JOIN held_messages h ON h.bus=m.bus AND h.name=a.name AND h.status='held'
                              WHERE a.id IN (%s) ORDER BY a.id,h.bus""" % ",".join("?" for _ in agents), tuple(agents)).fetchall()
+        left = 0
         for row in rows:
             agent = db.execute("SELECT * FROM agents WHERE id=?", (row["agent"],)).fetchone()
             if self._mailbox_eligible(db, agent) and self._agent_mailbox_owner(db, agent) == row["owner"]:
-                self._mailbox_drain(db, row["bus"], row["name"], row["owner"], agent, now)
+                key = (row["bus"], row["name"], row["owner"])
+                self._mailbox_drain(db, *key, agent, now)
+                left += db.execute("SELECT COUNT(*) FROM held_messages WHERE bus=? AND name=? AND owner=? AND status='held'",
+                                   key).fetchone()[0]
+        return left
 
     def _mailbox_arrival(self, db, p, result, now):
         """A registration keeps a mailbox for its name on each bus and receives what it holds."""
@@ -1875,7 +1883,8 @@ class Broker:
             self._chat_mark_seen(db, chat, p["browser_reader"], [old["seq"]])
             return {"chat": chat["id"], "message": self._chat_message(old), "deduplicated": True}
         self._chat_capacity(db, chat["id"])
-        if self._pending_count(db, chat["agent"]) >= MAX_PENDING:
+        # Mail held for this registration goes first, as in _enqueue.
+        if self._mailbox_drain_agents(db, [chat["agent"]], now) or self._pending_count(db, chat["agent"]) >= MAX_PENDING:
             raise BusError("recipient queue is full", "limit")
         mid = "hm_" + uuid.uuid4().hex
         db.execute("""INSERT INTO human_chat_messages(id,chat,identity,seq,role,content,created_at,updated_at,status,
@@ -1964,8 +1973,6 @@ class Broker:
             cached, context = self._service_request(db, p, r, sender["id"], guards, now)
             if cached is not None:
                 return cached
-        # Mail held for this name and owner goes first; live mail never overtakes it.
-        self._mailbox_drain_agents(db, [target], now)
         if db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0] >= MAX_RECORDS:
             raise BusError("conversation limit reached", "limit")
         conversation = "c_" + uuid.uuid4().hex
@@ -2039,6 +2046,10 @@ class Broker:
 
     def _enqueue(self, db, sender, target, bus, message, conversation, expires_at, now, *, in_reply_to=None):
         self._message_content(message)
+        # Mail held for this registration goes first, for sends and replies alike.
+        # While some of it does not fit, nothing later is queued ahead of it.
+        if self._mailbox_drain_agents(db, [target], now):
+            raise BusError("recipient queue is full", "limit")
         pending = self._pending_count(db, target)
         if pending >= MAX_PENDING or db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= MAX_RECORDS:
             raise BusError("recipient queue is full", "limit")
@@ -2206,7 +2217,8 @@ class Broker:
         db.execute("UPDATE conversations SET closed=1 WHERE bus=? AND (initiator=? OR published=?)",
                    (bus, agent["id"], agent["id"]))
         self._cancel_invalid(db, now)
-        self._mailbox_revalidate(db, now, bus=bus, agents=[agent["id"]])
+        # As its conversations on this bus close, so does the mail it holds there, general included.
+        self._held_close(db, "sender=? AND bus=?", (agent["id"], bus), "cancelled", "sender left the bus", now)
         return {"agent": agent["id"], "bus": bus, "left": True}
 
     def _op_retire(self, db, p, r, now):

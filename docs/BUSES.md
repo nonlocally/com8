@@ -651,8 +651,9 @@ communicate bus send router --hold-for principal:p_0123... -- MESSAGE
 
 Otherwise a send to another owner's absent name fails as before.
 `--no-hold` keeps the old behaviour. Sends to an exact `a_...` registration ID
-and sends from fenced services never hold. A held receipt names the mailbox and
-its owner, `expires_at` and `reply_until`. Do not resend it; check
+and sends from fenced services never hold. The `held` send result names the
+mailbox and its owner, `expires_at` and `reply_until`; `bus receipt ID` shows
+the mailbox, owner and `expires_at`. Do not resend it; check
 `bus receipt ID`. `bus mailbox cancel ID` withdraws your message while it is
 still held.
 
@@ -660,18 +661,22 @@ still held.
 
 Held mail is delivered when its name and owner are present again: at
 registration, when an existing registration is renamed to that name, at that
-registration's next poll, or before a live send to it. The messages move in
-order into the ordinary queue, ahead of live mail for that registration. They
-keep their ID, sender and creation time. Each one starts its conversation at
-that moment, so the 24-hour reply window starts at delivery, not at the send.
-A delivered message says since when it was held; older workers do not show this
-line. The receipt then shows the ordinary states.
+registration's next poll, or before a send, reply or human chat message to it.
+The messages move in order into the ordinary queue, ahead of anything queued
+for that registration later. While some of them do not fit yet, a send, reply
+or chat message to that registration is refused with `limit`, as for a full
+queue, so nothing overtakes them. They keep their ID, sender and creation time.
+Each one starts its conversation at that moment, so the 24-hour reply window
+starts at delivery, not at the send. A message that was held for more than a
+minute says, when delivered, since when it was held; older workers do not show
+this line. The receipt then shows the ordinary states.
 
 At delivery, the hub checks again that the sender still has the access a live
 send needs, for the same registration generation. Held mail is cancelled when
-its sender leaves a private bus, retires, is revoked or loses access, and
-rejoining does not revive it. Mail held for an owner that loses access to the
-bus is cancelled, and that mailbox is removed.
+its sender leaves that bus (general included, as for its live conversations
+there), retires, is revoked or loses access, and rejoining does not revive it.
+Mail held for an owner that loses access to the bus is cancelled, and that
+mailbox is removed.
 
 ### Limits and retention
 
@@ -722,7 +727,8 @@ registered drains at its first poll after the upgrade; live mail sent to it
 while the old broker ran is delivered first. Delivery after a rollback still
 checks the sender's registration generation and grants, and the owner's access
 when mail is held. Leaving and rejoining a private bus entirely while an older
-broker runs is not detected, and such held mail is delivered.
+broker runs is not detected, nor is a sender leaving general then, and such
+held mail is delivered.
 
 ### Not covered
 

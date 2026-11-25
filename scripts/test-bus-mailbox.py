@@ -346,6 +346,27 @@ class LocalHubTests(Base):
         self.assertEqual(self.rows("SELECT * FROM mailboxes WHERE owner=?", key), [])
         self.assertTrue(all(row["message"] == "" for row in self.rows("SELECT message FROM held_messages")))
 
+    def test_leaving_general_cancels_held_mail_as_it_cancels_live_mail(self):
+        # Base closes the leaving agent's conversations on that bus, so its live
+        # mail is cancelled. Mail it has held on that bus follows the same rule.
+        peer = self.device(label="peer")
+        listener = self.register(peer["token"], "listener")["id"]
+        self.absent_box(self.b.admin_token, "router")
+        unpublished = self.identify(self.b.admin_token, "coord")["id"]
+        published = self.register(self.b.admin_token, "desk")["id"]
+        for sender in (unpublished, published):
+            with self.subTest(sender="published" if sender == published else "unpublished"):
+                live = self.send(None, sender, "listener", "live")
+                held = self.hold(None, sender, "router", "held")
+                self.call("leave", agent=sender, bus="general")
+                self.assertEqual(self.receipt(None, live["id"])["status"], "cancelled")
+                self.assertEqual(self.receipt(None, held["id"])["status"], "cancelled")
+                self.assertEqual(self.rows("SELECT message FROM held_messages WHERE id=?", held["id"]), [{"message": ""}])
+        router = self.register(self.b.admin_token, "router", session="codex:router-2")
+        self.assertEqual(self.box(router)["drained"], 0)
+        self.assertEqual(self.inbox(self.b.admin_token, router["id"]), [])
+        self.assertEqual(self.inbox(peer["token"], listener), [])
+
     def test_listing_shows_held_counts_only_on_visible_buses(self):
         self.call("create", bus="photonics")
         member = self.device(bus="photonics", label="member")
@@ -452,6 +473,22 @@ class LimitTests(Base):
         got = self.inbox(self.b.admin_token, router["id"])
         self.assertEqual([m["id"] for m in got], held)
 
+    def test_held_mail_kept_back_by_the_conversation_limit_still_goes_first(self):
+        self.absent_box(self.b.admin_token, "router")
+        coord = self.identify(self.b.admin_token, "coord")["id"]
+        held = [self.hold(None, coord, "router", "part %d" % index)["id"] for index in range(2)]
+        used = self.rows("SELECT COUNT(*) AS n FROM conversations")[0]["n"]
+        with mock.patch.object(module, "MAX_RECORDS", used):
+            router = self.register(self.b.admin_token, "router", session="codex:router-2")
+            self.assertEqual(self.box(router)["drained"], 0)
+        # One conversation is left. The live send would take it, so held mail could not
+        # move and the live message would be first: it is refused instead.
+        with mock.patch.object(module, "MAX_RECORDS", used + 1):
+            self.refused("send", None, "limit", sender=coord, target="router", message="live")
+        self.assertEqual([self.receipt(None, mid)["status"] for mid in held], ["held"] * 2)
+        live = self.send(None, coord, "router", "live")
+        self.assertEqual([m["id"] for m in self.inbox(self.b.admin_token, router["id"])], held + [live["id"]])
+
     def test_mailbox_caps_evict_only_your_own_empty_registered_mailboxes(self):
         device = self.device(label="renamer")
         coord = self.identify(device["token"], "coord")["id"]
@@ -489,6 +526,71 @@ class LimitTests(Base):
         self.hold(None, coord, "router")
         self.assertEqual(self.send(None, coord, "ghost", hold=True), NOT_FOUND)
         self.assertEqual([row["name"] for row in self.rows("SELECT name FROM mailboxes")], ["router"])
+
+
+class HeldOrderingTests(Base):
+    """Nothing queued for a registration overtakes mail held for it, even when a full queue kept that mail back."""
+
+    env = {"BUS_GATEWAY_SHARED_SECRET": "fixture-" + "s" * 40,
+           "BUS_READER_USERS": json.dumps({"alice-reader": "alice"}),
+           "BUS_CHAT_READERS": json.dumps({"alice-reader": {"identity": "alice", "buses": ["general"]}})}
+    QUEUE = 4
+
+    def setUp(self):
+        super().setUp()
+        digest = hashlib.sha256(b"alice-reader").hexdigest()
+        self.sessions["alice-reader"] = (self.b.browser_session("alice-reader", digest)["token"], digest)
+        patch = mock.patch.object(module, "MAX_PENDING", self.QUEUE)
+        patch.start()
+        self.addCleanup(patch.stop)
+        # router is on general and photonics. Mail is held for it on photonics,
+        # and its queue fills with live general mail before it returns there.
+        self.call("create", bus="photonics")
+        self.peer = self.device(user="alice", label="peer")
+        self.helper = self.register(self.peer["token"], "helper")["id"]
+        self.router = self.register(self.b.admin_token, "router", bus="photonics")["id"]
+        self.register(self.b.admin_token, "router")  # the same session also joins general
+        self.call("send", sender=self.router, target="helper", message="question", bus="general")
+        self.question = self.inbox(self.peer["token"], self.helper)[0]
+        self.call("leave", agent=self.router, bus="photonics")
+        self.coord = self.register(self.b.admin_token, "coord", bus="photonics")["id"]
+        self.held = [self.hold(None, self.coord, "router", "held %d" % i, bus="photonics")["id"] for i in range(3)]
+        self.filler = [self.call("send", sender=self.coord, target="router", message="filler %d" % i)["id"]
+                       for i in range(self.QUEUE)]
+        back = self.register(self.b.admin_token, "router", bus="photonics")
+        self.assertEqual(self.box(back, "photonics")["drained"], 0)
+        first = self.call("poll", agent=self.router)["messages"][0]
+        self.assertEqual(first["id"], self.filler[0])
+        self.call("ack", agent=self.router, id=first["id"], lease=first["lease"], status="delivered")
+
+    def then_held_mail_arrives_first(self, late):
+        """Held mail is still held; once the queue drains, it arrives before the late message."""
+        self.assertEqual([self.receipt(None, mid)["status"] for mid in self.held], ["held"] * 3)
+        got = self.inbox(self.b.admin_token, self.router)
+        self.assertEqual([m["id"] for m in got], self.filler[1:] + self.held)
+        mid = late()
+        self.assertEqual([m["id"] for m in self.inbox(self.b.admin_token, self.router)], [mid])
+
+    def test_a_live_send_waits_behind_held_mail(self):
+        self.refused("send", None, "limit", sender=self.coord, target="router", message="live")
+        self.then_held_mail_arrives_first(lambda: self.call("send", sender=self.coord, target="router",
+                                                            message="live")["id"])
+
+    def test_a_reply_waits_behind_held_mail(self):
+        self.refused("reply", self.peer["token"], "limit", sender=self.helper, id=self.question["id"], message="answer")
+        self.then_held_mail_arrives_first(lambda: self.call("reply", self.peer["token"], sender=self.helper,
+                                                            id=self.question["id"], message="answer")["id"])
+
+    def test_a_human_chat_message_waits_behind_held_mail(self):
+        chat = self.call("chat_open", "alice-reader", bus="general", agent=self.router)["chat"]["id"]
+        # A chat message is not a bus message record, so the record limit can keep
+        # held mail back while a queue slot is still free.
+        used = self.rows("SELECT COUNT(*) AS n FROM messages")[0]["n"]
+        with mock.patch.object(module, "MAX_RECORDS", used):
+            self.refused("chat_send", "alice-reader", "limit", chat=chat, request_id=str(uuid.uuid4()), message="hello")
+        self.refused("chat_send", "alice-reader", "limit", chat=chat, request_id=str(uuid.uuid4()), message="hello")
+        self.then_held_mail_arrives_first(lambda: self.call("chat_send", "alice-reader", chat=chat,
+                                                            request_id=str(uuid.uuid4()), message="hello")["message"]["id"])
 
 
 class RetentionTests(Base):
