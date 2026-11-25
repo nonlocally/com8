@@ -440,9 +440,23 @@ class LimitTests(Base):
             self.refused("send", peer["token"], "limit", sender=pcoord, target="pbox", message="x",
                          bus="photonics", hold=True)
 
+    def test_a_drain_moves_only_what_fits_and_keeps_the_rest_in_order(self):
+        self.absent_box(self.b.admin_token, "router")
+        coord = self.identify(self.b.admin_token, "coord")["id"]
+        held = [self.hold(None, coord, "router", "part %d" % index)["id"] for index in range(3)]
+        used = self.rows("SELECT COUNT(*) AS n FROM messages")[0]["n"]
+        with mock.patch.object(module, "MAX_RECORDS", used + 1):
+            router = self.register(self.b.admin_token, "router", session="codex:router-2")
+            self.assertEqual(self.box(router)["drained"], 1)
+            self.assertEqual([self.receipt(None, mid)["status"] for mid in held], ["accepted", "held", "held"])
+        got = self.inbox(self.b.admin_token, router["id"])
+        self.assertEqual([m["id"] for m in got], held)
+
     def test_mailbox_caps_evict_only_your_own_empty_registered_mailboxes(self):
         device = self.device(label="renamer")
         coord = self.identify(device["token"], "coord")["id"]
+        self.absent_box(self.b.admin_token, "m0")  # another owner's oldest empty mailbox
+        self.now[0] += 1
         with mock.patch.object(module, "MAX_MAILBOXES_PER_PRINCIPAL", 2):
             self.absent_box(device["token"], "n1")
             self.now[0] += 1
@@ -450,7 +464,7 @@ class LimitTests(Base):
             self.now[0] += 1
             third = self.register(device["token"], "n3")
             self.assertTrue(self.box(third)["recorded"])
-            self.assertEqual(sorted(row["name"] for row in self.rows("SELECT name FROM mailboxes")), ["n2", "n3"])
+            self.assertEqual(sorted(row["name"] for row in self.rows("SELECT name FROM mailboxes")), ["m0", "n2", "n3"])
             self.call("leave", device["token"], agent=third["id"], bus="general")
             self.hold(device["token"], coord, "n2")
             self.hold(device["token"], coord, "n3")
@@ -467,11 +481,10 @@ class LimitTests(Base):
     def test_idle_mailboxes_are_pruned_but_long_lived_registrations_keep_theirs(self):
         router = self.register(self.b.admin_token, "router")
         self.call("mailbox_reserve", name="ghost")
-        coord = self.identify(self.b.admin_token, "coord")["id"]
         for days in (10, 20, 30, 40):
             self.now[0] = T0 + days * DAY
-            self.call("heartbeat", agents=[{"id": router["id"], "status": "queueable"},
-                                           {"id": coord, "status": "queueable"}])
+            self.call("heartbeat", agents=[{"id": router["id"], "status": "queueable"}])
+        coord = self.identify(self.b.admin_token, "coord")["id"]
         self.call("leave", agent=router["id"], bus="general")
         self.hold(None, coord, "router")
         self.assertEqual(self.send(None, coord, "ghost", hold=True), NOT_FOUND)
@@ -607,6 +620,33 @@ class HostedAccountTests(Base):
 class ReleasedBrokerTests(Base):
     env = {"BUS_MAILBOX_RETENTION": json.dumps({"default": 10 * DAY})}
 
+    def test_an_unpublished_sender_is_kept_while_its_mail_is_held(self):
+        self.absent_box(self.b.admin_token, "router")
+        coord = self.identify(self.b.admin_token, "coord")["id"]
+        held = self.hold(None, coord, "router")
+        self.now[0] += 8 * DAY
+        self.call("snapshot")
+        router = self.register(self.b.admin_token, "router", session="codex:router-2")
+        self.assertEqual(self.box(router)["drained"], 1)
+        self.assertEqual([m["id"] for m in self.inbox(self.b.admin_token, router["id"])], [held["id"]])
+
+    def test_a_drain_rechecks_what_an_older_broker_may_have_changed(self):
+        self.absent_box(self.b.admin_token, "router")
+        coord = self.identify(self.b.admin_token, "coord")["id"]
+        held = self.hold(None, coord, "router")
+        with sqlite3.connect(str(self.b.db_path)) as db:
+            # What a retirement and reactivation leave when no mailbox hook ran.
+            db.execute("UPDATE agents SET epoch=epoch+1 WHERE id=?", (coord,))
+        router = self.register(self.b.admin_token, "router", session="codex:router-2")
+        self.assertEqual((self.box(router)["drained"], self.box(router)["cancelled"]), (0, 1))
+        self.assertEqual(self.receipt(None, held["id"])["status"], "cancelled")
+        owner = self.device(label="owner")
+        self.absent_box(owner["token"], "desk")
+        with sqlite3.connect(str(self.b.db_path)) as db:
+            # An owner removed from the bus by a broker that kept the mailbox row.
+            db.execute("DELETE FROM grants WHERE principal=?", (owner["principal"],))
+        self.assertEqual(self.send(None, coord, "desk", hold=True, hold_for="principal:" + owner["principal"]), NOT_FOUND)
+
     def test_released_v04_runs_on_a_hub_with_held_mail_and_reupgrade_drains(self):
         released = released_v04()
         device = self.device(label="device")
@@ -628,16 +668,24 @@ class ReleasedBrokerTests(Base):
                          NOT_FOUND)
         self.assertEqual(old(rolled, token, "mailbox_ls", ok=False),
                          {"ok": False, "error": "unknown operation", "code": "invalid_request"})
-        # The same session registers its name again while the old broker runs.
+        # The same session registers its name again while the old broker runs,
+        # which neither shows nor drains held mail.
         again = old(rolled, token, "register", session_key="codex:router", name="router", kind="codex", bus="general")
-        live = old(rolled, token, "send", sender=coord, target="router", message="sent during rollback")
-        leased = old(rolled, token, "poll", agent=again["id"])["messages"][0]
-        self.assertEqual(leased["id"], live["id"])
-        old(rolled, token, "ack", agent=again["id"], id=live["id"], lease=leased["lease"], status="delivered")
+        old(rolled, token, "heartbeat", agents=[{"id": again["id"], "status": "queueable"}])
+        self.assertEqual(old(rolled, token, "poll", agent=again["id"])["messages"], [])
         self.b = self.open()
         self.assertEqual(self.receipt(token, held["id"])["status"], "held")
-        # Without registering again, the next poll drains what was held.
-        self.assertEqual([m["id"] for m in self.inbox(token, again["id"])], [held["id"]])
+        # Without registering again, held mail drains first: a live send does not overtake it.
+        live = self.send(token, coord, "router", "sent after the re-upgrade")
+        self.assertEqual(live["status"], "accepted")
+        self.assertEqual([m["id"] for m in self.inbox(token, again["id"])], [held["id"], live["id"]])
+        self.absent_box(token, "polled")
+        polled = self.hold(token, coord, "polled")
+        rolled = released.Broker(self.state, clock=lambda: self.now[0])
+        quiet = old(rolled, token, "register", session_key="codex:polled", name="polled", kind="codex", bus="general")
+        self.b = self.open()
+        # Nobody sends; the worker's next poll drains it.
+        self.assertEqual([m["id"] for m in self.inbox(token, quiet["id"])], [polled["id"]])
 
         # An old broker may delete an unpublished sender's row; the drain then cancels with a reason.
         self.absent_box(token, "later")
@@ -714,7 +762,7 @@ class MailboxCliTests(unittest.TestCase):
         receipt = json.loads(out)
         self.assertEqual(receipt["status"], "held")
         self.assertIn("not delivered", receipt["note"])
-        self.assertIn("do not resend", receipt["note"])
+        self.assertIn("do not resend", receipt["note"].lower())
         self.assertIn("held", err)
         wire = [row for row in self.calls if row["op"] == "send"][-1]
         self.assertIs(wire["hold"], True)
