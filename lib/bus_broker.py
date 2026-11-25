@@ -66,6 +66,41 @@ CHAT_RETENTION = 30 * MESSAGE_TTL
 RECEIPT_RETENTION = 7 * MESSAGE_TTL
 LIVE_TTL = 45
 LEASE_TTL = 60
+# Mailboxes hold mail for a name with no current registration on a bus. Every
+# held row, in any state, counts against these until it drains or its receipt
+# expires; terminal rows keep no body.
+MAILBOX_PROTOCOL = "bus-mailbox/v1"
+MAILBOX_RETENTION = 7 * MESSAGE_TTL
+MAILBOX_RETENTION_BOUNDS = (MESSAGE_TTL, 30 * MESSAGE_TTL)
+MAILBOX_IDLE = CHAT_RETENTION
+MAX_HELD = 4096
+MAX_HELD_PER_BUS = 1024
+MAX_HELD_PER_SENDER = 256
+MAX_HELD_PER_SENDER_BOX = 64
+MAX_MAILBOXES = 32768
+MAX_MAILBOXES_PER_BUS = 4096
+MAX_MAILBOXES_PER_PRINCIPAL = 1024
+MAX_MAILBOX_LIST = 512
+MAILBOX_SCHEMA = """
+    CREATE TABLE IF NOT EXISTS mailboxes(
+      bus TEXT NOT NULL, name TEXT NOT NULL, owner TEXT NOT NULL, created_by TEXT NOT NULL,
+      origin TEXT NOT NULL, created_at REAL NOT NULL, last_used_at REAL NOT NULL,
+      PRIMARY KEY(bus,name,owner));
+    CREATE INDEX IF NOT EXISTS mailbox_idle ON mailboxes(last_used_at);
+    CREATE INDEX IF NOT EXISTS mailbox_creator ON mailboxes(created_by);
+    CREATE TABLE IF NOT EXISTS held_messages(
+      ordering INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE,
+      bus TEXT NOT NULL, name TEXT NOT NULL, owner TEXT NOT NULL,
+      sender TEXT NOT NULL, sender_principal TEXT NOT NULL, sender_epoch INTEGER NOT NULL,
+      message TEXT NOT NULL, status TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+      created_at REAL NOT NULL, expires_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE INDEX IF NOT EXISTS held_by_box ON held_messages(bus,name,owner,status);
+    CREATE INDEX IF NOT EXISTS held_by_principal ON held_messages(sender_principal,status);
+    CREATE INDEX IF NOT EXISTS held_by_agent ON held_messages(sender,status);
+    CREATE INDEX IF NOT EXISTS held_by_status ON held_messages(status,expires_at);
+"""
+AGENT_ID_RE = re.compile(r"a_[0-9a-f]{32}\Z")
+MAILBOX_OWNER_RE = re.compile(r"(account:[a-z0-9][a-z0-9._-]{0,62}|principal:[a-z0-9_]{1,80})\Z")
 BUS_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 USER_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 DEVICE_FIELDS = {"hostname": 253, "platform": 64, "tailscale_hostname": 253, "tailscale_dns_name": 253}
@@ -155,11 +190,36 @@ def _registration_policy(raw):
     return policy
 
 
+def _mailbox_retention_policy(raw):
+    """Validate the optional owner-only held-mail retention before opening any state."""
+    if raw is None:
+        return {"default": MAILBOX_RETENTION, "buses": {}}
+
+    def seconds(value):
+        low, high = MAILBOX_RETENTION_BOUNDS
+        return type(value) is int and (value == 0 or low <= value <= high)
+
+    try:
+        if not isinstance(raw, str) or not 1 <= len(raw.encode("utf-8")) <= 4096:
+            raise ValueError()
+        policy = json.loads(raw, object_pairs_hook=_unique_object)
+        buses = policy.get("buses", {}) if isinstance(policy, dict) else None
+        if (not isinstance(policy, dict) or "default" not in policy or set(policy) - {"default", "buses"}
+                or not seconds(policy["default"]) or not isinstance(buses, dict) or len(buses) > MAX_BUSES
+                or any(not BUS_RE.fullmatch(bus) or not seconds(value) for bus, value in buses.items())):
+            raise ValueError()
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise ValueError("BUS_MAILBOX_RETENTION must be {\"default\": SECONDS, \"buses\": {BUS: SECONDS}} "
+                         "with each value 0 or 86400 to 2592000") from None
+    return {"default": policy["default"], "buses": dict(buses)}
+
+
 class Broker:
     """One durable broker; SQLite transactions serialize enrollment and leases."""
 
     def __init__(self, state_dir, clock=None):
         self.registration_limits = _registration_policy(os.environ.get("BUS_REGISTRATION_LIMITS"))
+        self.mailbox_retention = _mailbox_retention_policy(os.environ.get("BUS_MAILBOX_RETENTION"))
         self.gateway_shared_secret = os.environ.get("BUS_GATEWAY_SHARED_SECRET")
         if self.gateway_shared_secret is not None and len(self.gateway_shared_secret) < 32:
             raise ValueError("BUS_GATEWAY_SHARED_SECRET must contain at least 32 characters")
@@ -336,11 +396,16 @@ class Broker:
                   guards TEXT NOT NULL, anchor TEXT NOT NULL, epoch INTEGER NOT NULL,
                   created_at REAL NOT NULL, PRIMARY KEY(principal,actor,operation,request_id));
             """)
+            # Held mail lives beside messages, never in them. Released brokers
+            # see neither table, and no foreign key ties a held row to an agent
+            # row that an older broker's expiry may delete.
+            db.executescript(MAILBOX_SCHEMA)
             # Upgrade existing hubs without changing credentials or guessing the
             # owner of an enrolled device from its self-reported display name.
             db.execute("BEGIN IMMEDIATE")
             for table, name, declaration in (("principals", "user", "TEXT"),
                                               ("principals", "device_metadata", "TEXT NOT NULL DEFAULT '{}'"),
+                                              ("principals", "mailbox_account", "TEXT"),
                                               ("invites", "user", "TEXT"),
                                               ("invites", "issuer_user", "TEXT"),
                                               ("messages", "conversation", "TEXT REFERENCES conversations(id)"),
@@ -373,6 +438,18 @@ class Broker:
             # account ownership from names, past invitations or device labels.
             db.execute("INSERT OR IGNORE INTO buses(name,visibility) VALUES('general','open')")
             db.execute("INSERT OR IGNORE INTO tokens VALUES(?,'admin')", (_digest(self.admin_token),))
+            if not db.execute("SELECT 1 FROM meta WHERE key='mailbox_backfill_v1'").fetchone():
+                # Names registered before mailboxes existed keep one, owned by
+                # their device: no earlier enrollment recorded account evidence.
+                now = self.clock()
+                for row in db.execute("""SELECT a.*,m.bus FROM agents a JOIN memberships m ON m.agent=a.id
+                                         JOIN principals p ON p.id=a.principal WHERE p.revoked=0
+                                         ORDER BY a.last_seen DESC,a.id,m.bus""").fetchall():
+                    owner = db.execute("SELECT * FROM principals WHERE id=?", (row["principal"],)).fetchone()
+                    if self._mailbox_eligible(db, row) and self._granted(db, owner["id"], row["bus"]):
+                        self._mailbox_record(db, owner["id"], self._mailbox_owner(owner), row["bus"], row["name"],
+                                             "registered", now, evict=False)
+                db.execute("INSERT INTO meta VALUES('mailbox_backfill_v1',?)", (repr(now),))
             self.server_id = db.execute("SELECT value FROM meta WHERE key='server_id'").fetchone()[0]
         db.close()
         os.chmod(self.db_path, 0o600)
@@ -637,12 +714,16 @@ class Broker:
                    (now - RECEIPT_RETENTION,))
         db.execute("""DELETE FROM outbound_queue WHERE NOT EXISTS (SELECT 1 FROM messages WHERE id=outbound_queue.message)
                       AND NOT EXISTS (SELECT 1 FROM human_chat_messages WHERE id=outbound_queue.message)""")
+        self._held_close(db, "expires_at<=?", (now,), "expired", "held message expired", now)
+        db.execute("DELETE FROM held_messages WHERE status<>'held' AND updated_at<?", (now - RECEIPT_RETENTION,))
+        self._mailbox_prune(db, now)
         db.execute("""DELETE FROM agents WHERE last_seen<?
                       AND NOT EXISTS (SELECT 1 FROM memberships WHERE agent=agents.id)
                       AND NOT EXISTS (SELECT 1 FROM messages WHERE sender=agents.id OR target=agents.id)
                       AND NOT EXISTS (SELECT 1 FROM human_chats WHERE agent=agents.id)
                       AND NOT EXISTS (SELECT 1 FROM outbound_queue WHERE target=agents.id)
-                      AND NOT EXISTS (SELECT 1 FROM conversations WHERE initiator=agents.id OR published=agents.id)""",
+                      AND NOT EXISTS (SELECT 1 FROM conversations WHERE initiator=agents.id OR published=agents.id)
+                      AND NOT EXISTS (SELECT 1 FROM held_messages WHERE sender=agents.id AND status='held')""",
                    (now - RECEIPT_RETENTION,))
 
     def _conversation_valid(self, db, conversation, now):
@@ -678,6 +759,237 @@ class Broker:
             if not valid:
                 db.execute("UPDATE messages SET status='cancelled',detail='membership changed',updated_at=? WHERE id=?",
                            (now, m["id"]))
+
+    # Mailboxes. A mailbox is (bus, name, owner). The owner key is fixed when a
+    # principal is created: "account:<user>" only with enrollment evidence (see
+    # _redeem), otherwise "principal:<id>". Attribution alone never selects it.
+
+    @staticmethod
+    def _mailbox_owner(principal):
+        account = principal["mailbox_account"]
+        return "account:" + account if account else "principal:" + principal["id"]
+
+    def _agent_mailbox_owner(self, db, agent):
+        return self._mailbox_owner(db.execute("SELECT * FROM principals WHERE id=?", (agent["principal"],)).fetchone())
+
+    def _mailbox_retention_for(self, bus):
+        return self.mailbox_retention["buses"].get(bus, self.mailbox_retention["default"])
+
+    def _mailbox_eligible(self, db, agent):
+        """Services, exact-ID-shaped names and retired rows never own or drain a mailbox."""
+        return (agent is not None and agent["kind"] != "service" and agent["retired_at"] is None
+                and not AGENT_ID_RE.fullmatch(agent["name"]) and self._service_fence(db, agent["id"]) is None)
+
+    def _mailbox_owner_access(self, db, owner, bus):
+        kind, _, value = owner.partition(":")
+        rows = (db.execute("SELECT id FROM principals WHERE mailbox_account=? AND revoked=0", (value,)) if kind == "account"
+                else db.execute("SELECT id FROM principals WHERE id=? AND mailbox_account IS NULL AND revoked=0", (value,)))
+        return any(self._granted(db, row[0], bus) for row in rows.fetchall())
+
+    @staticmethod
+    def _mailbox_record(db, creator, owner, bus, name, origin, now, evict=True):
+        """Keep a mailbox; at this device's cap only its own empty registration mailboxes give way."""
+        key = (bus, name, owner)
+        if db.execute("SELECT 1 FROM mailboxes WHERE bus=? AND name=? AND owner=?", key).fetchone():
+            db.execute("""UPDATE mailboxes SET last_used_at=?,origin=CASE WHEN ?='reserved' THEN 'reserved' ELSE origin END
+                          WHERE bus=? AND name=? AND owner=?""", (now, origin, *key))
+            return True
+        if (db.execute("SELECT COUNT(*) FROM mailboxes").fetchone()[0] >= MAX_MAILBOXES
+                or db.execute("SELECT COUNT(*) FROM mailboxes WHERE bus=?", (bus,)).fetchone()[0] >= MAX_MAILBOXES_PER_BUS):
+            return False
+        if db.execute("SELECT COUNT(*) FROM mailboxes WHERE created_by=?", (creator,)).fetchone()[0] >= MAX_MAILBOXES_PER_PRINCIPAL:
+            victim = evict and db.execute("""SELECT rowid FROM mailboxes m WHERE created_by=? AND origin='registered'
+                AND NOT EXISTS (SELECT 1 FROM held_messages h WHERE h.bus=m.bus AND h.name=m.name
+                                AND h.owner=m.owner AND h.status='held')
+                ORDER BY last_used_at,rowid LIMIT 1""", (creator,)).fetchone()
+            if not victim:
+                return False
+            db.execute("DELETE FROM mailboxes WHERE rowid=?", (victim[0],))
+        db.execute("INSERT INTO mailboxes VALUES(?,?,?,?,?,?,?)", (bus, name, owner, creator, origin, now, now))
+        return True
+
+    @staticmethod
+    def _held_close(db, where, params, status, detail, now):
+        """End held rows. A terminal held row keeps its receipt, never its body."""
+        return db.execute("UPDATE held_messages SET status=?,detail=?,message='',updated_at=? WHERE status='held' AND "
+                          + where, (status, detail, now, *params)).rowcount
+
+    def _held_sender_valid(self, db, held):
+        """The same sender authority a live send needs now, for the same registration generation."""
+        sender = db.execute("SELECT * FROM agents WHERE id=?", (held["sender"],)).fetchone()
+        return bool(sender is not None and sender["principal"] == held["sender_principal"]
+                    and sender["retired_at"] is None and sender["epoch"] == held["sender_epoch"]
+                    and self._service_fence(db, sender["id"]) is None
+                    and self._granted(db, sender["principal"], held["bus"])
+                    and (held["bus"] == "general" or self._member(db, sender["id"], held["bus"])))
+
+    def _mailbox_hold(self, db, p, sender, sender_fence, bus, target, r, now):
+        """Hold a send to an absent name in exactly one mailbox, or return None to refuse as before.
+
+        Without hold_for the mailbox must be the sender's own; another owner's
+        mailbox is used only when the sender names that owner.
+        """
+        if r.get("hold") is not True or sender_fence is not None or AGENT_ID_RE.fullmatch(target):
+            return None
+        mine = self._mailbox_owner(p)
+        owner = r.get("hold_for", mine)
+        if not isinstance(owner, str) or not MAILBOX_OWNER_RE.fullmatch(owner):
+            raise BusError("hold_for must name a mailbox owner exactly as mailbox_ls shows it")
+        retention, key = self._mailbox_retention_for(bus), (bus, target, owner)
+        if (not retention or not db.execute("SELECT 1 FROM mailboxes WHERE bus=? AND name=? AND owner=?", key).fetchone()
+                or not self._mailbox_owner_access(db, owner, bus)):
+            return None
+        message = self._message_content(r.get("message"))
+
+        def count(where, *params):
+            return db.execute("SELECT COUNT(*) FROM held_messages WHERE " + where, params).fetchone()[0]
+
+        if count("bus=? AND name=? AND owner=? AND status='held'", *key) >= MAX_PENDING:
+            raise BusError("mailbox %s on %s already holds %d messages; nothing was stored" % (target, bus, MAX_PENDING), "limit")
+        if owner != mine and count("bus=? AND name=? AND owner=? AND sender_principal=? AND status='held'",
+                                   *key, p["id"]) >= MAX_HELD_PER_SENDER_BOX:
+            raise BusError("this device already has %d messages held in mailbox %s on %s; nothing was stored"
+                           % (MAX_HELD_PER_SENDER_BOX, target, bus), "limit")
+        if count("sender_principal=?", p["id"]) >= MAX_HELD_PER_SENDER:
+            raise BusError("this device has reached its held-mail limit at this hub; nothing was stored", "limit")
+        if count("bus=?", bus) >= MAX_HELD_PER_BUS:
+            raise BusError("held-mail storage for bus %s is full; nothing was stored" % bus, "limit")
+        if count("1") >= MAX_HELD:
+            raise BusError("held-mail storage for this hub is full; nothing was stored", "limit")
+        mid, expires_at = "m_" + uuid.uuid4().hex, now + retention
+        db.execute("""INSERT INTO held_messages(id,bus,name,owner,sender,sender_principal,sender_epoch,message,status,
+                      created_at,expires_at,updated_at) VALUES(?,?,?,?,?,?,?,?,'held',?,?,?)""",
+                   (mid, bus, target, owner, sender["id"], p["id"], sender["epoch"], message, now, expires_at, now))
+        db.execute("UPDATE mailboxes SET last_used_at=? WHERE bus=? AND name=? AND owner=?", (now, *key))
+        return {"id": mid, "status": "held", "target": None, "bus": bus, "mailbox": target, "owner": owner,
+                "expires_at": expires_at, "reply_until": expires_at + MESSAGE_TTL, "conversation_expires_at": None,
+                "correlation_version": 1, "conversation_id": None, "in_reply_to": None,
+                "mailbox_protocol": MAILBOX_PROTOCOL}
+
+    def _mailbox_drain(self, db, bus, name, owner, agent, now):
+        """Move held mail, in order, into the ordinary delivery queue of this registration.
+
+        The conversation and its reply window start now. The ordinary pending
+        and record limits apply; what does not fit stays held, in order, for the
+        next registration, poll or live send to drain.
+        """
+        rows = db.execute("SELECT * FROM held_messages WHERE bus=? AND name=? AND owner=? AND status='held' ORDER BY ordering",
+                          (bus, name, owner)).fetchall()
+        if not rows:
+            return 0, 0
+        room = min(MAX_PENDING - self._pending_count(db, agent["id"]),
+                   MAX_RECORDS - db.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+                   MAX_RECORDS - db.execute("SELECT COUNT(*) FROM conversations").fetchone()[0])
+        moved = cancelled = 0
+        for held in rows:
+            if not self._held_sender_valid(db, held):
+                cancelled += self._held_close(db, "id=?", (held["id"],), "cancelled",
+                                              "sender registration or access changed before delivery", now)
+                continue
+            if moved >= room:
+                continue
+            conversation, expires_at = "c_" + uuid.uuid4().hex, now + MESSAGE_TTL
+            db.execute("INSERT INTO conversations(id,initiator,published,bus,expires_at,closed) VALUES(?,?,?,?,?,0)",
+                       (conversation, held["sender"], agent["id"], bus, expires_at))
+            if not self._conversation_valid(db, db.execute("SELECT * FROM conversations WHERE id=?", (conversation,)).fetchone(), now):
+                db.execute("DELETE FROM conversations WHERE id=?", (conversation,))
+                cancelled += self._held_close(db, "id=?", (held["id"],), "cancelled",
+                                              "sender registration or access changed before delivery", now)
+                continue
+            db.execute("""INSERT INTO messages(id,sender,target,bus,message,status,created_at,expires_at,updated_at,
+                          conversation,in_reply_to,correlation_version) VALUES(?,?,?,?,?,'accepted',?,?,?,?,NULL,1)""",
+                       (held["id"], held["sender"], agent["id"], bus, held["message"], held["created_at"],
+                        expires_at, now, conversation))
+            db.execute("INSERT INTO outbound_queue(message,target) VALUES(?,?)", (held["id"], agent["id"]))
+            db.execute("DELETE FROM held_messages WHERE ordering=?", (held["ordering"],))
+            moved += 1
+        if moved:
+            db.execute("UPDATE mailboxes SET last_used_at=? WHERE bus=? AND name=? AND owner=?", (now, bus, name, owner))
+        return moved, cancelled
+
+    def _mailbox_drain_agents(self, db, agents, now):
+        """Drain held mail for the current names of these exact registrations and their owners.
+
+        Returns how many of their held messages did not fit and are still held.
+        """
+        if not agents or not db.execute("SELECT 1 FROM held_messages WHERE status='held' LIMIT 1").fetchone():
+            return 0
+        rows = db.execute("""SELECT DISTINCT h.bus,h.name,h.owner,a.id AS agent FROM agents a
+                             JOIN memberships m ON m.agent=a.id
+                             JOIN held_messages h ON h.bus=m.bus AND h.name=a.name AND h.status='held'
+                             WHERE a.id IN (%s) ORDER BY a.id,h.bus""" % ",".join("?" for _ in agents), tuple(agents)).fetchall()
+        left = 0
+        for row in rows:
+            agent = db.execute("SELECT * FROM agents WHERE id=?", (row["agent"],)).fetchone()
+            if self._mailbox_eligible(db, agent) and self._agent_mailbox_owner(db, agent) == row["owner"]:
+                key = (row["bus"], row["name"], row["owner"])
+                self._mailbox_drain(db, *key, agent, now)
+                left += db.execute("SELECT COUNT(*) FROM held_messages WHERE bus=? AND name=? AND owner=? AND status='held'",
+                                   key).fetchone()[0]
+        return left
+
+    def _mailbox_arrival(self, db, p, result, now):
+        """A registration keeps a mailbox for its name on each bus and receives what it holds."""
+        agent = db.execute("SELECT * FROM agents WHERE id=?", (result.get("id"),)).fetchone()
+        if not self._mailbox_eligible(db, agent):
+            return result
+        owner, report = self._mailbox_owner(p), []
+        for bus in result.get("buses") or []:
+            recorded = self._mailbox_record(db, p["id"], owner, bus, agent["name"], "registered", now)
+            drained, cancelled = self._mailbox_drain(db, bus, agent["name"], owner, agent, now) if recorded else (0, 0)
+            report.append({"bus": bus, "name": agent["name"], "recorded": recorded,
+                           "drained": drained, "cancelled": cancelled})
+        return {**result, "mailbox": report} if report else result
+
+    def _mailbox_revalidate(self, db, now, *, bus=None, agents=(), principals=()):
+        """After an access change, cancel held mail whose sender or owner lost access.
+
+        Scoped to the changed agents or principals. Rejoining later revives
+        nothing: cancelled mail stays cancelled and a removed mailbox is gone.
+        """
+        scope, params = [], []
+        if agents:
+            scope.append("sender IN (%s)" % ",".join("?" for _ in agents))
+            params += list(agents)
+        if principals:
+            scope.append("sender_principal IN (%s)" % ",".join("?" for _ in principals))
+            params += list(principals)
+        if not scope:
+            return
+        sql = "SELECT * FROM held_messages WHERE status='held' AND (%s)" % " OR ".join(scope)
+        if bus is not None:
+            sql, params = sql + " AND bus=?", params + [bus]
+        for held in db.execute(sql, params).fetchall():
+            if not self._held_sender_valid(db, held):
+                self._held_close(db, "id=?", (held["id"],), "cancelled", "sender registration or access changed before delivery", now)
+        if not principals:
+            return
+        owners = sorted({self._mailbox_owner(row) for row in db.execute(
+            "SELECT * FROM principals WHERE id IN (%s)" % ",".join("?" for _ in principals), tuple(principals))})
+        sql = "SELECT * FROM mailboxes WHERE owner IN (%s)" % ",".join("?" for _ in owners)
+        boxes = db.execute(sql + (" AND bus=?" if bus is not None else ""),
+                           (*owners, *([bus] if bus is not None else []))).fetchall() if owners else []
+        for box in boxes:
+            if not self._mailbox_owner_access(db, box["owner"], box["bus"]):
+                key = (box["bus"], box["name"], box["owner"])
+                self._held_close(db, "bus=? AND name=? AND owner=?", key, "cancelled",
+                                 "mailbox owner no longer has access to this bus", now)
+                db.execute("DELETE FROM mailboxes WHERE bus=? AND name=? AND owner=?", key)
+
+    def _mailbox_prune(self, db, now):
+        """Forget mailboxes idle for MAILBOX_IDLE, counting the owner's registrations of that name as use."""
+        cut = now - MAILBOX_IDLE
+        for box in db.execute("SELECT rowid,* FROM mailboxes WHERE last_used_at<?", (cut,)).fetchall():
+            kind, _, value = box["owner"].partition(":")
+            seen = db.execute("""SELECT MAX(a.last_seen) FROM agents a JOIN principals p ON p.id=a.principal
+                                 WHERE a.name=? AND """ + ("p.mailbox_account=?" if kind == "account" else
+                                                           "p.id=? AND p.mailbox_account IS NULL"),
+                              (box["name"], value)).fetchone()[0]
+            if seen is not None and seen >= cut:
+                db.execute("UPDATE mailboxes SET last_used_at=? WHERE rowid=?", (seen, box["rowid"]))
+            elif not db.execute("SELECT 1 FROM held_messages WHERE bus=? AND name=? AND owner=? AND status='held'",
+                                (box["bus"], box["name"], box["owner"])).fetchone():
+                db.execute("DELETE FROM mailboxes WHERE rowid=?", (box["rowid"],))
 
     def handle(self, token, request, *, reader=None, reader_hash=None, view=None):
         """Handle one bounded request, returning an ordinary JSON-safe result."""
@@ -796,6 +1108,8 @@ class Broker:
         db.execute("DELETE FROM grants WHERE bus=? AND principal IN (SELECT id FROM principals WHERE user=?)", (name, user))
         db.execute("""DELETE FROM memberships WHERE bus=? AND agent IN (
                       SELECT a.id FROM agents a JOIN principals p ON p.id=a.principal WHERE p.user=?)""", (name, user))
+        self._mailbox_revalidate(db, now, bus=name, principals=[row[0] for row in db.execute(
+            "SELECT id FROM principals WHERE user=?", (user,))])
         db.execute("UPDATE invites SET expires_at=MIN(expires_at,?) WHERE bus=? AND user=? AND redeemed_at IS NULL", (now, name, user))
         # Account access can also underpin an explicitly configured human chat.
         # Close it immediately; a later re-add must not resurrect a reply window.
@@ -916,6 +1230,7 @@ class Broker:
         db.execute("DELETE FROM memberships WHERE bus=? AND agent IN (SELECT id FROM agents WHERE principal=?)",
                    (event["bus"], principal))
         self._cancel_invalid(db, now)
+        self._mailbox_revalidate(db, now, bus=event["bus"], principals=[principal])
         return {"event": event["id"], "principal": principal, "bus": event["bus"], "removed": True}
 
     def _redeem_event(self, db, p, token, r, event, now):
@@ -984,8 +1299,14 @@ class Broker:
                 raise BusError("device enrollment limit reached", "limit")
             principal = "p_" + uuid.uuid4().hex
             token = secrets.token_urlsafe(32)
-            db.execute("INSERT INTO principals(id,device,created_at,user,device_metadata) VALUES(?,?,?,?,?)",
-                       (principal, device, now, invite["user"], json.dumps(metadata)))
+            # A mailbox account needs enrollment evidence, not attribution: on a
+            # hub with configured accounts, the operator or that account's own
+            # signed-in session issued this invitation for it. Set only here,
+            # once; a later invitation, event join or attribution never sets it.
+            mailbox_account = (invite["user"] if self.users and invite["user"] is not None
+                               and invite["issuer_user"] in (None, invite["user"]) else None)
+            db.execute("INSERT INTO principals(id,device,created_at,user,device_metadata,mailbox_account) VALUES(?,?,?,?,?,?)",
+                       (principal, device, now, invite["user"], json.dumps(metadata), mailbox_account))
             db.execute("INSERT INTO tokens VALUES(?,?)", (_digest(token), principal))
         else:
             principal = p["id"]
@@ -1134,6 +1455,7 @@ class Broker:
         db.execute("UPDATE conversations SET closed=1 WHERE initiator=? OR published=?", (agent["id"], agent["id"]))
         db.execute("UPDATE agents SET status='offline',retired_at=?,epoch=? WHERE id=?", (now, expected + 1, agent["id"]))
         self._cancel_invalid(db, now)
+        self._mailbox_revalidate(db, now, agents=[agent["id"]])
         result = {"protocol": SERVICE_FENCE_PROTOCOL, "agent": agent["id"], "service_id": service_id,
                   "previous_epoch": expected, "epoch": expected + 1, "retired_epoch": expected + 1,
                   "retired": True, "principal": p["id"], "server_id": self.server_id,
@@ -1144,14 +1466,15 @@ class Broker:
         bus = _bus(r.get("bus", "general"))
         if not self._granted(db, p["id"], bus) or not db.execute("SELECT 1 FROM buses WHERE name=?", (bus,)).fetchone():
             raise BusError("bus membership has not been granted", "forbidden")
-        return self._identify(db, p, r, now, publish=bus)
+        return self._mailbox_arrival(db, p, self._identify(db, p, r, now, publish=bus), now)
 
     def _op_identify(self, db, p, r, now):
         # An internal reply adapter is not directory membership. One device
         # credential admits its local agents to outbound general traffic.
         if not self._granted(db, p["id"], "general"):
             raise BusError("device has not been admitted to general", "forbidden")
-        return self._identify(db, p, r, now)
+        # A rename keeps existing memberships, so it is an arrival under the new name.
+        return self._mailbox_arrival(db, p, self._identify(db, p, r, now), now)
 
     def _identify(self, db, p, r, now, publish=None):
         if p["browser_reader"] is not None:
@@ -1560,7 +1883,8 @@ class Broker:
             self._chat_mark_seen(db, chat, p["browser_reader"], [old["seq"]])
             return {"chat": chat["id"], "message": self._chat_message(old), "deduplicated": True}
         self._chat_capacity(db, chat["id"])
-        if self._pending_count(db, chat["agent"]) >= MAX_PENDING:
+        # Mail held for this registration goes first, as in _enqueue.
+        if self._mailbox_drain_agents(db, [chat["agent"]], now) or self._pending_count(db, chat["agent"]) >= MAX_PENDING:
             raise BusError("recipient queue is full", "limit")
         mid = "hm_" + uuid.uuid4().hex
         db.execute("""INSERT INTO human_chat_messages(id,chat,identity,seq,role,content,created_at,updated_at,status,
@@ -1627,6 +1951,9 @@ class Broker:
         if target in ids:
             ids = [target]
         if not ids:
+            held = self._mailbox_hold(db, p, sender, sender_fence, bus, target, r, now)
+            if held is not None:
+                return held
             raise BusError("unknown or unavailable recipient", "not_found")
         if len(ids) != 1:
             raise BusError("recipient name is ambiguous; use its agent id", "ambiguous")
@@ -1719,6 +2046,10 @@ class Broker:
 
     def _enqueue(self, db, sender, target, bus, message, conversation, expires_at, now, *, in_reply_to=None):
         self._message_content(message)
+        # Mail held for this registration goes first, for sends and replies alike.
+        # While some of it does not fit, nothing later is queued ahead of it.
+        if self._mailbox_drain_agents(db, [target], now):
+            raise BusError("recipient queue is full", "limit")
         pending = self._pending_count(db, target)
         if pending >= MAX_PENDING or db.execute("SELECT COUNT(*) FROM messages").fetchone()[0] >= MAX_RECORDS:
             raise BusError("recipient queue is full", "limit")
@@ -1772,6 +2103,9 @@ class Broker:
         return result
 
     def _poll(self, db, agents, now, limit):
+        # Also drains names registered while an older broker ran, and what a
+        # full queue left held.
+        self._mailbox_drain_agents(db, agents, now)
         self._cancel_invalid(db, now)
         slots = ",".join("?" for _ in agents)
         # The shared durable order prevents an agent delivery and a human
@@ -1863,7 +2197,13 @@ class Broker:
         m = db.execute("""SELECT m.* FROM messages m JOIN agents s ON s.id=m.sender JOIN agents t ON t.id=m.target
                           WHERE m.id=? AND (s.principal=? OR t.principal=?)""", (mid, p["id"], p["id"])).fetchone()
         if m is None:
-            raise BusError("unknown or unavailable message", "not_found")
+            # Held mail has a receipt for its sending device only, and no body.
+            held = db.execute("SELECT * FROM held_messages WHERE id=? AND sender_principal=?", (mid, p["id"])).fetchone()
+            if held is None:
+                raise BusError("unknown or unavailable message", "not_found")
+            return {**{key: held[key] for key in ("id", "status", "detail", "created_at", "updated_at", "expires_at", "bus")},
+                    "mailbox": held["name"], "owner": held["owner"], "correlation_version": 1,
+                    "conversation_id": None, "in_reply_to": None}
         return {"id": mid, "status": m["status"], "detail": m["detail"],
                 "created_at": m["created_at"], "updated_at": m["updated_at"], "expires_at": m["expires_at"],
                 "correlation_version": m["correlation_version"],
@@ -1877,6 +2217,8 @@ class Broker:
         db.execute("UPDATE conversations SET closed=1 WHERE bus=? AND (initiator=? OR published=?)",
                    (bus, agent["id"], agent["id"]))
         self._cancel_invalid(db, now)
+        # As its conversations on this bus close, so does the mail it holds there, general included.
+        self._held_close(db, "sender=? AND bus=?", (agent["id"], bus), "cancelled", "sender left the bus", now)
         return {"agent": agent["id"], "bus": bus, "left": True}
 
     def _op_retire(self, db, p, r, now):
@@ -1893,6 +2235,7 @@ class Broker:
             db.execute("UPDATE conversations SET closed=1 WHERE initiator=? OR published=?", (agent["id"], agent["id"]))
             db.execute("UPDATE agents SET status='offline',retired_at=?,epoch=? WHERE id=?", (now, epoch, agent["id"]))
             self._cancel_invalid(db, now)
+            self._mailbox_revalidate(db, now, agents=[agent["id"]])
         return {"agent": agent["id"], "retired": True, "epoch": epoch}
 
     def _op_revoke(self, db, p, r, now):
@@ -1909,7 +2252,99 @@ class Broker:
         db.execute("DELETE FROM memberships WHERE agent IN (SELECT id FROM agents WHERE principal=?)", (principal,))
         db.execute("UPDATE agents SET status='offline' WHERE principal=?", (principal,))
         self._cancel_invalid(db, now)
+        self._mailbox_revalidate(db, now, principals=[principal])
         return {"principal": principal, "revoked": True}
+
+    # Mailbox operations: enrolled devices only, on buses granted to them.
+
+    def _mailbox_bus(self, db, p, value):
+        if p["browser_reader"] is not None:
+            raise BusError("bus mailboxes belong to enrolled devices, not browser sessions", "forbidden")
+        bus = _bus(value)
+        if not db.execute("SELECT 1 FROM buses WHERE name=?", (bus,)).fetchone() or not self._granted(db, p["id"], bus):
+            raise BusError("bus membership has not been granted", "forbidden")
+        return bus
+
+    @staticmethod
+    def _mailbox_name(value):
+        name = _text(value, "name", 128)
+        if AGENT_ID_RE.fullmatch(name):
+            raise BusError("an exact registration ID is not a mailbox name")
+        return name
+
+    def _op_mailbox_reserve(self, db, p, r, now):
+        bus = self._mailbox_bus(db, p, r.get("bus", "general"))
+        name = self._mailbox_name(r.get("name"))
+        if not self._mailbox_retention_for(bus):
+            raise BusError("held mail is disabled on this bus", "forbidden")
+        owner = self._mailbox_owner(p)
+        if not self._mailbox_record(db, p["id"], owner, bus, name, "reserved", now):
+            raise BusError("mailbox limit reached; release a mailbox first", "limit")
+        return {"bus": bus, "name": name, "owner": owner, "origin": "reserved",
+                "retention_seconds": self._mailbox_retention_for(bus), "mailbox_protocol": MAILBOX_PROTOCOL}
+
+    def _op_mailbox_release(self, db, p, r, now):
+        bus = self._mailbox_bus(db, p, r.get("bus", "general"))
+        name = self._mailbox_name(r.get("name"))
+        owner = self._mailbox_owner(p)
+        if "owner" in r:
+            # Browsers were refused above, so this is the operator's own token.
+            if not p["is_admin"]:
+                raise BusError("only the hub operator may release another owner's mailbox", "forbidden")
+            owner = r["owner"]
+            if not isinstance(owner, str) or not MAILBOX_OWNER_RE.fullmatch(owner):
+                raise BusError("invalid mailbox owner")
+        key = (bus, name, owner)
+        if not db.execute("SELECT 1 FROM mailboxes WHERE bus=? AND name=? AND owner=?", key).fetchone():
+            raise BusError("unknown mailbox", "not_found")
+        result = {"bus": bus, "name": name, "owner": owner, "mailbox_protocol": MAILBOX_PROTOCOL}
+        if "sender" in r:
+            sender = _text(r["sender"], "sender", 128)
+            return {**result, "released": False, "cancelled": self._held_close(
+                db, "bus=? AND name=? AND owner=? AND sender=?", (*key, sender), "cancelled",
+                "cancelled by the mailbox owner", now)}
+        cancelled = self._held_close(db, "bus=? AND name=? AND owner=?", key, "cancelled", "mailbox released", now)
+        db.execute("DELETE FROM mailboxes WHERE bus=? AND name=? AND owner=?", key)
+        return {**result, "released": True, "cancelled": cancelled}
+
+    def _op_mailbox_ls(self, db, p, r, now):
+        if p["browser_reader"] is not None:
+            raise BusError("bus mailboxes belong to enrolled devices, not browser sessions", "forbidden")
+        visible = self._visible_buses(db, p)
+        if "bus" in r:
+            bus = _bus(r["bus"])
+            if bus not in visible:
+                raise BusError("bus membership has not been granted", "forbidden")
+            visible = [bus]
+        mine, rows, boxes = self._mailbox_owner(p), [], []
+        if visible:
+            boxes = db.execute("""SELECT m.*,COUNT(h.ordering) AS held,MIN(h.created_at) AS oldest_held_at,
+                                  MIN(h.expires_at) AS next_expiry_at FROM mailboxes m
+                                  LEFT JOIN held_messages h ON h.bus=m.bus AND h.name=m.name AND h.owner=m.owner
+                                  AND h.status='held' WHERE m.bus IN (%s) GROUP BY m.bus,m.name,m.owner
+                                  ORDER BY m.bus,m.name,m.owner LIMIT ?""" % ",".join("?" for _ in visible),
+                               (*visible, MAX_MAILBOX_LIST + 1)).fetchall()
+        for box in boxes[:MAX_MAILBOX_LIST]:
+            row = {"bus": box["bus"], "name": box["name"], "owner": box["owner"], "yours": box["owner"] == mine,
+                   "held": box["held"], "retention_seconds": self._mailbox_retention_for(box["bus"])}
+            # When someone last wrote to a name, and reservations, are the owner's business.
+            if row["yours"] or p["is_admin"]:
+                row.update({key: box[key] for key in ("origin", "oldest_held_at", "next_expiry_at", "last_used_at")})
+            rows.append(row)
+        return {"owner": mine, "mailboxes": rows, "truncated": len(boxes) > MAX_MAILBOX_LIST,
+                "mailbox_protocol": MAILBOX_PROTOCOL}
+
+    def _op_mailbox_cancel(self, db, p, r, now):
+        if p["browser_reader"] is not None:
+            raise BusError("bus mailboxes belong to enrolled devices, not browser sessions", "forbidden")
+        mid = _text(r.get("id"), "message id", 128)
+        held = db.execute("SELECT status FROM held_messages WHERE id=? AND sender_principal=?", (mid, p["id"])).fetchone()
+        if held is None:
+            raise BusError("unknown or unavailable message", "not_found")
+        if held["status"] != "held":
+            raise BusError("message is no longer held", "conflict")
+        self._held_close(db, "id=?", (mid,), "cancelled", "cancelled by its sender", now)
+        return {"id": mid, "status": "cancelled"}
 
 
 def handler_factory(broker, assets_dir=None):

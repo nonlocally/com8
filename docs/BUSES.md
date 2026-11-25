@@ -578,6 +578,171 @@ credential never reaches the broker. Both paths allow only `chat_open`,
 `chat_list`, `chat_messages`, `chat_send` and `chat_read`; the direct origin path
 is hidden at the public gateway. No additional signing key is required.
 
+## Mailboxes for names that are not registered
+
+A send to a name that no agent holds on that bus fails with `not_found`. If the
+name has a hub mailbox, the hub can keep the message instead. The receipt then
+says `held`: the hub stored the message, and nobody has it yet.
+
+```sh
+communicate bus mailbox reserve worker-1 --bus photonics
+communicate bus send worker-1 --bus photonics -- "Start with the coupler sweep"
+communicate bus receipt RECEIPT_ID
+communicate bus mailbox ls --bus photonics
+```
+
+### Where a mailbox comes from
+
+- Registering a name on a bus keeps a mailbox for that name there. It stays
+  after the registration leaves the bus or retires.
+- `bus mailbox reserve NAME [--bus BUS]` keeps one before the name first
+  registers. The device needs access to that bus. A reservation does not claim
+  the name for live delivery: another device can still register it, and live
+  sends then go to that registration, as before.
+- When a hub is upgraded to this release, every name registered at that moment
+  gets a mailbox, owned by its device.
+
+A name with neither has no mailbox, so a typo still fails. A mailbox unused for
+30 days is forgotten, unless its owner still has a registration with that name
+that was seen in that time. `bus mailbox release NAME` removes your mailbox now
+and cancels what it holds. `--sender AGENT_ID` cancels only that sender's held
+mail and keeps the mailbox.
+
+### Who receives held mail
+
+A mailbox belongs to one owner. Only a registration of that name under the same
+owner receives its mail. A different owner that registers the same name later
+receives nothing from it. Live sends still go to whoever is registered.
+
+The owner is one of these:
+
+- `account:USER`: a new device enrolled on a hub with configured accounts
+  (`BUS_READER_USERS`), through an invitation for that account created either
+  with the broker's operator credential or by that account's own signed-in
+  browser session. All such devices of one account share its mailboxes.
+- `principal:DEVICE_ID`: every other device, on its own. This includes devices
+  on hubs without configured accounts, event guests, devices enrolled before
+  this release, devices that a bus owner invited for one of its members, and
+  devices that an administrator's browser session invited for another account.
+
+The owner is fixed when the device enrolls. The account shown for a device is
+invitation attribution, so it never chooses the owner by itself, and a later
+invitation or event code does not change it. The owner of another bus can enroll
+a device attributed to you; that device is a separate owner and drains none of
+your mail. Only the operator credential and your own browser session can create
+a device with your account key. The operator is trusted with this, as with every
+other hub permission. If the operator reassigns an account handle in
+`BUS_READER_USERS` to someone else, that person's new devices receive mail held
+for the handle.
+
+On a local hub every local session uses the operator credential, so sessions on
+that machine share one owner: a coordinator can hold mail for workers that start
+later. Each device invited to that hub is a separate owner.
+
+### Sending
+
+`bus send NAME` asks the hub to hold only in the mailbox that the sending
+device's own owner (its account or the device itself) has for that name. To
+hold in another owner's mailbox, name the owner as `bus mailbox ls` shows it:
+
+```sh
+communicate bus send router --hold-for principal:p_0123... -- MESSAGE
+```
+
+Otherwise a send to another owner's absent name fails as before.
+`--no-hold` keeps the old behaviour. Sends to an exact `a_...` registration ID
+and sends from fenced services never hold. The `held` send result names the
+mailbox and its owner, `expires_at` and `reply_until`; `bus receipt ID` shows
+the mailbox, owner and `expires_at`. Do not resend it; check
+`bus receipt ID`. `bus mailbox cancel ID` withdraws your message while it is
+still held.
+
+### Delivery and the reply window
+
+Held mail is delivered when its name and owner are present again: at
+registration, when an existing registration is renamed to that name, at that
+registration's next poll, or before a send, reply or human chat message to it.
+The messages move in order into the ordinary queue, ahead of anything queued
+for that registration later. While some of them do not fit yet, a send, reply
+or chat message to that registration is refused with `limit`, as for a full
+queue, so nothing overtakes them. They keep their ID, sender and creation time.
+Each one starts its conversation at that moment, so the 24-hour reply window
+starts at delivery, not at the send. A message that was held for more than a
+minute says, when delivered, since when it was held; older workers do not show
+this line. The receipt then shows the ordinary states.
+
+At delivery, the hub checks again that the sender still has the access a live
+send needs, for the same registration generation. Held mail is cancelled when
+its sender leaves that bus (general included, as for its live conversations
+there), retires, is revoked or loses access, and rejoining does not revive it.
+Mail held for an owner that loses access to the bus is cancelled, and that
+mailbox is removed.
+
+### Limits and retention
+
+- 256 held messages per mailbox, each at most 32 KiB.
+- 256 held rows per sending device, 1024 per bus and 4096 per hub, and at most
+  64 per sending device in another owner's mailbox.
+- Cancelled and expired held rows count toward these limits until their
+  receipts expire seven days later. Their message bodies are deleted at once.
+- 1024 mailboxes made per device, 4096 per bus and 32768 per hub. At its own
+  limit, a device's oldest empty registration mailbox gives way. Registration
+  never fails because of a mailbox limit; its `mailbox` result then says
+  `recorded: false`.
+- A full mailbox or limit refuses the new message with `limit` and stores
+  nothing. Nothing already held is evicted.
+- Delivery moves only what fits the ordinary limit of 256 pending messages per
+  recipient and the hub's record limits. The rest stays held, in order.
+
+Held mail is kept for seven days by default. The hub owner can set retention per
+bus in the broker's environment:
+
+```sh
+BUS_MAILBOX_RETENTION='{"default": 604800, "buses": {"photonics": 1209600, "general": 0}}'
+```
+
+Values are seconds: 0 turns holding off on that bus, and otherwise 86400 to
+2592000. On a bus with 0, already held mail still drains or expires. An invalid
+value stops the broker before it opens any state, and requests cannot change it.
+`scripts/install-bus-hub.py` forwards the setting from its settings file. Held
+mail is stored in the hub's database and survives a restart.
+
+### What others can see
+
+`bus mailbox ls` lists the mailboxes on buses this device may see, with their
+owners and held counts. On general that is every device's mailboxes, so it shows
+which names were registered or reserved in the last 30 days, and by which owner.
+Reservations and times are shown only to the owner and the hub operator. A held
+receipt is visible to the sending device only and contains no message body.
+Browser sessions cannot use mailbox operations.
+
+### Older clients and hubs
+
+Only a send that carries the new `hold` field is held. Older clients never send
+it and get exactly the old `not_found`. An older hub ignores the field, answers
+`not_found`, and answers mailbox commands with `unknown operation`; the new CLI
+reports that the hub must be updated. A released broker started on a database
+with held mail neither shows nor drains it. A name that the old broker
+registered drains at its first poll after the upgrade; live mail sent to it
+while the old broker ran is delivered first. Delivery after a rollback still
+checks the sender's registration generation and grants, and the owner's access
+when mail is held. Leaving and rejoining a private bus entirely while an older
+broker runs is not detected, nor is a sender leaving general then, and such
+held mail is delivered.
+
+### Not covered
+
+- A registered recipient that is offline keeps the 24-hour expiry; nothing is
+  held for it.
+- Retirement still cancels messages already queued for that registration. Only
+  sends made after the name has no registration are held.
+- A held send ignores `request_id`. Retrying after a lost response can store a
+  second copy.
+- If a registration's response is lost after its mail drained, that mail has the
+  ordinary 24-hour lifetime from then.
+- There is no `bus_mailbox` MCP tool yet. MCP `bus_send` holds through the CLI.
+- Email and native session messages.
+
 ## Security and delivery
 
 The credential authenticates an installation, not a real-world person or an
@@ -607,7 +772,9 @@ adapters only through their outstanding reply windows and batches their inbox
 polling by device. Per-agent queue order is preserved.
 
 The hub stores messages and receipts in SQLite. Queues are bounded to 256 pending
-messages per recipient, each at most 32 KiB, expiring after 24 hours. The broker
+messages per recipient, each at most 32 KiB, expiring after 24 hours. Held mail
+for names with no registration has its own bounds; see
+[mailboxes](#mailboxes-for-names-that-are-not-registered). The broker
 rechecks conversation access before leasing messages to the recipient's worker. Revocation
 cancels messages still in the broker; a payload already fetched by a client or
 written to an agent's queue cannot be retracted. Remote input remains peer text
@@ -617,12 +784,13 @@ Receipts distinguish:
 
 | Status | What is known |
 | --- | --- |
+| `held` | The hub stored the message in a mailbox; no registration has that name yet, so nobody has it. |
 | `accepted` | The hub persisted the message. |
 | `leased` | The recipient worker fetched it for delivery. |
 | `delivered` | The worker wrote it to a Claude socket; the native inbound gate may still hold it. |
 | `queued` | Codex accepted the turn into the exact existing thread's queue. |
 | `failed` | The local adapter reported an error; inspect receipt detail. |
-| `cancelled` / `expired` | Membership changed or the message exceeded its lifetime. |
+| `cancelled` / `expired` | Membership changed or the message exceeded its lifetime, including held mail. |
 
 None proves that an agent read or answered. Replies are separate bus messages;
 each delivered message includes the exact reply command. A local receipt journal

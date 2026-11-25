@@ -246,6 +246,16 @@ not extend the deadline. The device keeps unpublished reply adapters active
 through their outstanding conversation windows. Leaving the bus or losing its
 access closes affected conversations; rejoining does not revive them.
 
+A receipt status `held` means the hub stored the message in a mailbox because no
+registration has that name now; nobody has it yet. Do not resend it; report it
+as held and check `communicate bus receipt ID` later. Sends hold only in this
+device's own mailbox for the name unless `--hold-for OWNER` names another owner
+from `communicate bus mailbox ls`; a different owner that registers the same name
+receives nothing. Before starting workers that should receive tasks, reserve
+their names with `communicate bus mailbox reserve NAME --bus BUS`. Bus mailboxes
+live at the hub and are separate from `com8 send`/`com8 inbox` identity mail.
+`communicate bus mailbox cancel ID` withdraws a message that is still held.
+
 Keep dashboard URL fragments private: they contain browser credentials. Keep
 personal invitations, device credentials and authenticated URLs out of commits,
 public issues, screenshots and messages to other agents. Event codes may be
