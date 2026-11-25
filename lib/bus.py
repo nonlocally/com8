@@ -40,6 +40,12 @@ WORKER_RUNTIME = hashlib.sha256(Path(__file__).read_bytes() + (LIB / "bus_servic
 TAILSCALE_STATUS_TIMEOUT = 1.5
 # How long an inspection of the worker waits for the start lock while another holds it.
 START_LOCK_WAIT = 0.2
+# The worker measures its agents' statuses every HEARTBEAT_TICK seconds. A hub
+# hears a heartbeat when one of them changed, and otherwise once
+# HEARTBEAT_INTERVAL seconds have passed since it accepted the last one. The
+# broker's LIVE_TTL of 45 seconds covers three intervals.
+HEARTBEAT_TICK = 2
+HEARTBEAT_INTERVAL = 15
 # Registrations whose status this process has already said it cannot measure.
 UNMEASURED = set()
 UNMEASURED_LOCK = threading.Lock()
@@ -896,24 +902,35 @@ def worker():
                 stop.set()
             return stop.is_set()
 
-        def heartbeat_hub(conn, records):
+        def heartbeat_hub(conn, records, accepted):
+            # Returns (time sent, entries) when this hub was sent a heartbeat,
+            # None when it was not due, and the number of its adapters.
             entries = []
             for record in records:
                 if stopping():
-                    return 0
+                    return None, 0
                 entry = {"id": record["id"], "status": current_status(record)}
                 if service_epoch(record) is not None:
                     entry["epoch"] = service_epoch(record)
                 entries.append(entry)
+            if (accepted is not None and accepted[1] == entries
+                    and time.monotonic() - accepted[0] < HEARTBEAT_INTERVAL):
+                return None, len(entries)
+            sent_at = time.monotonic()
             for offset in range(0, len(entries), 128):
                 if stopping():
-                    return 0
+                    return None, 0
                 request(conn, "heartbeat", agents=entries[offset:offset + 128])
-            return len(entries)
+            return (sent_at, entries), len(entries)
 
         def heartbeat_loop():
             # A delivery may wait on an agent for twenty seconds. Liveness has
             # its own ticker, and unrelated hubs have independent HTTP calls.
+            # Every tick measures each status and records heartbeat_at; a hub
+            # hears from the worker only when a status changed or its last
+            # accepted heartbeat is HEARTBEAT_INTERVAL old. A hub that fails is
+            # asked again at the next tick.
+            accepted = {}
             with ThreadPoolExecutor(max_workers=8, thread_name_prefix="bus-heartbeat") as pool:
                 while not stopping():
                     try:
@@ -922,7 +939,9 @@ def worker():
                         for record in registrations().values():
                             if active_adapter(record) and record["url"] in cfg["connections"]:
                                 groups.setdefault(record["url"], []).append(record)
-                        futures = {pool.submit(heartbeat_hub, cfg["connections"][url], rows): url
+                        for url in set(accepted) - set(groups):
+                            del accepted[url]
+                        futures = {pool.submit(heartbeat_hub, cfg["connections"][url], rows, accepted.get(url)): url
                                    for url, rows in groups.items()}
                         counts, errors = {}, {}
                         if not futures:
@@ -931,8 +950,10 @@ def worker():
                             url = futures[future]
                             updates = {"state": "running", "heartbeat_at": time.time()}
                             try:
-                                counts[url] = future.result()
-                                updates["heartbeat_success_at"] = time.time()
+                                sent, counts[url] = future.result()
+                                if sent is not None:
+                                    accepted[url] = sent
+                                    updates["heartbeat_success_at"] = time.time()
                             except (BusError, OSError, ValueError, KeyError) as exc:
                                 counts[url] = 0
                                 errors[url] = {"hub": url, "error": " ".join(str(exc).split())[:200]}
@@ -940,7 +961,7 @@ def worker():
                             publish(**updates)
                     except (BusError, OSError, ValueError, KeyError) as exc:
                         publish(heartbeat_at=time.time(), heartbeat_errors=[{"error": " ".join(str(exc).split())[:200]}])
-                    stop.wait(2)
+                    stop.wait(HEARTBEAT_TICK)
 
         # Startup readiness means the process owns its lock and initialized its
         # storage, not that every remote hub finished its first network request.

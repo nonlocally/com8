@@ -634,6 +634,8 @@ when the adapter reports failure.
 
 Liveness is reported by the authenticated worker: Claude sockets are probed,
 Codex adapters report queueability, and heartbeats expire after 45 seconds.
+The worker measures every 2 seconds. It sends a heartbeat at once when a status
+changes, and otherwise every 15 seconds.
 It is an observation from the participating installation, not remote attestation.
 
 ## Recovery and verification
